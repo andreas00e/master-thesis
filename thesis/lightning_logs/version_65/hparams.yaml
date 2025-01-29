@@ -1,0 +1,22 @@
+model_kwargs:
+  action_dim: 7
+  hidden_size: 512
+  latent_size: 32
+  n_encoder_layers: 1
+  n_decoder_layers: 1
+  n_heads: 1
+  horizon: 16
+  dropout: 0.1
+  language_feature_dim: null
+  low_dim_feature_dim: null
+  with_obs: true
+  with_language: false
+  ckpt_path: false
+training_kwargs:
+  lr: 0.0001
+  warmup_steps: 1000
+  loss_kwargs:
+    kl_weight: 0.01
+  num_training_steps: 800
+mode: pretraining
+all_config: null
