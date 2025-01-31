@@ -8,18 +8,20 @@ from pathlib import Path
 from PIL import Image
 
 import torch
-torch.cuda.empty_cache()
 import torchvision.transforms as T
 from torch.utils.data import DataLoader, TensorDataset, Dataset
 import torch.multiprocessing as mp
 from torch.nn.functional import interpolate
 
-import lightning.pytorch as pl
+import lightning.pytorch as pl 
 from lightning.pytorch.trainer import Trainer
+from lightning.pytorch.loggers import TensorBoardLogger
+
 
 from utils import get_timestamp, instantiate_from_config
 from models.autoencoder.autoencoder import DownsampleCVAE
 
+torch.cuda.empty_cache()
 
 def get_train_val_loader(dataset, **dataloader_kwargs):
     train_ds, val_ds = dataset.split_train_val(train_ratio=0.98)
@@ -85,7 +87,6 @@ def main():
     OmegaConf.resolve(raw_config)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(device)
     batch_size = 10
     image = torch.from_numpy(plt.imread("parrot.jpg").copy()).permute(2, 0, 1)
     # print(image.shape)
@@ -93,9 +94,8 @@ def main():
 
     data = MyDictDataset(list)
 
-    train_loader = DataLoader(dataset=data, num_workers=1, batch_size=5)
-    val_loader = DataLoader(dataset=data, num_workers=1, batch_size=5)
-    print(next(iter(train_loader))["image"].shape)
+    train_loader = DataLoader(dataset=data, num_workers=15, batch_size=5, persistent_workers=True)
+    val_loader = DataLoader(dataset=data, num_workers=15, batch_size=5, persistent_workers=True)
 
     config = preprocess_config(raw_config, args)
 
@@ -103,12 +103,13 @@ def main():
     config.model.kwargs.training_kwargs['num_training_steps'] = epoch_length * config.trainer.kwargs.max_epochs
 
     pl.seed_everything(raw_config.seed)
-    model: pl.LightningModule = DownsampleCVAE(config.model.kwargs.model_kwargs, config.model.kwargs.training_kwargs)
+    model: pl.LightningModule = DownsampleCVAE(config.model.kwargs.model_kwargs, config.model.kwargs.joint_attention_encoder_kwargs, config.model.kwargs.training_kwargs)
     model.to(device)
-    print(f"Currently allocated GPU-memory: {torch.cuda.memory_allocated()}")
-    # exit()
-    trainer = Trainer()
+    # print(f"Currently allocated GPU-memory: {torch.cuda.memory_allocated()}")
+
+    logger = TensorBoardLogger(save_dir="logs/")
+    trainer = Trainer(default_root_dir="logs/", logger=logger)
     trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
 if __name__ == '__main__':
-    main()
+    main() 

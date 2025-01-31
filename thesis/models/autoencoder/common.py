@@ -2,6 +2,7 @@ import numpy as np
 import torch 
 import torch.nn as nn 
 import torch.nn.functional as F 
+from typing import Tuple
 
 
 class AutoencoderLoss(torch.nn.Module):
@@ -11,13 +12,14 @@ class AutoencoderLoss(torch.nn.Module):
     
     def recon_kl_loss(
         self, inputs, reconstructions, posteriors, split="train"
-    ):
+    ) -> Tuple[float, dict]:
         rec_loss = torch.nn.functional.mse_loss(inputs, reconstructions)
         
         kl_loss = posteriors.kl()
         kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
 
         loss = rec_loss + self.kl_weight * kl_loss
+        print(f"The combined loss is of type: {type(loss)}")
 
         log = {
             "{}/ae_total_loss".format(split): loss.clone().detach().mean(),

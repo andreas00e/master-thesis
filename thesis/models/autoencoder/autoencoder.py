@@ -1,7 +1,5 @@
 import copy
-from omegaconf import OmegaConf
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,6 +8,7 @@ import torchvision.transforms as T
 import lightning.pytorch as pl
 
 from utils import get_cosine_schedule_with_warmup
+from models.joint_module import JointAttentionEncoder
 from models.vision_module import ObsEncoderResNet50
 from models.common import get_pe, SinusoidalPosEmb, ResBottleneck, ImageAdapter, WrappedTransformerEncoder, WrappedTransformerDecoder 
 from models.autoencoder.common import AutoencoderLoss, DiagonalGaussianDistribution
@@ -18,19 +17,20 @@ from models.autoencoder.common import AutoencoderLoss, DiagonalGaussianDistribut
 class DownsampleCVAE(pl.LightningModule):
     def __init__(
         self,
-        model_kwargs,
-        training_kwargs,
+        model_kwargs: dict,
+        joint_attention_encoder_kwargs: dict, 
+        training_kwargs: dict,
         mode="pretraining",  # pretraining, finetuning, inference
         all_config=None
     ):
         super().__init__()
+
         ckpt_path = model_kwargs["ckpt_path"]
-        # TODO: modify if necessary
+
         if ckpt_path is True:
-            ckpt = torch.load(ckpt_path, map_location="cpu")
+            ckpt = torch.load(ckpt_path, map_location=torch.device("cuda"))
             # reloading config from ckpt
             hyper_params = copy.deepcopy(ckpt['hyper_parameters'])
-
             # replace all the model config to the original
             # but keep low_dim_feature_dim obtained in main.preprocess_config
             low_dim_feature_dim = model_kwargs.low_dim_feature_dim
@@ -40,19 +40,20 @@ class DownsampleCVAE(pl.LightningModule):
         # initialze model
         self.all_config = all_config
         self.model_kwargs = model_kwargs
+        self.joint__attention_encoder_kwargs = joint_attention_encoder_kwargs
         self.training_kwargs = training_kwargs
         self.save_hyperparameters()
-
 
         self.action_dim = model_kwargs["action_dim"]
         self.hidden_size = model_kwargs["hidden_size"]
         self.latent_size =  model_kwargs["latent_size"]
         self.horizon = model_kwargs["horizon"]
 
-
         self.cls = nn.Parameter(data=torch.zeros(size=(1, self.hidden_size)), requires_grad=True)
+
         self.z_encoder = WrappedTransformerEncoder(**model_kwargs)
         self.decoder = WrappedTransformerDecoder(**model_kwargs)
+
         self.z_up = nn.Linear(self.latent_size, self.hidden_size)
         self.z_down = nn.Linear(self.hidden_size, self.latent_size * 2)
 
@@ -64,6 +65,8 @@ class DownsampleCVAE(pl.LightningModule):
         self.loss = AutoencoderLoss(
             **training_kwargs.loss_kwargs
         )
+
+        self.joint__attention_encoder = JointAttentionEncoder(**joint_attention_encoder_kwargs)
 
         self.register_buffer(
             'pe', get_pe(hidden_size=self.hidden_size, max_len=self.horizon*2))
@@ -116,10 +119,12 @@ class DownsampleCVAE(pl.LightningModule):
             WrappedTransformerDecoder,
             WrappedTransformerEncoder,
             nn.LeakyReLU,
+            nn.ELU, 
             ResBottleneck,
             AutoencoderLoss,
             ImageAdapter,
             ObsEncoderResNet50, 
+            JointAttentionEncoder
         )
         if isinstance(module, (nn.Linear, nn.Embedding)):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -249,25 +254,19 @@ class DownsampleCVAE(pl.LightningModule):
     
     def forward(self, batch, batch_idx, sample_posterior=True, split='train'):
         posterior, obs_emb = self.encode(batch)
-        print(type(poster))
-        exit()
-        # print(f"Currently allocated GPU-memory: {torch.cuda.memory_allocated()}")
-
-        # pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior, raw_language_features=batch['language'])        
         pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior)
-
-
+        # TODO: Change what to log as batch["action"] will not be usable 
         total_loss, log_dict = self.loss.recon_kl_loss(
-            inputs=batch['action'], reconstructions=pred_action, posteriors=posterior, split=split)
+            inputs=batch['action'], reconstructions=pred_action, posteriors=posterior, split=split) 
         return total_loss, log_dict
     
     def training_step(self, batch, batch_idx):
         self.last_training_batch = batch
         total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='train')
-        self.log_dict(log_dict, sync_dist=True)
+        self.log_dict(dictionary=log_dict, logger=True, rank_zero_only=True, sync_dist=True)
         return total_loss
 
     def validation_step(self, batch, batch_idx):
         total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='val')
-        self.log_dict(log_dict, sync_dist=True)
+        self.log_dict(dictionary=log_dict, logger=True, rank_zero_only=True, sync_dist=True)
         return total_loss

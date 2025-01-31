@@ -19,6 +19,16 @@ model:
       with_obs: True
       with_language: False
       ckpt_path: False
+      
+    joint_attention_encoder_kwargs:
+      descr_in_size: 5
+      descr_hidden_size: 512
+      descr_out_size: 64
+      obs_in_size: 512
+      obs_out_size: 4 
+      softmax_temperature: 1.0 
+      softmax_temperature_min: 0.015 
+      stability_epsilon: 1e-8 
 
     training_kwargs:
       lr: 1e-4

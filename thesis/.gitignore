@@ -1,0 +1,6 @@
+__pychache__/
+data/
+lightning_logs/
+logs/ 
+models/__pychache__/
+models/autoencoder/__pychache__
