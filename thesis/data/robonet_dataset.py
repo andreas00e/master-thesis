@@ -5,13 +5,32 @@ import h5py
 import tqdm 
 import numpy as np
 import pickle as pkl 
+import matplotlib.pyplot as plt 
 
-import torch 
+import torch
+import torch.nn as nn 
 from torch.utils.data import Dataset
 
 import time 
 from functools import wraps
 
+from dataclasses import dataclass, field 
+
+from robonet.datasets.util.metadata_helper import load_metadata
+from robonet.datasets.util.hdf5_loader import *
+
+@dataclass
+class HParams:
+    target_adim: int = 4 
+    target_sdim: int = 5
+    state_mismatch: str = STATE_MISMATCH.ERROR # TODO make better flag parsing
+    action_mismatch: str = ACTION_MISMATCH.ERROR # TODO make better flag parsing
+    img_size: list = field(default_factory=lambda: [48, 64])
+    cams_to_load: list = field(default_factory=lambda: [0])
+    input_autograsp_action: bool = True
+    load_annotations: bool = False 
+    zero_if_missing_annotation: bool = False # TODO implement error checking here for jagged reading
+    load_T: int = 0 
 
 # EEF position/orientation and binary gripper state (open/closed)
 STATE = {
@@ -48,21 +67,17 @@ def time_it(func):
         return result 
     return time_it_wrapper
 
-@time_it
-def collect_metadata(path):
+def collect_metadata(files):
     state_keys = list(STATE.keys())
     
     # Check if metadata has already been saved 
-    try: 
-        with open('metadata.pkl', 'rb') as metadata: 
-            metadata = pkl.load(metadata)
-            return 0 
-
-    except FileNotFoundError: 
-        print("metadata.pkl file has not been created yet!")
-
-    for file in tqdm.tqdm(glob.glob(path+'*.hdf5'), desc="Finding min and max values for normalization", colour='green'): 
+    if os.path.isfile('metadata.pkl'): 
+        print("metadata.pkl has already been created!") 
+        return None
+    
+    for file in tqdm.tqdm(files, desc="Finding min and max values for normalization", colour='green'): 
         with h5py.File(file, 'r') as hf: 
+            # print(hf['metadata'].attrs['object_classes'])
             # get current robot name 
             robot = hf['metadata'].attrs['robot'].upper()
             if robot in METADATA.keys(): 
@@ -96,7 +111,7 @@ def collect_metadata(path):
                                     
                     actions = np.array(hf['policy']['actions'])
                     # print(actions.shape)
-                    for i in range(actions.shape[1]): 
+                    for i in range(actions.shape[1]):
                         # find min action values 
                         if np.min(actions[:, i]) < METADATA[robot]['MIN_ACTION'][state_keys[i]]:
                             METADATA[robot]['MIN_ACTION'][state_keys[i]] = np.min(actions[:, i])
@@ -104,8 +119,8 @@ def collect_metadata(path):
                         if np.max(actions[:, i]) > METADATA[robot]['MAX_ACTION'][state_keys[i]]:
                             METADATA[robot]['MAX_ACTION'][state_keys[i]] = np.max(actions[:, i])
 
-                except KeyError: 
-                    # print("Current hdf5 file does not contain keys qpos and/or qvel!")
+                except KeyError:
+                    # Current hdf5 file does not contain keys qpos and/or qvel!
                     continue
 
                 # print('\t')
@@ -115,68 +130,111 @@ def collect_metadata(path):
         pkl.dump(METADATA, metadata)
 
 class RoboNetDataset(Dataset):
-    def __init__(self, robots=['sawyer', 'widowx', 'baxter', 'kuka', 'franka'], horizon=16):
+
+    # @time_it
+    def __init__(self, path, robots, horizon):
         super().__init__()
-        path = '~/ehrensberger/RoboNet/hdf5/' 
-        path = os.path.expanduser(path)
-        files = [x for x in glob.glob(path+'*.hdf5') if any(robot in x for robot in robots)]
-        
+
+        self.path = path 
+        self.robots = robots 
         self.horizon = horizon
+
+        self.hparams = HParams(action_mismatch=ACTION_MISMATCH.CLEAVE)
+        self.files = [x for x in glob.glob(self.path +'*.hdf5') if any(robot in x for robot in self.robots)]
+        # Sort hdf5 files to be in ascending order 
+        self.files = sorted(self.files, key=lambda x: int(x.split('.')[-2].split('_')[-1].replace('traj', '')))
+         
+        if not os.path.isfile('./metadata.pkl'):
+            collect_metadata(self.files)
+
+        with open('./metadata.pkl', 'rb') as metadata: 
+            self.metadata = pkl.load(metadata)
+
+        data_folder = '/'.join(self.path.split('/')[:-1])
+        self.file_metadata = load_metadata(data_folder)
+
         self.data = []
-        
-        for i in files:
-            try: 
-                buf = open(i, 'rb').read()
-                with h5py.File(i, 'r') as hf:
-                    try: 
-                        # print(hf['metadata'].attrs['low_bound'])
-                        # print(hf['metadata'].attrs['high_bound'])
 
-                        # print(np.array(hf['env']['high_bound']))
-
-                        # print(hf['metadata'].attrs.keys())
-                        for k in hf['metadata'].attrs.keys():
-                            print(hf['metadata'].attrs[k])
-                            # print(hf['metadata']['object_classes'])
-                        break
-                        episode = dict()
-                        # n_rows = np.array(print(f['metadata'])f['policy']['actions'].shape[0])
-                        
-                        j = 0 
-                        while(j+self.horizon-1 < n_rows):
-                            
-                            break
-                            # episode['state'] = np.array(f['env']['state'])[j, :]
-                            #episode['qpos'] = np.array(f['env']['qpos'])[j, :]
-                            #episode['qvel'] = np.array(f['env']['qvel'])[j, :]
-                            #print(f"{i}: {episode['state'][-1]}")
-                            #episode['actions'] = np.array(f['policy']['actions'])[j:j+horizon-1, :]
-                            #self.data.append(episode)
-                            #episode.clear()
-                            j+=1
-                    except KeyError:
-                        
-                        qpos = None
-                        qvel = None 
-                                
-            except FileNotFoundError: 
-                print("HDfF5 file could not be found!")
-        
     def __len__(self): 
-        return 5 
+        return len(self.files)
     
     def __getitem__(self, index):
-        return super().__getitem__(index)
+        try: 
+            with h5py.File(self.files[index], 'r') as hf:
+                try:
+                    # load images, actions, and states with build-in RoboNet functions 
+                    imgs, actions, states = load_data(f_name=self.files[index], file_metadata=self.file_metadata.get_file_metadata(self.files[index]), hparams=self.hparams)
+                    qpos = np.array(hf['env']['qpos'])
+                    qvel = np.array(hf['env']['qpos'])
+                    robot = hf['metadata'].attrs['robot']
+
+                    # load embodiment specific max and min values 
+                    metadata =  self.metadata[robot.upper()]
+                    min_state_xyz = np.min(list(metadata['MIN_STATE'].values())[:3])
+                    max_state_xyz = np.max(list(metadata['MAX_STATE'].values())[:3])
+                    min_action_xyz = np.min(list(metadata['MIN_ACTION'].values())[:3])
+                    max_action_xyz = np.max(list(metadata['MAX_ACTION'].values())[:3])
+                    
+                    episode = dict()                        
+                    for i in range(states.shape[0]): 
+
+                        # add normalized state to dict 
+                        state_xyz = (states[i, :3]-min_state_xyz)/(max_state_xyz-min_state_xyz)
+                        state_yaw = np.array([(states[i, 3]-metadata['MIN_STATE']['YAW'])/(metadata['MAX_STATE']['YAW']-metadata['MIN_STATE']['YAW'])])
+                        state_gripper = np.array([(states[i, 4]-metadata['MIN_STATE']['GRIPPER'])/(metadata['MAX_STATE']['GRIPPER']-metadata['MIN_STATE']['GRIPPER'])])
+                        episode['state'] = np.expand_dims(np.concatenate((state_xyz, state_yaw, state_gripper)), axis=1) # -> np.darray(5, 1)
+                        # print(f"episode['state'] has shape: {episode['state'].shape}")
+                        
+                        # add normalized actions to dict 
+                        actions = np.array([actions[i+j, :] if i+j < actions.shape[0] else np.zeros((actions.shape[1],)) for j in range(self.horizon)])
+                        actions_xyz = np.where(actions[:, :3] != 0, (actions[:, :3]-min_action_xyz)/(max_action_xyz-min_action_xyz), 0)
+                        actions_yaw = np.expand_dims(np.where(actions[:, 3] != 0, 
+                            (actions[:, 3]-metadata['MIN_ACTION']['YAW'])/(metadata['MAX_ACTION']['YAW']-metadata['MIN_ACTION']['YAW']), 0),axis=1)
+                        
+                        if actions.shape[1] == 5: 
+                            actions_gripper = np.expand_dims(np.where(actions[:, 4] != 0, 
+                                (actions[:, 4]-metadata['MIN_ACTION']['GRIPPER'])/(metadata['MAX_ACTION']['GRIPPER']-metadata['MIN_ACTION']['GRIPPER']), 0), axis=1)
+                        else: 
+                            actions_gripper = np.zeros((self.horizon, 1))
+
+                        episode['actions'] = np.concatenate((actions_xyz, actions_yaw, actions_gripper), axis=1)
+                        # print(f"episode['action'] has shape: {episode['actions'].shape}")
+
+                        # TODO: check how position of first camera is described inpaper #TODO: check how to adequately normalize images
+                        episode['image'] = imgs.squeeze()[i, ...]
+
+                        # add normalized joint position and velocity to dict 
+                        episode['qpos'] = np.expand_dims((qpos[i, :]-metadata['MIN_Q_POS'])/(metadata['MAX_Q_POS']-metadata['MIN_Q_POS']), axis=1) # normalized joint position
+                        episode['qvel'] = np.expand_dims((qvel[i, :]-metadata['MIN_Q_VEL'])/(metadata['MAX_Q_VEL']-metadata['MIN_Q_VEL']), axis=1)# normalized joint velocity
+
+                        # add robot name to dict 
+                        episode['robot'] = robot # current robot 
+
+                        self.data.append(copy.deepcopy(episode))
+                        episode.clear()
+
+                except KeyError as e:  
+                    print(f"KeyError with problem-causing key: {e}")
+                    return None 
+
+        except FileNotFoundError as e:
+            print("HDfF5 file {e} could not be found!")
+            return None
+
+        return self.data
 
 def main(): 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     path = '~/ehrensberger/RoboNet/hdf5/' 
     path = os.path.expanduser(path)
 
-    # RoboNetDataset()
-    collect_metadata(path)
-    with open('metadata.pkl', 'rb') as metadata: 
-        metadata = pkl.load(metadata)
-        print(metadata)
+    # list of all robots with qpos and qvel data 
+    # robots = ['sawyer', 'widowx', 'baxter', 'kuka', 'franka']
+    robots = ['sawyer']
+    horizon = 8 
+
+    roboNetDataset = RoboNetDataset(path=path, robots=robots, horizon=horizon)
+
 
 if __name__ == '__main__': 
     main()
