@@ -3,13 +3,11 @@ import glob
 import copy  
 import h5py
 import tqdm 
+import random
 import numpy as np
 import pickle as pkl 
-import matplotlib.pyplot as plt 
-
-import torch
-import torch.nn as nn 
-from torch.utils.data import Dataset
+ 
+from torch.utils.data import Dataset, DataLoader
 
 import time 
 from functools import wraps
@@ -19,6 +17,7 @@ from dataclasses import dataclass, field
 from robonet.datasets.util.metadata_helper import load_metadata
 from robonet.datasets.util.hdf5_loader import *
 
+# TODO: Add description from where this was copied 
 @dataclass
 class HParams:
     target_adim: int = 4 
@@ -131,7 +130,6 @@ def collect_metadata(files):
 
 class RoboNetDataset(Dataset):
 
-    # @time_it
     def __init__(self, path, robots, horizon):
         super().__init__()
 
@@ -142,7 +140,7 @@ class RoboNetDataset(Dataset):
         self.hparams = HParams(action_mismatch=ACTION_MISMATCH.CLEAVE)
         self.files = [x for x in glob.glob(self.path +'*.hdf5') if any(robot in x for robot in self.robots)]
         # Sort hdf5 files to be in ascending order 
-        self.files = sorted(self.files, key=lambda x: int(x.split('.')[-2].split('_')[-1].replace('traj', '')))
+        # self.files = sorted(self.files, key=lambda x: int(x.split('.')[-2].split('_')[-1].replace('traj', '')))
          
         if not os.path.isfile('./metadata.pkl'):
             collect_metadata(self.files)
@@ -152,17 +150,18 @@ class RoboNetDataset(Dataset):
 
         data_folder = '/'.join(self.path.split('/')[:-1])
         self.file_metadata = load_metadata(data_folder)
-
         self.data = []
 
     def __len__(self): 
         return len(self.files)
     
     def __getitem__(self, index):
+        self.data.clear()
+    # TODO: Try to get rid of the try except statements 
         try: 
             with h5py.File(self.files[index], 'r') as hf:
                 try:
-                    # load images, actions, and states with build-in RoboNet functions 
+                    # load images, actions, and states with robonet functions 
                     imgs, actions, states = load_data(f_name=self.files[index], file_metadata=self.file_metadata.get_file_metadata(self.files[index]), hparams=self.hparams)
                     qpos = np.array(hf['env']['qpos'])
                     qvel = np.array(hf['env']['qpos'])
@@ -177,7 +176,6 @@ class RoboNetDataset(Dataset):
                     
                     episode = dict()                        
                     for i in range(states.shape[0]): 
-
                         # add normalized state to dict 
                         state_xyz = (states[i, :3]-min_state_xyz)/(max_state_xyz-min_state_xyz)
                         state_yaw = np.array([(states[i, 3]-metadata['MIN_STATE']['YAW'])/(metadata['MAX_STATE']['YAW']-metadata['MIN_STATE']['YAW'])])
@@ -214,27 +212,30 @@ class RoboNetDataset(Dataset):
                         episode.clear()
 
                 except KeyError as e:  
-                    print(f"KeyError with problem-causing key: {e}")
-                    return None 
-
+                    # print(f"KeyError with problem-causing key: {e}")
+                    # if HDF5 file does not contain qpos or qvel return a different element at random 
+                    rand_index = random.randint(0, self.__len__()-1)
+                    return self.__getitem__(rand_index)
+                
         except FileNotFoundError as e:
-            print("HDfF5 file {e} could not be found!")
-            return None
+            # print("HDfF5 file {e} could not be found!")
+            return None 
 
         return self.data
 
 def main(): 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     path = '~/ehrensberger/RoboNet/hdf5/' 
     path = os.path.expanduser(path)
 
     # list of all robots with qpos and qvel data 
-    # robots = ['sawyer', 'widowx', 'baxter', 'kuka', 'franka']
-    robots = ['sawyer']
+    robots = ['sawyer', 'widowx', 'baxter', 'kuka', 'franka']
     horizon = 8 
 
     roboNetDataset = RoboNetDataset(path=path, robots=robots, horizon=horizon)
+    roboNetDataLoader = DataLoader(dataset=roboNetDataset, batch_size=1, num_workers=4)
 
+    for i in tqdm.tqdm(roboNetDataLoader): 
+        a = i 
 
 if __name__ == '__main__': 
     main()
