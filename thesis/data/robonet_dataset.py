@@ -129,7 +129,6 @@ def collect_metadata(files):
         pkl.dump(METADATA, metadata)
 
 class RoboNetDataset(Dataset):
-
     def __init__(self, path, robots, horizon):
         super().__init__()
 
@@ -157,7 +156,7 @@ class RoboNetDataset(Dataset):
     
     def __getitem__(self, index):
         self.data.clear()
-    # TODO: Try to get rid of the try except statements 
+        # TODO: Try to get rid of the try except statements 
         try: 
             with h5py.File(self.files[index], 'r') as hf:
                 try:
