@@ -61,9 +61,8 @@ class JointAttentionEncoder(nn.Module):
         dynamic_joint_state_mask = torch.repeat_interleave(
             torch.unsqueeze(joint_desc_emb, dim=-1), repeats=joint_state_emb.shape[-1], dim=-1)
         masked_dynamic_joint_state = dynamic_joint_state_mask * torch.unsqueeze(input=joint_state_emb, dim=-2)
-        masked_dynamic_joint_state = torch.reshape(masked_dynamic_joint_state, shape=(masked_dynamic_joint_state.shape[:-2]+(masked_dynamic_joint_state.shape[-2] * masked_dynamic_joint_state.shape[-1],)))
-        # masked_dynamic_joint_state = torch.reshape(
-        #     input=masked_dynamic_joint_state, shape=(masked_dynamic_joint_state.shape[:-2] + (masked_dynamic_joint_state.shape[-2] * masked_dynamic_joint_state[-1], )))
+        masked_dynamic_joint_state = torch.reshape(
+            masked_dynamic_joint_state, shape=(masked_dynamic_joint_state.shape[:-2]+(masked_dynamic_joint_state.shape[-2] * masked_dynamic_joint_state.shape[-1],)))
         dynamic_joint_latent = torch.sum(masked_dynamic_joint_state, dim=-2)
 
         return dynamic_joint_latent
