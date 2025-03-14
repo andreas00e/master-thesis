@@ -1,36 +1,35 @@
+import os
 import copy
-
+from omegaconf import OmegaConf
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms as T 
+from diffusers.optimization import get_cosine_schedule_with_warmup
 
 import lightning.pytorch as pl
 
-from utils import get_cosine_schedule_with_warmup
-from models.joint_module import JointAttentionEncoder
-from models.vision_module import ObsEncoderResNet50
-from models.common import get_pe, SinusoidalPosEmb, ResBottleneck, ImageAdapter, WrappedTransformerEncoder, WrappedTransformerDecoder 
-from models.autoencoder.common import AutoencoderLoss, DiagonalGaussianDistribution
+from RoLD.models.autoencoder.common import DiagonalGaussianDistribution, AutoencoderLoss
+from RoLD.models.common import SinusoidalPosEmb, get_pe, WrappedTransformerEncoder, WrappedTransformerDecoder, ResBottleneck, ImageAdapter
+from RoLD.utils import instantiate_from_config
 
+from models.common import Clip, ParametrizedSofmax, JointAttentionEncoder
 
 class DownsampleCVAE(pl.LightningModule):
     def __init__(
         self,
-        model_kwargs: dict,
-        joint_attention_encoder_kwargs: dict, 
-        training_kwargs: dict,
-        mode="pretraining",  # pretraining, finetuning, inference
+        model_kwargs,
+        joint_encoder_kwargs, 
+        training_kwargs,
+        mode,  # pretraining, finetuning, inference
         all_config=None
     ):
         super().__init__()
-
-        ckpt_path = model_kwargs["ckpt_path"]
-
-        if ckpt_path is True:
-            ckpt = torch.load(ckpt_path, map_location=torch.device("cuda"))
+        ckpt_path = model_kwargs.ckpt_path
+        if ckpt_path is not None:
+            ckpt = torch.load(ckpt_path, map_location='cpu')
             # reloading config from ckpt
             hyper_params = copy.deepcopy(ckpt['hyper_parameters'])
+
             # replace all the model config to the original
             # but keep low_dim_feature_dim obtained in main.preprocess_config
             low_dim_feature_dim = model_kwargs.low_dim_feature_dim
@@ -39,64 +38,63 @@ class DownsampleCVAE(pl.LightningModule):
 
         # initialze model
         self.all_config = all_config
-        self.model_kwargs = model_kwargs
-        self.joint__attention_encoder_kwargs = joint_attention_encoder_kwargs
         self.training_kwargs = training_kwargs
+        self.model_kwargs = model_kwargs
+        self.joint_encoder_kwargs = joint_encoder_kwargs
         self.save_hyperparameters()
 
-        self.action_dim = model_kwargs["action_dim"]
-        self.hidden_size = model_kwargs["hidden_size"]
-        self.latent_size =  model_kwargs["latent_size"]
-        self.horizon = model_kwargs["horizon"]
+        self.action_dim = action_dim = model_kwargs['action_dim']
+        self.hidden_size = hidden_size = model_kwargs['hidden_size']
+        self.latent_size = latent_size = model_kwargs['latent_size']
+        self.horizon = horizon = model_kwargs['horizon']
 
-        self.cls = nn.Parameter(data=torch.zeros(size=(1, self.hidden_size)), requires_grad=True)
+        self.action_emb = nn.Linear(action_dim, hidden_size)
 
+        self.cls = nn.Parameter(data=torch.zeros(size=(1, hidden_size)), requires_grad=True)
         self.z_encoder = WrappedTransformerEncoder(**model_kwargs)
+        self.z_down = nn.Linear(hidden_size, latent_size * 2)
+
+        self.z_up = nn.Linear(latent_size, hidden_size)
+        self.conditioner = WrappedTransformerEncoder(**model_kwargs)
         self.decoder = WrappedTransformerDecoder(**model_kwargs)
 
-        self.z_up = nn.Linear(self.latent_size, self.hidden_size)
-        self.z_down = nn.Linear(self.hidden_size, self.latent_size * 2)
+        self.action_head = nn.Linear(hidden_size, action_dim)
 
-        self.conditioner = WrappedTransformerEncoder(**model_kwargs)
+        self.joint_encoder = JointAttentionEncoder(**joint_encoder_kwargs)
         
-        self.action_emb = nn.Linear(self.action_dim, self.hidden_size)
-        self.action_head = nn.Linear(self.hidden_size, self.action_dim)
+        # TODO: Fix dataloading: KeyError: b'KUKA' -> 'KUKA
+        self.robot_dict = {'SAWYER': torch.tensor([0, 0, 1]), 'WIDOWX': torch.tensor([0, 1, 0]), 
+                           'BAXTER': torch.tensor([0, 1, 1]), 'KUKA': torch.tensor([1, 0, 0]), 'FRANKA': torch.tensor([1, 0, 1])}
 
         self.loss = AutoencoderLoss(
             **training_kwargs.loss_kwargs
         )
 
-        self.joint__attention_encoder = JointAttentionEncoder(**joint_attention_encoder_kwargs)
-
         self.register_buffer(
-            'pe', get_pe(hidden_size=self.hidden_size, max_len=self.horizon*2))
+            'pe', get_pe(hidden_size=hidden_size, max_len=horizon*2))
 
-        self.with_obs = model_kwargs.get('with_obs', "ResNet50")
+        self.with_obs = model_kwargs.get('with_obs', True)
         if self.with_obs:
             if model_kwargs.get('low_dim_feature_dim') is not None:
                 assert mode == 'finetuning' or mode == 'inference'
-                self.low_dim_emb = nn.Linear(model_kwargs['low_dim_feature_dim'], self.hidden_size)
+                self.low_dim_emb = nn.Linear(model_kwargs['low_dim_feature_dim'], hidden_size)
             else:
                 assert mode == 'pretraining'
                 self.low_dim_emb = None
 
         if self.with_obs:  # fix this in config
-            if self.with_obs == "ResNet50": 
-                print("Using ResNet50 to encode image featurs") 
-                self.img_emb = ObsEncoderResNet50(in_dim=512, out_dim=self.hidden_size)
-            elif self.hidden_size == 512:
-                self.img_emb = ResBottleneck(hidden_size=self.hidden_size)
+            if hidden_size == 512:
+                self.img_emb = ResBottleneck(hidden_size=hidden_size)
             else:
-                self.img_emb = ImageAdapter(in_dim=512, out_dim=self.hidden_size)
+                self.img_emb = ImageAdapter(in_dim=512, out_dim=hidden_size)
 
         self.with_language = model_kwargs.get('with_language', False)
         if self.with_language:
-            self.language_emb = nn.Linear(in_features=768, out_features=self.hidden_size)
+            self.language_emb = nn.Linear(in_features=768, out_features=hidden_size)
 
         self.last_training_batch = None
 
-        # TODO: modify if necessary 
-        if ckpt_path is True:
+        if ckpt_path is not None:
             if mode == 'finetuning':
                 self.load_state_dict(ckpt['state_dict'], strict=False)  # no low_dim during pretraining
             elif mode == 'inference' or mode == 'pretraining':  # pretraining ldm load the pretrained ae
@@ -118,13 +116,15 @@ class DownsampleCVAE(pl.LightningModule):
             nn.Sequential,
             WrappedTransformerDecoder,
             WrappedTransformerEncoder,
+            JointAttentionEncoder,
             nn.LeakyReLU,
             nn.ELU, 
+            nn.Tanh, 
+            Clip,
+            ParametrizedSofmax,
             ResBottleneck,
             AutoencoderLoss,
-            ImageAdapter,
-            ObsEncoderResNet50, 
-            JointAttentionEncoder
+            ImageAdapter
         )
         if isinstance(module, (nn.Linear, nn.Embedding)):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -149,11 +149,10 @@ class DownsampleCVAE(pl.LightningModule):
         elif isinstance(module, DownsampleCVAE):
             torch.nn.init.normal_(module.cls, mean=0.0, std=0.02)
         elif isinstance(module, ignore_types):
-            # if module's type is any of the types specified in ignore_types
             # no param
             pass
         else:
-            raise RuntimeError(f"Unaccounted module: {module}")
+            raise RuntimeError("Unaccounted module {}".format(module))
     
     def configure_optimizers(self):
         kwargs = self.training_kwargs
@@ -173,10 +172,9 @@ class DownsampleCVAE(pl.LightningModule):
             }
         }
     
-    def get_obs_emb(self, raw_image_features, raw_low_dim_data=None):
+    def get_obs_emb(self, raw_image_features, raw_low_dim_data):
         if self.with_obs:
             image_emb = self.img_emb(raw_image_features)
-            # TODO: modify if necessary 
             if raw_low_dim_data is not None and self.low_dim_emb is not None:
                 low_dim_emb = self.low_dim_emb(raw_low_dim_data)
                 return torch.cat([image_emb, low_dim_emb], dim=1)
@@ -192,42 +190,33 @@ class DownsampleCVAE(pl.LightningModule):
             return None
     
     def encode(self, batch):
-        action = batch["action"].squeeze()
-        obs = batch["image"]
-        print(f"Shape of actions in batch: {action.shape}")
-        print(f"Shape of observations in batch: {obs.shape}")
-        # original function call 
-        # obs_emb = self.get_obs_emb(raw_image_features=batch['image'], raw_low_dim_data=batch.get('low_dim'))
-        # obs_emb = self.get_obs_emb(raw_image_features=batch['image'])
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        img_emb = ObsEncoderResNet50(self.hidden_size).to(device)
+        # TODO: change 'actions' to 'action' in dataloading to stay closer to original repo implementation 
+        action = batch['actions'].to(torch.float)
+        # 2025-03-10: added JoinAttentionEncoder from: TODO: insert paper name here
+        qpos = batch['qpos'].to(torch.float)
+        qvel = batch['qvel'].to(torch.float)
+        state = batch['state'].to(torch.float).to(self.device)
+
         batch_size = action.shape[0]
 
-        print(img_emb(obs[0, ...]).shape)
-
-        obs_emb = torch.zeros((batch_size, self.horizon, self.hidden_size)).to(device)
-        for i in range(obs.shape[0]): 
-            obs_emb += img_emb(obs[i, ...])
-        print(f"Shape of observations in batch after linear layer: {obs_emb.shape}")
-
-
-
-        print(f"Shape of buffer: {self.pe.shape}")
-        print(f"Shape of action after embedding layer: {self.action_emb(action).shape}")
-
+        joint_state = torch.cat([qpos, qvel], dim=-1).to(torch.float).to(self.device) # -> Linear network:
+        # fixed-size vector uniquely describing the joint by using characteristic properties 
+        joint_desc = torch.stack([self.robot_dict['KUKA'] for _ in range(joint_state.shape[1])]).expand((batch_size, -1, -1)).to(torch.float).to(self.device)# -> torch.Size([14, 3]) -> torch.Size([8, 14, 3])
+        joint_emb = self.joint_encoder(joint_desc, joint_state, state)
+        print(joint_emb.shape)
+        exit()
+        # changed on 2025-03-07: no raw_low_dim_data in dataset; incompatible tensor shapes between batch['iamge'] and weight matrix
+        obs_emb = self.get_obs_emb(raw_image_features=batch['image'].to(torch.float).view(batch_size, -1, self.hidden_size), raw_low_dim_data=None)
+ 
         pos_action_emb = self.action_emb(action) + self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
-
         cls = self.cls.expand((batch_size, 1, self.hidden_size))
 
         z_encoder_input = torch.cat([cls, pos_action_emb], dim=1)
         if obs_emb is not None:
-            print(f"z_encoder_input shape: {z_encoder_input.shape}")
-            print(f"obs_emb: {obs_emb.shape}")
             z_encoder_input = torch.cat([z_encoder_input, obs_emb], dim=1)
 
         z_encoder_output = self.z_encoder(z_encoder_input)[:, 0:1, :]
         z_encoder_output = self.z_down(z_encoder_output)
-
         posterior = DiagonalGaussianDistribution(z_encoder_output)
         return posterior, obs_emb
     
@@ -251,22 +240,24 @@ class DownsampleCVAE(pl.LightningModule):
         decoder_output = self.decoder(tgt=decoder_input, memory=condition)
         pred_action = self.action_head(decoder_output)
         return pred_action
-    
+
     def forward(self, batch, batch_idx, sample_posterior=True, split='train'):
         posterior, obs_emb = self.encode(batch)
-        pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior)
-        # TODO: Change what to log as batch["action"] will not be usable 
+        # changed on 2025-03-10: Currently no available language features 
+        # pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior, raw_language_features=batch['language'])
+        pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior, raw_language_features=None)
+
         total_loss, log_dict = self.loss.recon_kl_loss(
-            inputs=batch['action'], reconstructions=pred_action, posteriors=posterior, split=split) 
+            inputs=batch['actions'].to(torch.float), reconstructions=pred_action, posteriors=posterior, split=split)
         return total_loss, log_dict
     
     def training_step(self, batch, batch_idx):
         self.last_training_batch = batch
         total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='train')
-        self.log_dict(dictionary=log_dict, logger=True, rank_zero_only=True, sync_dist=True)
+        self.log_dict(log_dict, sync_dist=True)
         return total_loss
 
     def validation_step(self, batch, batch_idx):
         total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='val')
-        self.log_dict(dictionary=log_dict, logger=True, rank_zero_only=True, sync_dist=True)
+        self.log_dict(log_dict, sync_dist=True)
         return total_loss

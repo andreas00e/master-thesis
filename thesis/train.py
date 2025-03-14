@@ -1,27 +1,26 @@
 import os
 import argparse
-import copy 
-import matplotlib.pyplot as plt 
 
 from omegaconf import OmegaConf
-from pathlib import Path
-from PIL import Image
 
 import torch
-import torchvision.transforms as T
-from torch.utils.data import DataLoader, TensorDataset, Dataset
+from torch.utils.data import DataLoader
 import torch.multiprocessing as mp
-from torch.nn.functional import interpolate
 
 import lightning.pytorch as pl 
 from lightning.pytorch.trainer import Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
 
-
-from utils import get_timestamp, instantiate_from_config
 from models.autoencoder.autoencoder import DownsampleCVAE
 
-torch.cuda.empty_cache()
+from data.robonet_dataset import RoboNetCustomizedDataset
+
+# Suppress all unwanted tensorflow INFO, WARNING, and ERRORS messages
+import tensorflow as tf 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['CUDA_LAUNCH_BLOCKING']= '1'
+os.environ['TORCH_USE_CUDA_DSA'] = '1'
+
 
 def get_train_val_loader(dataset, **dataloader_kwargs):
     train_ds, val_ds = dataset.split_train_val(train_ratio=0.98)
@@ -46,56 +45,31 @@ def preprocess_config(config, args):
 
 def get_parser_args():
     parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        '--config_name',
-        default='downsample_cvae'
-    )
-
-    parser.add_argument(
-        '--devices',
-        type=str,
-        default='0',
-    )
-    parser.add_argument(
-        '--horizon',
-        type=int,
-        default=16
-    )
+    parser.add_argument('--config_name', default='downsample_cvae')
+    parser.add_argument('--devices', type=str, default='0')
+    parser.add_argument('--horizon', type=int, default=16)
 
     return parser.parse_args()
 
-class MyDictDataset(Dataset):
-    def __init__(self, data):
-        self.data = data
-
-    def __getitem__(self, index):
-        self.data[index]["image"] = interpolate(self.data[index]["image"], size=(240, 240))
-
-        return self.data[index]
-
-    def __len__(self):
-
-        return len(self.data)
-    
-
-
 def main(): 
     mp.set_start_method("spawn", force=True)
+    torch.cuda.empty_cache()
+    
     args = get_parser_args()
     raw_config = OmegaConf.load(f'configs/train.yaml')
     OmegaConf.resolve(raw_config)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 10
-    image = torch.from_numpy(plt.imread("parrot.jpg").copy()).permute(2, 0, 1)
-    # print(image.shape)
-    list = [{"action" : torch.rand([16, 7]).to(torch.float32).to(device), "image" : image.to(torch.float32).expand(16, -1, -1, -1).to(device)}] * batch_size
 
-    data = MyDictDataset(list)
+    path = '~/ehrensberger/RoboNetCustomized/hdf5/' 
+    path = os.path.expanduser(path)
+    robots = ['kuka'] 
+    data = RoboNetCustomizedDataset(path=path, robots=robots)
+    train_dataset, test_dataset = torch.utils.data.random_split(data, [0.8, 0.2])
 
-    train_loader = DataLoader(dataset=data, num_workers=15, batch_size=5, persistent_workers=True)
-    val_loader = DataLoader(dataset=data, num_workers=15, batch_size=5, persistent_workers=True)
+    # Setting `persistent_workers=True` in 'val_dataloader' to speed up the dataloader worker initialization.
+    train_loader = DataLoader(dataset=train_dataset, batch_size=8, num_workers=19, persistent_workers=True)
+    val_loader = DataLoader(dataset=test_dataset, batch_size=8, num_workers=19, persistent_workers=True)
 
     config = preprocess_config(raw_config, args)
 
@@ -103,12 +77,15 @@ def main():
     config.model.kwargs.training_kwargs['num_training_steps'] = epoch_length * config.trainer.kwargs.max_epochs
 
     pl.seed_everything(raw_config.seed)
-    model: pl.LightningModule = DownsampleCVAE(config.model.kwargs.model_kwargs, config.model.kwargs.joint_attention_encoder_kwargs, config.model.kwargs.training_kwargs)
+    # TODO: Try to stay closer to github implementation 
+    
+    model: pl.LightningModule = DownsampleCVAE(config.model.kwargs.model_kwargs, config.joint_attention_encoder.kwargs.model_kwargs, 
+                                               config.model.kwargs.training_kwargs, mode='pretraining')
     model.to(device)
-    # print(f"Currently allocated GPU-memory: {torch.cuda.memory_allocated()}")
 
     logger = TensorBoardLogger(save_dir="logs/")
-    trainer = Trainer(default_root_dir="logs/", logger=logger)
+    trainer = Trainer(default_root_dir="logs/", logger=logger, max_epochs=400)
+    # TODO: get arguments from config file 
     trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
 if __name__ == '__main__':

@@ -1,0 +1,18 @@
+load_path: ~/ehrensberger/RoboNet/hdf5/
+save_path: ~/ehrensberger/RoboNetCustomized/hdf5/
+robots: ['sawyer', 'widowx', 'baxter', 'kuka', 'franka', 'R3', 'fetch']
+
+plot: 
+  figure: 
+    figsize: (10, 5)
+
+  histogram: 
+    matplotlib: 
+      density: True 
+      stacked: True
+      edgecolor: black 
+      alpha: 0.75
+
+    seaborn: 
+      multiple: dodge
+      kde: True

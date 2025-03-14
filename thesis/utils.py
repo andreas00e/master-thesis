@@ -3,6 +3,11 @@ import importlib
 from datetime import datetime
 from torch.optim.lr_scheduler import LambdaLR
 
+
+import time
+from functools import wraps
+
+
 def get_timestamp():
     return datetime.now().strftime('%Y%m%d-%H%M%S')
 
@@ -63,3 +68,15 @@ def get_cosine_schedule_with_warmup(
         return max(0.0, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress)))
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
+
+def time_it(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs): 
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        total_time = end_time-start_time
+        print(f"Execution of function {func.__name__} took {total_time:.2f} seconds")
+        return result
+
+    return wrapper 

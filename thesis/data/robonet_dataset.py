@@ -7,6 +7,7 @@ import random
 import numpy as np
 import pickle as pkl 
  
+import torch 
 from torch.utils.data import Dataset, DataLoader
 
 import time 
@@ -16,6 +17,8 @@ from dataclasses import dataclass, field
 
 from robonet.datasets.util.metadata_helper import load_metadata
 from robonet.datasets.util.hdf5_loader import *
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 # TODO: Add description from where this was copied 
 @dataclass
@@ -222,19 +225,50 @@ class RoboNetDataset(Dataset):
 
         return self.data
 
+class RoboNetCustomizedDataset(Dataset): 
+    def __init__(self, path, robots):
+        super().__init__()
+        self.path = path 
+        self.robots = robots 
+        self.files = [x for x in glob.glob(self.path+'*hdf5') if any(robot in x for robot in robots)]
+
+    def __getitem__(self, index):
+        item = dict()
+        with h5py.File(self.files[index], 'r') as hf: 
+            for k in list(hf.keys()): 
+                if isinstance(hf[k][()], bytes): 
+                    item[k] = hf[k][()].decode('utf-8')
+                elif isinstance(hf[k][()], np.ndarray):
+                    item[k] = np.array(hf[k][()], dtype=np.float32)
+            
+            return item 
+  
+    def __len__(self):
+        return len(self.files)
+
 def main(): 
     path = '~/ehrensberger/RoboNet/hdf5/' 
+    path = '~/ehrensberger/RoboNetCustomized/hdf5/' 
     path = os.path.expanduser(path)
 
     # list of all robots with qpos and qvel data 
-    robots = ['sawyer', 'widowx', 'baxter', 'kuka', 'franka']
-    horizon = 8 
+    # robots = ['sawyer', 'widowx', 'baxter', 'kuka', 'franka']
+    robots = ['kuka']
+    # print([x for x in glob.glob(path+'*.hdf5') if any(robot in x for robot in robots)])
 
-    roboNetDataset = RoboNetDataset(path=path, robots=robots, horizon=horizon)
+    # horizon = 8 
+    # roboNetDataset = RoboNetDataset(path=path, robots=robots, horizon=horizon)
+    # roboNetDataLoader = DataLoader(dataset=roboNetDataset, batch_size=1, num_workers=4)
+
+    roboNetDataset = RoboNetCustomizedDataset(path=path, robots=robots)
     roboNetDataLoader = DataLoader(dataset=roboNetDataset, batch_size=1, num_workers=4)
+    print(len(roboNetDataLoader))
 
-    for i in tqdm.tqdm(roboNetDataLoader): 
-        a = i 
+    for _, data in enumerate(roboNetDataLoader): 
+        for k in list(data.keys()): 
+            print(type(data[k]))
+        break
+
 
 if __name__ == '__main__': 
     main()

@@ -49,6 +49,7 @@ class hdf5_Creator():
                     qpos = np.array(hf_load['env']['qpos'])
                     qvel = np.array(hf_load['env']['qpos'])
                     robot = hf_load['metadata'].attrs['robot']
+                    print(f"Name of robot before operations: {robot}")
 
                     # load images, actions, and states with robonet functions 
                     imgs, actions, states = load_data(f_name=file, file_metadata=self.file_metadata.get_file_metadata(file), hparams=self.hparams)
@@ -61,7 +62,7 @@ class hdf5_Creator():
                     max_action_xyz = np.max(list(metadata['MAX_ACTION'].values())[:3])
                                     
                     for j in range(states.shape[0]): 
-                        hdf5 = robot+'_traj_{}_{}'.format(i, j)
+                        hdf5 = robot+'_traj_{}_{}.hdf5'.format(i, j)
                         with h5py.File(os.path.join(self.save_path, hdf5), 'w') as hf_write: 
                             # add normalized state to dict 
                             state_xyz = (states[j, :3]-min_state_xyz)/(max_state_xyz-min_state_xyz)
@@ -90,10 +91,13 @@ class hdf5_Creator():
 
                             # add normalized joint position and velocity to dict 
                             hf_write['qpos'] = np.expand_dims((qpos[j, :]-metadata['MIN_Q_POS'])/(metadata['MAX_Q_POS']-metadata['MIN_Q_POS']), axis=1) # normalized joint position
-                            hf_write['qvel'] = np.expand_dims((qvel[j, :]-metadata['MIN_Q_VEL'])/(metadata['MAX_Q_VEL']-metadata['MIN_Q_VEL']), axis=1)# normalized joint velocity
+                            hf_write['qvel'] = np.expand_dims((qvel[j, :]-metadata['MIN_Q_VEL'])/(metadata['MAX_Q_VEL']-metadata['MIN_Q_VEL']), axis=1) # normalized joint velocity
 
                             # add robot name to dict 
                             hf_write['robot'] = robot # current robot
+                            print(f"Name of robot after operations: {robot}")
+                            print(f"Type of robot after operations: {type(robot)}")
+                            exit()
 
                 except KeyError as e:  
                     # print(f"KeyError with error message: {e}")
@@ -118,6 +122,7 @@ class hdf5_Creator():
         return self.metadata[self.robot.upper()] 
 
 def main(): 
+    # TODO: Think about how to change/incorporate horizon more 'organically'
     parser = argparse.ArgumentParser(description='specify source and destination directory of dataset, robot (, and horizon(s))')
     parser.add_argument('--load_dir', type=str, help='source directory of RoboNet hdf5 files')
     parser.add_argument('--save_dir', type=str, help='destination direcoty of customized RoboNet hdf5 files')

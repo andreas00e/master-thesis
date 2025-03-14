@@ -1,2 +1,1 @@
-python3 ../save_robonet.py --load_dir ~/ehrensberger/RoboNet/hdf5/ --save_dir ~/ehrensberger/RoboNetCustomized/hdf5/ --robot kuka --horizon 16 
-
+python3 ../save_robonet.py --load_dir ~/ehrensberger/RoboNet/hdf5/ --save_dir ~/ehrensberger/RoboNetCustomized/hdf5/ --robot kuka --horizon 16

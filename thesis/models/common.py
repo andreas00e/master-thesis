@@ -53,8 +53,24 @@ class JointAttentionEncoder(nn.Module):
             nn.Linear(self.state_in_size, self.state_out_size), 
             nn.ELU()
             )
+        
+        self.encoder = nn.Sequential(
+            nn.Linear(128, 512),
+            nn.LayerNorm(), 
+            nn.ELU(), 
+            nn.Linear(512, 256),
+            nn.ELU(), 
+            nn.Linear(256, 128),
+            nn.ELU(), 
+            nn.Linear(128, 1)
+        )
     
-    def forward(self, joint_desc, joint_state): 
+    def _init_weights(self, layer):
+        if isinstance(layer, nn.Linear): 
+            nn.init.orthogonal_(layer.weight, gain=torch.sqrt(torch.tensor(2.0))) 
+            nn.init.constant_(layer.bias, 0.0)
+    
+    def forward(self, joint_desc, joint_state, general_state): 
         joint_desc_emb = self.joint_desc_encoder(joint_desc)
         joint_state_emb = self.joint_state_encoder(joint_state)
 
@@ -64,5 +80,9 @@ class JointAttentionEncoder(nn.Module):
         masked_dynamic_joint_state = torch.reshape(
             masked_dynamic_joint_state, shape=(masked_dynamic_joint_state.shape[:-2]+(masked_dynamic_joint_state.shape[-2] * masked_dynamic_joint_state.shape[-1],)))
         dynamic_joint_latent = torch.sum(masked_dynamic_joint_state, dim=-2)
+
+        # self.encoder.apply(self._init_weights)
+        # combined_input = torch.cat([dynamic_joint_latent, general_state], dim=-1)
+        # value = self.encoder(combined_input)
 
         return dynamic_joint_latent

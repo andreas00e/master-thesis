@@ -1,6 +1,8 @@
-__pychache__/
-data/
-lightning_logs/
-logs/ 
-models/__pychache__/
-models/autoencoder/__pychache__
+RoLD/
+thesis/__pychache__/
+thesis/lightning_logs/
+thesis/logs/ 
+thesis/models/__pychache__/
+thesis/models/autoencoder/__pychache__
+thesis/data/charts/ 
+thesis/data/images/
