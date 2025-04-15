@@ -1,6 +1,10 @@
-load_path: ~/ehrensberger/RoboNet/hdf5/
-save_path: ~/ehrensberger/RoboNetCustomized/hdf5/
-robots: ['sawyer', 'widowx', 'baxter', 'kuka', 'franka', 'R3', 'fetch']
+load_dir: ~/ehrensberger/RoboNet/hdf5/
+save_dir: ~/ehrensberger/RoboNetCustomized/hdf5/
+# scale: str = 'symmetric' ([1, 1]) | 'min_max' ([0, 1])
+norm: symmetric 
+
+robot: 'baxter'
+horizon: 16 
 
 plot: 
   figure: 
