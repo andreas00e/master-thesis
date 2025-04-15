@@ -1,15 +1,19 @@
 import os
+import copy
 import argparse
 
 from omegaconf import OmegaConf
+from typing import Dict, List#
+from lightning.pytorch.callbacks import DeviceStatsMonitor
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
+from torch.nn.utils.rnn import pad_sequence 
 import torch.multiprocessing as mp
 
 import lightning.pytorch as pl 
 from lightning.pytorch.trainer import Trainer
-from lightning.pytorch.loggers import TensorBoardLogger
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 
 from models.autoencoder.autoencoder import DownsampleCVAE
 
@@ -21,12 +25,14 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_LAUNCH_BLOCKING']= '1'
 os.environ['TORCH_USE_CUDA_DSA'] = '1'
 
+def get_train_val_loader(dataset, dataloader_kwargs):
+    train_ds, val_ds, test_ds = random_split(dataset, lengths=[0.8, 0.1, 0.1])
 
-def get_train_val_loader(dataset, **dataloader_kwargs):
-    train_ds, val_ds = dataset.split_train_val(train_ratio=0.98)
-    train_loader = DataLoader(dataset=train_ds, **dataloader_kwargs, shuffle=True)
-    val_loader = DataLoader(dataset=val_ds, **dataloader_kwargs, shuffle=False)
-    return train_loader, val_loader
+    train_loader = DataLoader(dataset=train_ds, collate_fn=collate_fn, **dataloader_kwargs, shuffle=True)
+    val_loader = DataLoader(dataset=val_ds, collate_fn=collate_fn,  **dataloader_kwargs, shuffle=False)
+    test_loader = DataLoader(dataset=test_ds, collate_fn=collate_fn, **dataloader_kwargs, shuffle=False)
+
+    return train_loader, val_loader, test_loader
 
 
 def preprocess_config(config, args):
@@ -36,7 +42,7 @@ def preprocess_config(config, args):
     config.dataset.kwargs.horizon = args.horizon
 
     # avoid gpu rank overflow
-    device_count = torch.cuda.device_count()
+    device_count = torch.cuda.device_count() # 1 
     if len(config.trainer.kwargs.devices) > device_count:
         config.trainer.kwargs.devices = list(range(device_count))
         # print(f'using {device_count} devices')
@@ -51,6 +57,20 @@ def get_parser_args():
 
     return parser.parse_args()
 
+# TODO: Use multiprocessing/threading to speed up function execution 
+def collate_fn(data: List[Dict]) -> Dict:
+    batch = dict() 
+
+    for key, value in data[0].items():
+        sample = [d[key] if isinstance(value, str) else torch.tensor(d[key]) for d in data]
+        if isinstance(value, str): 
+            batch.update({key: sample.copy()})
+        else: 
+            batch.update({key: pad_sequence(sample.copy(), batch_first=True)}) 
+        sample.clear()
+
+    return batch
+
 def main(): 
     mp.set_start_method("spawn", force=True)
     torch.cuda.empty_cache()
@@ -58,20 +78,34 @@ def main():
     args = get_parser_args()
     raw_config = OmegaConf.load(f'configs/train.yaml')
     OmegaConf.resolve(raw_config)
+    config = preprocess_config(raw_config, args)
+
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     path = '~/ehrensberger/RoboNetCustomized/hdf5/' 
     path = os.path.expanduser(path)
-    robots = ['kuka'] 
-    data = RoboNetCustomizedDataset(path=path, robots=robots)
-    train_dataset, test_dataset = torch.utils.data.random_split(data, [0.8, 0.2])
+    robots = ['kuka', 'franka', 'baxter', 'widowx'] 
+    # robots = ['kuka', 'widowx']
+    data = RoboNetCustomizedDataset(load_dir=path, robots=robots)
+    train_loader, val_loader, test_loader = get_train_val_loader(dataset=data, dataloader_kwargs=config.dataloader)
+    
+    # for i, data in enumerate(train_loader): 
+    #     actions = data['actions'].squeeze(-1)
+    #     state = data['states']
+    #     print(actions.shape)
+    #     print(state.shape)
+    #     print(actions)
+    #     # print(actions)
+    #     print('---------------------------------------')
+    #     print('\t')
+    #     if i == 100: 
+    #         break 
+    
+    # exit() 
 
-    # Setting `persistent_workers=True` in 'val_dataloader' to speed up the dataloader worker initialization.
-    train_loader = DataLoader(dataset=train_dataset, batch_size=8, num_workers=19, persistent_workers=True)
-    val_loader = DataLoader(dataset=test_dataset, batch_size=8, num_workers=19, persistent_workers=True)
 
-    config = preprocess_config(raw_config, args)
+
 
     epoch_length = len(train_loader) // len(config.trainer.kwargs.devices)
     config.model.kwargs.training_kwargs['num_training_steps'] = epoch_length * config.trainer.kwargs.max_epochs
@@ -83,10 +117,17 @@ def main():
                                                config.model.kwargs.training_kwargs, mode='pretraining')
     model.to(device)
 
-    logger = TensorBoardLogger(save_dir="logs/")
-    trainer = Trainer(default_root_dir="logs/", logger=logger, max_epochs=400)
+    # logger = TensorBoardLogger(save_dir="logs/")
+    wandb_logger = WandbLogger(save_dir='logs/')
+
+    trainer = Trainer(default_root_dir="logs/", logger=wandb_logger, callbacks=[DeviceStatsMonitor()], max_epochs=400, profiler='simple')
     # TODO: get arguments from config file 
+    # Train model
     trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    # Test model
+    # trainer.test(model=model, dataloaders=test_loader, ckpt_path='logs/lightning_logs/version_5/checkpoints/epoch=99-step=3000.ckpt')
+    # trainer.predict(model=model, dataloaders=test_loader, ckpt_path='logs/lightning_logs/version_5/checkpoints/epoch=99-step=3000.ckpt')
+    
 
 if __name__ == '__main__':
     main() 
