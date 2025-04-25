@@ -6,12 +6,12 @@ model:
   target: models.autoencoder.downsample_cvae.DownsampleCVAE
   kwargs:
     model_kwargs:
-      action_dim: 5
+      action_dim: 4
       hidden_size: 512
       latent_size: 32
-      n_encoder_layers: 1
-      n_decoder_layers: 1
-      n_heads: 1
+      n_encoder_layers: 3
+      n_decoder_layers: 6
+      n_heads: 8
       horizon: ${horizon}
       dropout: 0.1
       language_feature_dim: 
@@ -27,17 +27,17 @@ model:
         kl_weight: 1e-2
 
 # values taken from one_policy_to_run_them_all/one_policy_to_run_them_all/algorithms/uni_ppo/ppo/default_config.py
-joint_attention_encoder: 
-  target: models.joint_module.JointAttentionEncoder
-  kwargs: 
-    model_kwargs: 
-      desc_in_size: 3
-      desc_out_size: 5
-      state_in_size: 2 # currently one value for qpos and qvel for each joint 
-      state_out_size: 2 # original implementation: 4 
-      softmax_temp: 1.0
-      softmax_temp_min: 0.015
-      stability_eps: 1e-8
+# joint_attention_encoder: 
+  # target: models.joint_module.JointAttentionEncoder
+  # kwargs: 
+    # model_kwargs: 
+      #desc_in_size: 3
+      # desc_out_size: 5
+      # state_in_size: 14 # currently one value for qpos and qvel for each joint 
+      # state_out_size: 2 # original implementation: 4 
+      # softmax_temp: 1.0
+      # softmax_temp_min: 0.015
+      # stability_eps: 1e-8
 
 trainer:
   target: lightning.pytorch.trainer.Trainer
@@ -71,7 +71,7 @@ dataset:
     # feature_type: clip_ViT-B32
 
 dataloader:
-  batch_size: 512
-  num_workers: 32
+  batch_size: 256 # original value: 512
+  num_workers: 0 # mp.cpu_count() = 20; original value: 32
   pin_memory: True
-  persistent_workers: True
+  persistent_workers: False
