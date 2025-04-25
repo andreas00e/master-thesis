@@ -10,7 +10,7 @@ import lightning.pytorch as pl
 
 from RoLD.models.autoencoder.common import DiagonalGaussianDistribution, AutoencoderLoss
 from RoLD.models.common import SinusoidalPosEmb, get_pe, WrappedTransformerEncoder, WrappedTransformerDecoder, ResBottleneck, ImageAdapter
-from RoLD.utils import instantiate_from_config
+from RoLD.utils import instantiate_from_config 
 
 from models.common import Clip, ParametrizedSofmax, JointAttentionEncoder
 
@@ -18,7 +18,7 @@ class DownsampleCVAE(pl.LightningModule):
     def __init__(
         self,
         model_kwargs,
-        joint_encoder_kwargs, 
+        # joint_encoder_kwargs, 
         training_kwargs,
         mode,  # pretraining, finetuning, inference
         all_config=None
@@ -40,7 +40,7 @@ class DownsampleCVAE(pl.LightningModule):
         self.all_config = all_config
         self.training_kwargs = training_kwargs
         self.model_kwargs = model_kwargs
-        self.joint_encoder_kwargs = joint_encoder_kwargs
+        # self.joint_encoder_kwargs = joint_encoder_kwargs
         self.save_hyperparameters()
 
         self.action_dim = action_dim = model_kwargs['action_dim']
@@ -60,7 +60,7 @@ class DownsampleCVAE(pl.LightningModule):
 
         self.action_head = nn.Linear(hidden_size, action_dim)
 
-        self.joint_encoder = JointAttentionEncoder(**joint_encoder_kwargs)
+        # self.joint_encoder = JointAttentionEncoder(**joint_encoder_kwargs)
         
         # TODO: Fix dataloading: KeyError: b'KUKA' -> 'KUKA
         self.robot_dict = {'SAWYER': torch.tensor([0, 0, 1]), 'WIDOWX': torch.tensor([0, 1, 0]), 
@@ -191,23 +191,31 @@ class DownsampleCVAE(pl.LightningModule):
     
     def encode(self, batch):
         # TODO: change 'actions' to 'action' in dataloading to stay closer to original repo implementation 
-        action = batch['actions'].to(torch.float)
+        action = batch['actions']
+        image  = batch['image']
         # 2025-03-10: added JoinAttentionEncoder from: TODO: insert paper name here
-        qpos = batch['qpos'].to(torch.float)
-        qvel = batch['qvel'].to(torch.float)
-        state = batch['state'].to(torch.float).to(self.device)
+        # qpos = batch['qpos'].to(torch.float)
+        # qvel = batch['qvel'].to(torch.float)
+        # state = batch['states'].to(torch.float)
 
         batch_size = action.shape[0]
+        # print(action.shape)
+        # print(state.shape) 
+        action = action.squeeze(-1)
+        # 2025-03-30: Get rid of gripper as there are still some infinte values 
+        # state = state[:, :-1]
+        # action = action.unsqueeze(1).repeat(1, self.horizon, 1)
+        # print(f"shape action {action.shape}")
 
-        joint_state = torch.cat([qpos, qvel], dim=-1).to(torch.float).to(self.device) # -> Linear network:
+        # joint_state = torch.cat([qpos, qvel], dim=-1).to(torch.float).to(self.device) # -> Linear network:
         # fixed-size vector uniquely describing the joint by using characteristic properties 
-        joint_desc = torch.stack([self.robot_dict['KUKA'] for _ in range(joint_state.shape[1])]).expand((batch_size, -1, -1)).to(torch.float).to(self.device)# -> torch.Size([14, 3]) -> torch.Size([8, 14, 3])
-        joint_emb = self.joint_encoder(joint_desc, joint_state, state)
-        print(joint_emb.shape)
-        exit()
+        # joint_desc = torch.stack([self.robot_dict['KUKA'] for _ in range(joint_state.shape[1])]).expand((batch_size, -1, -1)).to(torch.float).to(self.device)# -> torch.Size([14, 3]) -> torch.Size([8, 14, 3])
+        # joint_emb = self.joint_encoder(joint_desc, joint_state, state)
+        # print(joint_emb.shape)
         # changed on 2025-03-07: no raw_low_dim_data in dataset; incompatible tensor shapes between batch['iamge'] and weight matrix
-        obs_emb = self.get_obs_emb(raw_image_features=batch['image'].to(torch.float).view(batch_size, -1, self.hidden_size), raw_low_dim_data=None)
- 
+        obs_emb = self.get_obs_emb(raw_image_features=image.view(batch_size, -1, self.hidden_size), raw_low_dim_data=None)
+        
+        # print(f"pe shape: {self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size)).shape}")
         pos_action_emb = self.action_emb(action) + self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
         cls = self.cls.expand((batch_size, 1, self.hidden_size))
 
@@ -218,7 +226,7 @@ class DownsampleCVAE(pl.LightningModule):
         z_encoder_output = self.z_encoder(z_encoder_input)[:, 0:1, :]
         z_encoder_output = self.z_down(z_encoder_output)
         posterior = DiagonalGaussianDistribution(z_encoder_output)
-        return posterior, obs_emb
+        return posterior, z_encoder_output, obs_emb
     
     def decode(self, obs_emb, posterior=None, z=None, sample_posterior=True, raw_language_features=None):
         if z is None:
@@ -242,22 +250,39 @@ class DownsampleCVAE(pl.LightningModule):
         return pred_action
 
     def forward(self, batch, batch_idx, sample_posterior=True, split='train'):
-        posterior, obs_emb = self.encode(batch)
+        posterior, obs_emb, _ = self.encode(batch)
         # changed on 2025-03-10: Currently no available language features 
         # pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior, raw_language_features=batch['language'])
         pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior, raw_language_features=None)
 
         total_loss, log_dict = self.loss.recon_kl_loss(
-            inputs=batch['actions'].to(torch.float), reconstructions=pred_action, posteriors=posterior, split=split)
+            inputs=batch['actions'].squeeze(-1).to(torch.float), reconstructions=pred_action, posteriors=posterior, split=split)
         return total_loss, log_dict
     
     def training_step(self, batch, batch_idx):
         self.last_training_batch = batch
         total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='train')
-        self.log_dict(log_dict, sync_dist=True)
+        self.log_dict(log_dict, prog_bar=True, sync_dist=True)
         return total_loss
 
     def validation_step(self, batch, batch_idx):
         total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='val')
-        self.log_dict(log_dict, sync_dist=True)
+        self.log_dict(log_dict, prog_bar=True, sync_dist=True)
         return total_loss
+    
+    def test_step(self, batch, batch_idx):
+        total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='test')
+        self.log_dict(log_dict, prog_bar=True, sync_dist=True)
+        return total_loss
+    
+    def predict_step(self, batch, batch_idx, sample_posterior=True):
+        # list 
+        robots = batch['robot']
+        # TODO: Implement true prediction step (used for infering actions, not visualizing the laten space) 
+        _, _, z_encoder_output = self.encode(batch)
+        # latent vector (mean of distribution)
+        mean, _ = torch.chunk(z_encoder_output, chunks=2, dim=-1)
+        mean = mean[:, 0, :].squeeze(1).cpu().numpy() 
+        result = list(zip(robots, mean))
+        return result 
+
