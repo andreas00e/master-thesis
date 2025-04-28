@@ -6,3 +6,5 @@ thesis/models/__pychache__/
 thesis/models/autoencoder/__pychache__
 thesis/data/charts/ 
 thesis/data/images/
+thesis/data/mimicgen/data
+thesis/models/autoencoder/__pycache__/autoencoder.cpython-38.pyc
