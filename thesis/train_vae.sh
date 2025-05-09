@@ -1,0 +1,1 @@
+python3 thesis/train_vae.py --config_path thesis/configs/train.yaml 
