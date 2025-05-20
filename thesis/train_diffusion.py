@@ -5,6 +5,7 @@ import sys
 sys.path.append('/home/ubuntu/ehrensberger/master-thesis/master-thesis')  # Add the parent directory of 'thesis' to sys.path
 import lightning.pytorch as pl 
 import torch
+import torch.multiprocessing as mp
 
 from torch.utils.data import DataLoader, random_split
 from torch.nn.utils.rnn import pad_sequence
@@ -18,7 +19,7 @@ from lightning.pytorch.loggers import WandbLogger
 from models.diffusion.diffuser import DownsampleObsLDM
 
 
-from lightning.pytorch.callbacks import DeviceStatsMonitor, EarlyStopping, ModelCheckpoint
+from lightning.pytorch.callbacks import DeviceStatsMonitor, EarlyStopping, ModelCheckpoint, RichProgressBar
 # TODO: Use multiprocessing/threading to speed up function execution 
 def collate_fn(data: List[Dict]) -> Dict:
     batch = dict() 
@@ -42,10 +43,13 @@ def get_dataloader(dataset, dataloader_kwargs):
     return train_loader, val_loader
 
 def main(): 
-    print('Hello')
+    # Ensure compatibility and safety by setting the multiprocessing start method to "spawn"
+    mp.set_start_method("spawn", force=True)
+    # Release all unocuppied cached memory currently held by caching allocator
+    torch.cuda.empty_cache()
     # TODO: Move path to config file 
     # ae_ckpt_path = '/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/logs/lightning_logs/version_24/checkpoints/epoch=131-step=82236.ckpt'
-    ae_ckpt_path = '/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/logs/pretrain_vae/2/checkpoints/best_vae.ckpt'
+    ae_ckpt_path = '/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/logs/pretrain_vae/1/checkpoints/best_vae-v1.ckpt'
     # ae_ckpt_path = '/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/logs/pretrain_vae/17ucv23k/checkpoints/last.ckpt'
     # path = '/home/ubuntu/ehrensberger/RoLD/RoLD/configs/downsample_obs_ldm.yaml'
     path = '/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/configs/train_diffusion.yaml'
@@ -109,7 +113,6 @@ def main():
         task=task,
         view='robot0_eye_in_hand_image',
         horizon=16, 
-        overlap=False
         )
     train_loader, val_loader = get_dataloader(dataset, dataloader_kwargs)
 
@@ -118,36 +121,47 @@ def main():
     model: pl.LightningModule = DownsampleObsLDM(ae_ckpt_path=ae_ckpt_path, model_kwargs=model_kwargs,  
                                                  training_kwargs=training_kwargs, noise_scheduler_kwargs=noise_scheduler_kwargs, 
                                                  mode=mode)
-
-    wandb_logger = WandbLogger(
-        project='pretrain_diffusion',
-        save_dir='/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/logs',
-        log_model="all")
-
     
-    device_stats_monitor = DeviceStatsMonitor()
+    # Log diffusion training statistics and save best model checkpoint
+    wandb_logger = WandbLogger(
+        name='pretrain_diffusion_views',
+        save_dir='/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/logs',
+        version='best_epoch', 
+        project='pretrain_diffusion',
+        log_model="all"
+        )
 
-    # Intialize the early stopping callback to monitor the training loss and stop training if it doesn't improve for a certain number of epochs
+    # Monitor and log device statistics (e.g., CPU and GPU usage) during training
+    device_stats_monitor = DeviceStatsMonitor(
+        cpu_stats=True
+    )
+
+    # Monitor the total denoise loss of the diffusion model and stop training when it stops improving 
     early_stopping = EarlyStopping(
-        monitor='train/denoise_loss', 
+        monitor='val/denoise_loss', 
+        min_delta=1e-4, 
         patience=10, 
         verbose=True, 
         mode='min', 
+        check_on_train_epoch_end=False # check runs at the end of the validation
         )
     
-    checkpoint_callback = ModelCheckpoint(
+    # Save the model periodically by monitoring the total validation loss of the VAE 
+    model_checkpoint = ModelCheckpoint(
+        # filename='{epoch:02d}_{val_loss:.2f}')  
+        filename='best_diffusion',
         monitor='train/denoise_loss', 
-        mode='min', 
+        verbose=True, 
+        # save_last=True, 
         save_top_k=1, 
-        save_last=True, 
-        dirpath='checkpoint/', 
-        filename='{epoch:02d}_{val_loss:.2f}')          
+        mode='min', 
+        every_n_epochs=5, 
+    )        
 
-    epoch_length = len(train_loader)
     trainer = pl.Trainer(
         default_root_dir='/logs',
         logger=wandb_logger, 
-        callbacks=[device_stats_monitor, early_stopping, checkpoint_callback], 
+        callbacks=[device_stats_monitor, early_stopping, model_checkpoint, RichProgressBar()], 
         profiler='simple',
         **trainer_kwargs
         )
