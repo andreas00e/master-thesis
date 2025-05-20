@@ -1,31 +1,25 @@
 import os
 import argparse
-
+from pathlib import Path
 from omegaconf import OmegaConf
-from typing import Dict, List
-from lightning.pytorch.callbacks import DeviceStatsMonitor
+from termcolor import colored
 
 import torch
-from torch.utils.data import DataLoader, random_split
-from torch.nn.utils.rnn import pad_sequence 
 import torch.multiprocessing as mp
+from torch.utils.data import DataLoader, random_split
+# from torch.nn.utils.rnn import pad_sequence 
 
 import lightning.pytorch as pl 
 from lightning.pytorch.trainer import Trainer
-from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
+from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.callbacks import DeviceStatsMonitor, EarlyStopping, ModelCheckpoint, RichProgressBar
+from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBarTheme
 
+from data.mimicgen.data_mimicgen import MimicgenDataset
+# from data.robonet_dataset import RoboNetCustomizedDataset
 from models.autoencoder.autoencoder import DownsampleCVAE
 
-from data.robonet_dataset import RoboNetCustomizedDataset
-from data.mimicgen.data_mimicgen import MimicgenDataset
-
-from lightning.pytorch.callbacks import DeviceStatsMonitor, EarlyStopping, ModelCheckpoint
-
-from pathlib import Path
-
-
 # Suppress all unwanted tensorflow INFO, WARNING, and ERRORS messages
-import tensorflow as tf 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_LAUNCH_BLOCKING']= '1'
 os.environ['TORCH_USE_CUDA_DSA'] = '1'
@@ -50,31 +44,21 @@ def preprocess_config(config, args):
     device_count = torch.cuda.device_count() # Only one device available here
     if len(config.trainer.devices) > device_count:
         config.trainer.devices = list(range(device_count))
-        print(f'Using {device_count} devices')
+        if device_count == 1: 
+            print(colored(f'Using 1 device', 'green'))
+        else: 
+            print(colored(f'Using {device_count} devices', 'green'))      
 
     return config
 
 def get_parser_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_path', type=Path, default='thesis/configs/train_vae.yaml', help='Path to config yaml storing parameters for training')
+    parser.add_argument('--data_dir', type=Path, default='~/ehrensberger/mimicgen/datasets/core', help='Path to dataset containing actions, images, etc.')
     parser.add_argument('--devices', type=str, default='0', help='Number/Name(s) of GPU(s) available for tria')
     parser.add_argument('--horizon', type=int, default=16, help='Number of actions steps predicited by the VAE')
 
     return parser.parse_args()
-
-# # Construction of batches due to different number of joints (different lengths of e.g., joint position and joint velocity)
-# def collate_fn(data: List[Dict]) -> Dict:
-#     batch = dict() 
-
-#     for key, value in data[0].items():
-#         sample = [d[key] if isinstance(value, str) else torch.tensor(d[key]) for d in data]
-#         if isinstance(value, str): 
-#             batch.update({key: sample.copy()})
-#         else: 
-#             batch.update({key: pad_sequence(sample.copy(), batch_first=True)}) 
-#         sample.clear()
-
-#     return batch
 
 
 def main(): 
@@ -90,22 +74,16 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pl.seed_everything(raw_config.seed)
-     
-    # Get rid of path here
-    path = '~/ehrensberger/mimicgen/datasets/core'
-    path = os.path.expanduser(path)
-    task = ['stack_d0.hdf5', 'stack_d1.hdf5']
+    data_dir = os.path.expanduser(args.data_dir)
     
     dataset = MimicgenDataset(
-        load_dir=path,
+        load_dir=data_dir,
         robot='', 
-        task=task,
-        view='robot0_eye_in_hand_image',
+        task=['stack_d0.hdf5', 'stack_d1.hdf5'],
+        view='robot0_eye_in_hand_image', # No longer necessary as all views are included 
         horizon=16, 
-        overlap=False
+        transform=True  
         )
-    
-    d = len(dataset)
     
     train_loader, val_loader = get_train_val_loader(dataset=dataset, dataloader_kwargs=config.dataloader)
 
@@ -119,14 +97,15 @@ def main():
         )
     
     model.to(device)
-
+    
+    # Log variational autoencoder training statistics and save best model checkpoint
     wandb_logger = WandbLogger(
-        name='pretrain_vae', 
+        name='pretrain_vae_views', 
         save_dir='/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/logs', 
-        version='kl_annealing',
+        version='1',
         project='pretrain_vae',
         log_model='all'
-    )
+        )
 
     # Monitor and log device statistics (e.g., CPU and GPU usage) during training
     device_stats_monitor = DeviceStatsMonitor(
@@ -145,15 +124,29 @@ def main():
    
     # Save the model periodically by monitoring the total validation loss of the VAE 
     model_checkpoint = ModelCheckpoint(
-        # dirpath='thesis/checkpoints', 
         filename='best_vae', 
         monitor='val/ae_total_loss', 
         verbose=True,
-        save_last=True,
+        # save_last=True,
         save_top_k=1, 
         mode='min',
         every_n_epochs=5,       
         )
+    
+    richProgressBar = RichProgressBar(
+        theme=RichProgressBarTheme(
+            description="green_yellow",
+            progress_bar="green1",
+            progress_bar_finished="green1",
+            progress_bar_pulse="#6206E0",
+            batch_progress="green_yellow",
+            time="grey82",
+            processing_speed="grey82",
+            metrics="grey82",
+            metrics_text_delimiter="\n",
+            metrics_format=".3e",
+            )
+        )  
 
     trainer = Trainer(
         default_root_dir='logs/', 

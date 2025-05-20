@@ -8,3 +8,8 @@ thesis/data/charts/
 thesis/data/images/
 thesis/data/mimicgen/data
 thesis/models/autoencoder/__pycache__/autoencoder.cpython-38.pyc
+.vscode/
+thesis/__pycache__
+thesis/data/__pycache__
+thesis/data/mimicgen/__pycache__
+thesis/logs
