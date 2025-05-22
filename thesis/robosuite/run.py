@@ -18,7 +18,7 @@ from models.diffusion.diffuser import DownsampleObsLDM
 controller_config = load_controller_config(default_controller="OSC_POSE")
 
 # camera='agentview'
-camera = 'agentview'
+camera = 'robot0_eye_in_hand'
 time=str(datetime.datetime.now())
 env_name='Stack'
 
@@ -70,7 +70,7 @@ def main():
     
     task_instruction = "Set the blue cube above the green cube."
     
-    for i in tqdm(range(250), colour='green'):
+    for i in tqdm(range(10), colour='green'):
 
         with torch.no_grad(): 
             agentview_image = transform(obs['agentview_image'])

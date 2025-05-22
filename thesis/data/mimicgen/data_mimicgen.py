@@ -1,10 +1,12 @@
 import os 
 import glob 
 import h5py
+import tqdm 
 import random
 import numpy as np 
-from typing import List, Union 
+from typing import List, Optional, Union 
 from pathlib import Path
+from matplotlib import pyplot as plt 
 
 import torch
 from torch.utils.data import Dataset
@@ -14,7 +16,7 @@ from thesis.data.mimicgen.instructions import stack_instructions
 
 
 class MimicgenDataset(Dataset):
-    def __init__(self, load_dir: Path, robot: Union[List, str], task: Union[List, str], view: str, horizon: int, transform: bool=True):
+    def __init__(self, load_dir: Path, robot: Union[List, str], task: Union[List, str], horizon: int, view: Optional[str]=None, transform: Optional[bool]=True):
         super().__init__()
         self.load_dir = load_dir
         self.robot = robot 
@@ -22,17 +24,23 @@ class MimicgenDataset(Dataset):
         self.view = view 
         self.horizon = horizon 
         
+        self.demo_count = dict()
         self.files, self.traj_map = [], []
-        self.instructions = stack_instructions
+        self.instructions = stack_instructions 
         
-        # Think about 
-        self.transform = v2.Compose([ 
-            v2.ToImage(), # Convert to (C, H, W), dtype uint8
-            v2.ToDtype(torch.float32, scale=True), # Convert to float32 and divide by 255
-            v2.Resize((64, 64)), # Resize
-            v2.Normalize(mean=[0.485, 0.456, 0.406], # Normalize with standard ImageNet normalization parameters
-                        std=[0.229, 0.224, 0.225]), 
-            ])  
+        # Most of transformations are handled in the r3m forward() function 
+        # See at: https://github.com/facebookresearch/r3m/blob/main/r3m/models/models_r3m.py
+        if transform: 
+            self.transform = v2.Compose([ 
+                v2.ToImage(), # Convert to (C, H, W), dtype uint
+                v2.ToDtype(torch.float32), 
+                # v2.ToDtype(torch.float32, scale=False), # Convert to float32 and divide by 255
+                # v2.Resize((64, 64)), # Resize
+                # v2.Normalize(mean=[0.485, 0.456, 0.406], # Normalize with standard ImageNet normalization parameters
+                #             std=[0.229, 0.224, 0.225]), 
+                ])
+        else:
+            self.transform = None 
          
         # Check if one robot/task (str) or multiple robots/tasks (List[str]) have been passed
         # One robot, one task  
@@ -56,48 +64,64 @@ class MimicgenDataset(Dataset):
             raise TypeError("\"robot\" has to be either a str or a list.")
         
         for file in self.files: 
-            # Open current hdf5 file
-            with h5py.File(file, 'r') as hf:
-                data = hf['data']
-                # Open current demo
-                for demo in data.keys(): 
+            with h5py.File(file, 'r') as hf: # Open current hdf5 file
+                data = hf['data'] # Open current demo (Usually 1000 per hdf5 file)
+                keys = data.keys()
+                self.demo_count[file] = len(keys)
+                for demo in keys: 
                     actions = data[demo]['actions'][()]
                     # Create trajectory map for every time step of current demo to enable later indexed data loading 
-                    self.traj_map.extend((file, demo, i) for i in range(actions.shape[0]))
+                    self.traj_map.extend((file, demo, index) for index in range(actions.shape[0]))
                 
     def __len__(self): 
         return len(self.traj_map)          
 
-    def __getitem__(self, index):
-        input = self.traj_map[index] # (file, demo, index)
+    def __getitem__(self, idx):
+        input = self.traj_map[idx] # (file, demo, index)
         return self.load_trajectory(*input) 
     
     # Actions are already normalized accorind to: TODO: Add link to mimicgen page
     def load_trajectory(self, file, demo, index): 
-        with h5py.File(file, 'r') as hf: 
-            actions = hf['data'][demo]['actions'][()] # EEF ACTION
+        with h5py.File(file, 'r') as hf:
+            data = hf['data'][demo]
+            actions = data['actions'][()] # EEF ACTION 
+            # print(f"demo: {demo}, index: {index}, shape: {actions.shape[0]}")
             # Check if the current index + horizon is within the bounds of the actions array
-            if index+self.horizon < actions.shape[0]: 
+            if index+self.horizon <= actions.shape[0]: # (actions.shape=(episode length, action_dim)) # Go to the bound due to slicing 
                 # If within bounds, slice the actions array to get a trajectory of length 'horizon'
                 actions = actions[index:index+self.horizon, :] 
+                
             else: 
-                # If out of bounds, calculate the overhead (number of missing steps)
-                overhead = np.abs(actions.shape[0]-(index+self.horizon))
-                # Create a zero-padded array to fill the missing steps
-                padding = np.zeros((overhead, actions.shape[1]))
-                actions = np.vstack((actions[index:, :], padding))
+                overhead = (index+self.horizon)-actions.shape[0] # If out of bounds, calculate the overhead (number of missing steps)
+                padding = np.zeros((overhead, actions.shape[1])) # Create a zero-padded array to fill the missing steps
+                actions = np.vstack((actions[index:, :], padding)) # Combine actions and zero padding 
+                
+            actions = torch.from_numpy(actions).float()
+                        
+            obs =  data['obs'] # TASK OBSERVATIONS
+            images = {view: obs[view][()][index] for view in obs.keys() if 'image' in view} # Include all available camera views ('agentview_image', robot0_eye_in_hand_image)
+
+            # rotate robot0_eye_in_hand_image 180 degrees to allgin dataset with robosuite renderer representation
+            # images['robot0_eye_in_hand_image'] = np.rot90(images['robot0_eye_in_hand_image'], k=2) 
             
-            obs = hf['data'][demo]['obs']
-            # Include all available camera views ('agentview_image', robot0_eye_in_hand_image)
-            images = [obs[view][()][index] for view in obs.keys() if 'image' in view] # TASK OBSERVATION
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            # ROTATE BOTH IMAGES IN thesis/run.py
+            # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             
+            if self.transform is not None: 
+                images = [self.transform(image.copy()) for image in images.values()]
+                               
+            images = torch.cat(tensors=images) # concatenated torch tensors (#immages*C, 64, 64)
+             
             # Find random integer to access one of the stored language instructions at random 
-            rand_int = random.randint(a=0, b=len(self.instructions)-1) # LANGUAGE INSTRUCTION 
+            # rand_int = random.randint(a=0, b=len(self.instructions)-1) 
+            i_idx = int(demo.split('_')[-1]) % len(self.instructions)
+            instructions = self.instructions[i_idx] # LANGUAGE INSTRUCTION 
 
         return {
-            'actions': torch.from_numpy(actions).float(),            
-            'image': torch.cat([self.transform(image) for image in images]), # concatenated torch tensors (#immages*C, 64, 64)
-            'text': self.instructions[rand_int]
+            'actions': actions, # EEF ACTIONS       
+            'image': images, # TASK OBSERVATIONS
+            'text': instructions # LANGUAGE INSTRUCTION 
         }
     
         
@@ -107,22 +131,29 @@ def main():
     load_dir = os.path.expanduser(load_dir)
     robot = '' # no robot specified for mimicgen core dataset
     task = ['stack_d0.hdf5', 'stack_d1.hdf5'] 
-    view = 'robot0_eye_in_hand_image'
+    # view = 'robot0_eye_in_hand_image' # Not neccessary as long as we include all (two) views
     horizon = 16
 
     args['load_dir'] = load_dir
     args['robot'] = robot
     args['task'] = task
-    args['view'] = view
+    # args['view'] = view
     args['horizon'] = horizon
     args['transform'] = True
 
     dataset = MimicgenDataset(**args)
-    print(len(dataset))
+    print(dataset.traj_map[1000:1010])
+    exit()
     
-    image = next(iter(dataset))['image']
-    print(image.shape)
-    
+    for i, _ in tqdm.tqdm(enumerate(dataset)): 
+        item = dataset.__getitem__(i)
 
+    # image = next(iter(dataset))['image']
+    # print(torch.max(image))
+    # print(torch.min(image))
+    # plt.imsave(fname='agentview.png', arr=torch.permute(image[:3, ...] / 255, dims=(1, 2, 0)).numpy())
+    # plt.imsave(fname='robot0_eye_in_hand.png', arr=torch.permute(image[3:, ...] / 255, dims=(1, 2, 0)).numpy())
+    
+    
 if __name__ == '__main__': 
     main() 

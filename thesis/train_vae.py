@@ -151,7 +151,7 @@ def main():
     trainer = Trainer(
         default_root_dir='logs/', 
         logger=wandb_logger, 
-        callbacks=[device_stats_monitor, early_stopping, model_checkpoint], 
+        callbacks=[device_stats_monitor, early_stopping, model_checkpoint, richProgressBar], 
         max_epochs=400, 
         profiler='simple'
         )
