@@ -111,14 +111,6 @@ class MimicgenDataset(Dataset):
             for rgb_view, d_view in zip(self.rgb_views, self.d_views): # Iterate over all available zipped rgb and depth views (mimicgen core dataset: 'agentview', 'robot0_eye_in_hand')
                 rgb_images = obs[rgb_view][()] # Current rgb view observations (episode_length, H, W, C=3)
                 d_images = obs[d_view][()] # Current depth view observations (episode_length, H, W, C=1)
-                
-                # Depth map normalization to [0, 1]
-                if d_view == 'robot0_eye_in_hand_depth': 
-                    min = 0.04186 # Values were found by iterating over the dataset and including values that include ~90% of the distribution
-                    max = 2.5    
-                elif d_view == 'agentview_depth': 
-                    min = 0.3
-                    max = 3.2
                     
                 frames = np.concatenate([rgb_images, d_images],  axis=-1) # Concatenate images along channel dimension -> (episode_length, H, W, C=4)
                 
@@ -143,6 +135,10 @@ class MimicgenDataset(Dataset):
                         frame_padding = np.repeat(a=np.expand_dims(frames[index, ...], axis=0), repeats=image_overhead, axis=0) # (image_overhead, H, W, C)
                         new_frames = frames[:index, ...] # (index, H, W, C)
                         frames = np.vstack((frame_padding, new_frames)) # -> (self.image_horizon, H, W, C)
+                        
+                # Min and Max depth values over batch         
+                min = np.min(d_images)
+                max = np.max(d_images)
                     
                 frames = np.transpose(a=frames, axes=(0, 3, 1, 2)) # (horizon/self.image_horizon, H, W, C=6) -> (horizon/self.image_horizon, C=6, H, W)
                 frames[:, 3, ...] = (frames[:, 3, ...]-min)/(max-min) # Normaize depth map to ~[0, 1]
