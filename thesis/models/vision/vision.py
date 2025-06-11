@@ -1,9 +1,12 @@
 import torch 
 import torch.nn as nn
+import torch.nn.init as init
+
+import r3m 
+
 import wandb 
 from termcolor import colored
 
-import r3m 
 
 class FFCombiner(nn.Module): 
     def __init__(self, hidden_size, out_size):
@@ -68,3 +71,50 @@ class VisionEncoder(nn.Module):
 
         return ffcombiner(obs_emb)
         
+
+class VisionCombiner(nn.Module): 
+    def __init__(self, hidden_size, out_size, resnet_version: str='resnet18', device: str='cuda'):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.out_size = out_size
+        self.resnet_version = resnet_version
+        self.device = device 
+        
+        self.img_emb = r3m.load_r3m(self.resnet_version)
+        
+        self.rgb_down = nn.Linear(self.hidden_size, self.out_size)
+        self.depth_down = nn.Linear(self.hidden_size, self.out_size)
+    
+    def forward(self, input):
+        view_embs = []
+        for key in input.keys(): # input: (B, horizon, C=4 or C=6, H, W)
+            batch_size, image_horizon = input[key].shape[0], input[key].shape[1]
+            
+            rgb_images = input[key][:, :, :3, ...].view(batch_size*image_horizon, 3, *input[key].shape[3:]) # (B*horizon, C=3, H, W)
+            rgb_emb = self.img_emb(rgb_images) # (B*horizon, hidden_size)
+            rgb_emb = self.rgb_down(rgb_emb) # (B*horizon, out_size)
+            rgb_emb = rgb_emb.view(batch_size, image_horizon, self.out_size) # (B, horizon, out_size)
+        
+            if input[key].shape[2] == 4: # One channel -> Depth map needs to be expanded along channel dimension
+                depth_images = input[key][:, :, 3, ...].unsqueeze(2).expand(-1, -1, 3, -1, -1) # (B, horizon, C=3, H, W)
+            elif input[key].shape[2] == 6: 
+                depth_images = input[key][:, :, 3:, ...] # (B, horizon, C=3, H, W)
+            else: 
+                raise ValueError("Depth map with unknown channel dimension!")
+            
+            depth_images = depth_images.view(batch_size*image_horizon, 3, *input[key].shape[3:]) # (B*horizon, C=3, H, W)
+            depth_emb = self.img_emb(depth_images) # (B*horizon, hidden_size)
+            depth_emb = self.rgb_down(depth_emb) # (B*horizon, out_size)
+            depth_emb = depth_emb.view(batch_size, image_horizon, self.out_size) # (B, horizon, out_size)
+            
+            view_emb = torch.concatenate(tensors=(rgb_emb, depth_emb), dim=-1) # (B, horizon, 2*out_size=256)
+            view_embs.append(view_emb)
+            
+        embs = torch.concatenate(tensors=view_embs, dim=-1) # (B, image_horizon, 4*out_size=512)
+                
+        return embs
+    
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):   
+           init.kaiming_normal_(module.weight, nonlinearity='relu')
+           nn.init.zeros_(module.bias)
