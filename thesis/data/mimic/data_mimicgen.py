@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
-from data.mimic.instructions import stack_instructions
+from thesis.data.mimic.language_instructions import stack_instructions
 
 def filter_recursion(task: str, i=1):
     task = task.split('_')
@@ -23,7 +23,6 @@ def filter_recursion(task: str, i=1):
         i += 1
         return filter_recursion(task, i)
 
-
 def filter_task(tasks: List[str]): 
     tasks = ['stack_d0_depth.hdf5', 'stack_d1_depth.hdf5']
     reduced_tasks = []
@@ -32,7 +31,6 @@ def filter_task(tasks: List[str]):
     for task in tasks:
         reduced_tasks.append(filter_recursion(task))
     return reduced_tasks
-
 
 class MimicgenDataset(Dataset):
     def __init__(self, load_dir: Path, robot: Union[List[str], str, None], task: Union[List, str], action_horizon: int, image_horizon: Union[int, None], observations: str, expand_depth: str):
@@ -43,8 +41,8 @@ class MimicgenDataset(Dataset):
         self.action_horizon = action_horizon
         self.image_horizon = image_horizon 
         
-        self.observations = observations # 'forward', 'backward', 'both', 'single'
-        self.expand_depth = expand_depth #'grayscale', 'colormap'
+        self.observations = observations # 'forward', 'backward', 'single'
+        self.expand_depth = expand_depth # 'grayscale', 'colormap'
         
         self.demo_count = dict()
         self.files, self.traj_map = [], []
@@ -145,19 +143,16 @@ class MimicgenDataset(Dataset):
                         frame_padding = np.repeat(a=np.expand_dims(frames[index, ...], axis=0), repeats=image_overhead, axis=0) # (image_overhead, H, W, C)
                         new_frames = frames[:index, ...] # (index, H, W, C)
                         frames = np.vstack((frame_padding, new_frames)) # -> (self.image_horizon, H, W, C)
-                
-                elif self.observations == 'both': 
-                    pass # Include both images from past and future time steps 
                     
                 frames = np.transpose(a=frames, axes=(0, 3, 1, 2)) # (horizon/self.image_horizon, H, W, C=6) -> (horizon/self.image_horizon, C=6, H, W)
                 frames[:, 3, ...] = (frames[:, 3, ...]-min)/(max-min) # Normaize depth map to ~[0, 1]
                 frames[:, 3, ...] = np.clip(frames[:, 3, ...], a_min=0.0, a_max=1.0) # Clip outliers
+                frames[:, 3, ...] *= 255.0
                  
                 if self.expand_depth: 
                     new_frames = np.zeros((frames.shape[0], 6, *frames.shape[-2:]))
                     new_frames[:, :3, ...] = frames[:, :3, ...] # copy rgb part 
                     if self.expand_depth == 'colormap': # convert gray scale image to colorized image through colormap 
-                        frames[:, 3, ...] *= 255.0
                         depth_frames = np.stack([cv2.cvtColor(cv2.applyColorMap(frames[i, 3, ...].astype(np.uint8), cv2.COLORMAP_JET), cv2.COLOR_BGR2RGB) for i in range(frames.shape[0])])
                         depth_frames = np.transpose(depth_frames, axes=(0, 3, 1, 2))
                     elif self.expand_depth == 'grayscale': # repeat depth channel three times

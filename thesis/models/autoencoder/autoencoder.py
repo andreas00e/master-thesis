@@ -16,10 +16,8 @@ from RoLD.models.common import SinusoidalPosEmb, get_pe, WrappedTransformerEncod
 
 from thesis.models.autoencoder.common import DiagonalGaussianDistribution, AutoencoderLoss
 
-import wandb
+from models.vision.vision import VisionCombiner
 
-from models.common import Clip, ParametrizedSofmax, JointAttentionEncoder
-from models.vision.vision import VisionEncoder
 
 class DownsampleCVAE(pl.LightningModule):
     def __init__(
@@ -56,19 +54,24 @@ class DownsampleCVAE(pl.LightningModule):
         self.horizon = horizon = model_kwargs['horizon']
 
         self.action_emb = nn.Linear(action_dim, hidden_size)
+        self.lang_down = nn.Linear(hidden_size, int(hidden_size/2))
 
         self.cls = nn.Parameter(data=torch.zeros(size=(1, hidden_size)), requires_grad=True)
         self.z_encoder = WrappedTransformerEncoder(**model_kwargs)
         self.z_down = nn.Linear(hidden_size, latent_size * 2)
 
         self.z_up = nn.Linear(latent_size, hidden_size)
+
+        # self.z_up = nn.Linear(latent_size, int(hidden_size/2))
         self.conditioner = WrappedTransformerEncoder(**model_kwargs)
         self.decoder = WrappedTransformerDecoder(**model_kwargs)
 
         self.action_head = nn.Linear(hidden_size, action_dim)
+        self.encoder_emb = nn.Linear(2*hidden_size, hidden_size)
+        self.decoder_emb = nn.Linear(2*hidden_size, hidden_size)
 
         self.loss = AutoencoderLoss(
-            # **training_kwargs.loss_kwargs
+            **training_kwargs.loss_kwargs
         )
 
         self.register_buffer(
@@ -83,20 +86,26 @@ class DownsampleCVAE(pl.LightningModule):
                 assert mode == 'pretraining'
                 self.low_dim_emb = None
                 
-        # Initiliaze image embedding module 
-        if self.model_kwargs.image_model:
+        if self.model_kwargs.image_model: # Initialization of image embedding module 
             img_emb_type, img_emb_version = self.model_kwargs.image_model.split('.')
             print(colored(f"Using {img_emb_type} with version {img_emb_version} as image encoder", 'green'))
-            self.img_emb = VisionEncoder(hidden_size=self.hidden_size, version=img_emb_version, logger=self.logger, device=self.device, combine='temperature')
+            self.img_emb = VisionCombiner(hidden_size=self.hidden_size, out_size=128, resnet_version=img_emb_version)
         else: 
             raise NotImplementedError(colored('No model for embedding scene images could be found!', 'red'))
         
-        self.img_emb.eval()
+        self.img_emb.eval() # No effect on nn.Linear()
         for module in self.img_emb.modules(): 
-            module.skip_init = True # skip modules during weight initialization 
-        for parameter in self.img_emb.parameters(): 
-            parameter.requires_grad = False # set mode of model to 'train'
-
+            module.skip_init = True # Skip modules during DownsampleCVAE() weight initialization 
+            if not isinstance(module, nn.Linear): 
+                for param in module.parameters(): 
+                    param.requires_grad = False # Set paraemeters of pre-trained model to 'eval'
+            elif isinstance(module, nn.Linear): 
+                self.img_emb._init_weights(module)
+                for param in module.parameters(): 
+                    param.requires_grad = True # Set parameters of nn.Linear() for down projection to 'train'
+        
+        self.with_language = model_kwargs.get('with_language', False)
+        
         # Initiliaze language embedding module 
         if self.model_kwargs.language_model:
             lang_emb_type, lang_emb_version = self.model_kwargs.language_model.split('.')
@@ -141,19 +150,8 @@ class DownsampleCVAE(pl.LightningModule):
             nn.Sequential,
             WrappedTransformerDecoder,
             WrappedTransformerEncoder,
-            JointAttentionEncoder,
             nn.LeakyReLU,
-            nn.ELU, 
-            nn.Tanh, 
-            ParametrizedSofmax,
-            ResBottleneck,
-            AutoencoderLoss,
-            nn.Conv2d, 
-            nn.BatchNorm2d, 
-            nn.ReLU, 
-            nn.MaxPool2d,
-            # BasicBlock, 
-            nn.AdaptiveAvgPool2d,
+            AutoencoderLoss
         )
         if getattr(module, 'skip_init', False): 
             return 
@@ -226,38 +224,14 @@ class DownsampleCVAE(pl.LightningModule):
             return None
     
     def encode(self, batch):
-        action = batch['actions']
-        image  = batch['image']
+        actions = batch['actions'] # (B, action_horizon, action_dim)
+        image_features  = batch['image'] # (B, image_horizon, C, H, W)
         
-        batch_size = action.shape[0]
+        batch_size = actions.shape[0] 
         
-        obs_emb = self.img_emb(image)
-        obs_emb.unsqueeze(1)
-
-        # 2025-03-10: added JoinAttentionEncoder from: TODO: insert paper name here
-        # qpos = batch['qpos'].to(torch.float)
-        # qvel = batch['qvel'].to(torch.float)
-        # state = batch['states'].to(torch.float)
-        # print(action.shape)
-        # print(state.shape) 
-        # action = action.squeeze(-1)
-        # 2025-03-30: Get rid of gripper as there are still some infinte values 
-        # state = state[:, :-1]
-        # action = action.unsqueeze(1).repeat(1, self.horizon, 1)
-        # print(f"shape action {action.shape}")
-
-        # joint_state = torch.cat([qpos, qvel], dim=-1).to(torch.float).to(self.device) # -> Linear network:
-        # fixed-size vector uniquely describing the joint by using characteristic properties 
-        # joint_desc = torch.stack([self.robot_dict['KUKA'] for _ in range(joint_state.shape[1])]).expand((batch_size, -1, -1)).to(torch.float).to(self.device)# -> torch.Size([14, 3]) -> torch.Size([8, 14, 3])
-        # joint_emb = self.joint_encoder(joint_desc, joint_state, state)
-        # print(joint_emb.shape)
-        # exit()
-        # changed on 2025-03-07: no raw_low_dim_data in dataset; incompatible tensor shapes between batch['iamge'] and weight matrix
-        # obs_emb = self.get_obs_emb(raw_image_features=image.view(batch_size, -1, self.hidden_size), raw_low_dim_data=None)        
-        
-        # print(f"pe shape: {self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size)).shape}")
+        obs_emb = self.img_emb(image_features) # (B, image_horizon, hidden_size)
                 
-        pos_action_emb = self.action_emb(action) + self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
+        pos_action_emb = self.action_emb(actions) + self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
         cls = self.cls.expand((batch_size, 1, self.hidden_size))
 
         z_encoder_input = torch.cat([cls, pos_action_emb], dim=1)
@@ -266,20 +240,6 @@ class DownsampleCVAE(pl.LightningModule):
 
         z_encoder_output = self.z_encoder(z_encoder_input)[:, 0:1, :]
         z_encoder_output = self.z_down(z_encoder_output)
-
-
-        mean, logvar = torch.chunk(z_encoder_output, 2, dim=-1)
-        logvar = torch.clamp(logvar, -30.0, 20.0)
-        var = torch.exp(logvar)
-
-        self.logger.experiment.log(
-            {
-                'mean': wandb.Histogram(mean.detach().cpu().numpy()), 
-                'var': wandb.Histogram(var.detach().cpu().numpy()), 
-                'step': self.global_step
-            }
-        )
- 
         
         posterior = DiagonalGaussianDistribution(z_encoder_output)
         return posterior, obs_emb
@@ -310,25 +270,20 @@ class DownsampleCVAE(pl.LightningModule):
     def forward(self, batch, batch_idx, sample_posterior=True, split='train'):
         posterior, obs_emb = self.encode(batch)
         pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior, raw_language_features=batch['text'])
-         
+
         # Cyclic KL-annealing 
         # kl_weight = frange_cycle_cosine(start=0.0, stop=0.001, n_epoch=self.training_kwargs.num_training_steps, n_cycle=8, ratio=0.5)
         # self.log_dict({'kl_weight': kl_weight[self.global_step]}, logger=True)
         
-        kl_weight=10*(1e-2)
+        # kl_weight=10*(1e-2)
         
         total_loss, log_dict = self.loss.recon_kl_loss(
             # inputs=batch['actions'].squeeze(-1).to(torch.float), reconstructions=pred_action, posteriors=posterior, kl_weight=kl_weight[self.global_step], split=split)
-            inputs=batch['actions'].squeeze(-1).to(torch.float), reconstructions=pred_action, posteriors=posterior, kl_weight=kl_weight, split=split)
+            inputs=batch['actions'].squeeze(-1).to(torch.float), reconstructions=pred_action, posteriors=posterior, split=split)
         return total_loss, log_dict
     
     def training_step(self, batch, batch_idx):
         self.last_training_batch = batch
-        
-        if self.current_epoch%10== 0: 
-            for i in range(batch['image'].shape[1]/3):
-                image = batch['image'][0, :3*(i+1), ...]
-                self.log({f'image_{i}': wandb.Image(image, caption=f'Current view {i}')})
         
         total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='train')
         self.log_dict(log_dict, prog_bar=True, sync_dist=True)
@@ -338,20 +293,3 @@ class DownsampleCVAE(pl.LightningModule):
         total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='val')
         self.log_dict(log_dict, prog_bar=True, sync_dist=True)
         return total_loss
-    
-    # def test_step(self, batch, batch_idx):
-    #     total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='test')
-    #     self.log_dict(log_dict, prog_bar=True, sync_dist=True)
-    #     return total_loss
-    
-    # def predict_step(self, batch, batch_idx, sample_posterior=True):
-    #     # list 
-    #     robots = batch['robot']
-    #     # TODO: Implement true prediction step (used for infering actions, not visualizing the laten space) 
-    #     _, _, z_encoder_output = self.encode(batch)
-    #     # latent vector (mean of distribution)
-    #     mean, _ = torch.chunk(z_encoder_output, chunks=2, dim=-1)
-    #     mean = mean[:, 0, :].squeeze(1).cpu().numpy() 
-    #     result = list(zip(robots, mean))
-    #     return result 
-

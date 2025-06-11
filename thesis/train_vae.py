@@ -15,8 +15,7 @@ from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import DeviceStatsMonitor, EarlyStopping, ModelCheckpoint, RichProgressBar
 from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBarTheme
 
-from data.mimicgen.data_mimicgen import MimicgenDataset
-# from data.robonet_dataset import RoboNetCustomizedDataset
+from data.mimic.data_mimicgen import MimicgenDataset
 from models.autoencoder.autoencoder import DownsampleCVAE
 
 # Suppress all unwanted tensorflow INFO, WARNING, and ERRORS messages
@@ -26,7 +25,7 @@ os.environ['TORCH_USE_CUDA_DSA'] = '1'
 
 
 def get_train_val_loader(dataset, dataloader_kwargs):
-    train_ds, val_ds = random_split(dataset, lengths=dataloader_kwargs.lengths)
+    train_ds, val_ds, _ = random_split(dataset, lengths=dataloader_kwargs.lengths)
 
     del dataloader_kwargs['lengths']
     train_loader = DataLoader(dataset=train_ds, **dataloader_kwargs, shuffle=True)
@@ -78,11 +77,12 @@ def main():
     
     dataset = MimicgenDataset(
         load_dir=data_dir,
-        robot='', 
-        task=['stack_d0.hdf5', 'stack_d1.hdf5'],
-        view='robot0_eye_in_hand_image', # No longer necessary as all views are included 
-        horizon=16, 
-        transform=True  
+        task=['stack_d0_depth.hdf5', 'stack_d1_depth.hdf5'],
+        robot=None, 
+        action_horizon=16, # Number of actions to be predicted
+        image_horizon=10, # Number of past images given to network as input, only necessary if obseravtions='backwards' or 'both'
+        observations='single' , 
+        expand_depth='colormap'
         )
     
     train_loader, val_loader = get_train_val_loader(dataset=dataset, dataloader_kwargs=config.dataloader)
@@ -100,10 +100,10 @@ def main():
     
     # Log variational autoencoder training statistics and save best model checkpoint
     wandb_logger = WandbLogger(
-        name='pretrain_vae_views', 
+        name='test', 
         save_dir='/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/logs', 
         version='1',
-        project='pretrain_vae',
+        project='test',
         log_model='all'
         )
 
