@@ -15,8 +15,13 @@ class AutoencoderLoss(torch.nn.Module):
     ):
         rec_loss = torch.nn.functional.mse_loss(inputs, reconstructions)
         
-        kl_loss = posteriors.kl()
-        kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
+        # kl_loss = posteriors.kl()
+        # kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
+        
+        kl_loss = posteriors.kl(other='FreeBits', lambda_=0.5)
+        print(f"Shape of kl_loss: {kl_loss.shape}")
+        kl_loss = kl_loss.mean()
+        print(f"Shape of mean of kl_loss: {kl_loss.shape}")
 
         loss = rec_loss + self.kl_weight * kl_loss
 
@@ -37,19 +42,26 @@ class DiagonalGaussianDistribution(object):
         self.var = torch.exp(self.logvar)
         if self.deterministic:
             self.var = self.std = torch.zeros_like(self.mean).to(device=self.parameters.device)
+            
+        self.beta = 0.5
 
     def sample(self):
         x = self.mean + self.std * torch.randn(self.mean.shape).to(device=self.parameters.device)
         return x
 
-    def kl(self, other=None):
+    def kl(self, other=None, lambda_=0):
         if self.deterministic:
             return torch.Tensor([0.])
         else:
-            if other is None:
-                return 0.5 * torch.sum(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=[1,2])
+            if other == None:
+                return self.beta * torch.sum(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=[1,2])
+            elif other == 'FreeBits': 
+                kl_dim = torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar  # (B, 1, latent_dim)
+                print(f"Shape of element wise kl terms: {kl_dim}")
+                kl = torch.clamp_min(kl_dim, lambda_)
+                return self.beta * kl.sum(dim=[1, 2]) # (B)    
             else:
-                return 0.5 * torch.sum(
+                return self.beta * torch.sum(
                     torch.pow(self.mean - other.mean, 2) / other.var
                     + self.var / other.var - 1.0 - self.logvar + other.logvar,
                     dim=[1, 2, 3])
@@ -64,6 +76,11 @@ class DiagonalGaussianDistribution(object):
 
     def mode(self):
         return self.mean
+
+def adopt_weight(weight, global_step, threshold=0, value=0.):
+    if global_step < threshold:
+        weight = value
+    return weight
     
 def frange_cycle_cosine(start, stop, n_epoch, n_cycle=4, ratio=0.5):
     L = np.ones(n_epoch)
