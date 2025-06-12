@@ -19,9 +19,7 @@ class AutoencoderLoss(torch.nn.Module):
         # kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
         
         kl_loss = posteriors.kl(other='FreeBits', lambda_=0.5)
-        print(f"Shape of kl_loss: {kl_loss.shape}")
         kl_loss = kl_loss.mean()
-        print(f"Shape of mean of kl_loss: {kl_loss.shape}")
 
         loss = rec_loss + self.kl_weight * kl_loss
 
@@ -42,7 +40,6 @@ class DiagonalGaussianDistribution(object):
         self.var = torch.exp(self.logvar)
         if self.deterministic:
             self.var = self.std = torch.zeros_like(self.mean).to(device=self.parameters.device)
-            
         self.beta = 0.5
 
     def sample(self):
@@ -57,7 +54,6 @@ class DiagonalGaussianDistribution(object):
                 return self.beta * torch.sum(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=[1,2])
             elif other == 'FreeBits': 
                 kl_dim = torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar  # (B, 1, latent_dim)
-                print(f"Shape of element wise kl terms: {kl_dim}")
                 kl = torch.clamp_min(kl_dim, lambda_)
                 return self.beta * kl.sum(dim=[1, 2]) # (B)    
             else:

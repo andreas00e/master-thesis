@@ -25,7 +25,7 @@ class DownsampleCVAE(pl.LightningModule):
         model_kwargs,
         # joint_encoder_kwargs, 
         training_kwargs,
-        mode,  # pretraining, finetuning, inference
+        mode, # pretraining, finetuning, inference
         all_config=None
     ):
         super().__init__()
@@ -54,7 +54,7 @@ class DownsampleCVAE(pl.LightningModule):
         self.horizon = horizon = model_kwargs['horizon']
 
         self.action_emb = nn.Linear(action_dim, hidden_size)
-        self.lang_down = nn.Linear(hidden_size, int(hidden_size/2))
+        # self.lang_down = nn.Linear(hidden_size, int(hidden_size/2))
 
         self.cls = nn.Parameter(data=torch.zeros(size=(1, hidden_size)), requires_grad=True)
         self.z_encoder = WrappedTransformerEncoder(**model_kwargs)
@@ -67,8 +67,8 @@ class DownsampleCVAE(pl.LightningModule):
         self.decoder = WrappedTransformerDecoder(**model_kwargs)
 
         self.action_head = nn.Linear(hidden_size, action_dim)
-        self.encoder_emb = nn.Linear(2*hidden_size, hidden_size)
-        self.decoder_emb = nn.Linear(2*hidden_size, hidden_size)
+        # self.encoder_emb = nn.Linear(2*hidden_size, hidden_size)
+        # self.decoder_emb = nn.Linear(2*hidden_size, hidden_size)
 
         self.loss = AutoencoderLoss(
             **training_kwargs.loss_kwargs
@@ -239,7 +239,7 @@ class DownsampleCVAE(pl.LightningModule):
             z_encoder_input = torch.cat([z_encoder_input, obs_emb], dim=1)
 
         z_encoder_output = self.z_encoder(z_encoder_input)[:, 0:1, :]
-        z_encoder_output = self.z_down(z_encoder_output)
+        z_encoder_output = self.z_down(z_encoder_output) # (B, 1, latent_size * 2)
         
         posterior = DiagonalGaussianDistribution(z_encoder_output)
         return posterior, obs_emb
@@ -270,16 +270,11 @@ class DownsampleCVAE(pl.LightningModule):
     def forward(self, batch, batch_idx, sample_posterior=True, split='train'):
         posterior, obs_emb = self.encode(batch)
         pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior, raw_language_features=batch['text'])
-
-        # Cyclic KL-annealing 
-        # kl_weight = frange_cycle_cosine(start=0.0, stop=0.001, n_epoch=self.training_kwargs.num_training_steps, n_cycle=8, ratio=0.5)
-        # self.log_dict({'kl_weight': kl_weight[self.global_step]}, logger=True)
-        
-        # kl_weight=10*(1e-2)
         
         total_loss, log_dict = self.loss.recon_kl_loss(
             # inputs=batch['actions'].squeeze(-1).to(torch.float), reconstructions=pred_action, posteriors=posterior, kl_weight=kl_weight[self.global_step], split=split)
-            inputs=batch['actions'].squeeze(-1).to(torch.float), reconstructions=pred_action, posteriors=posterior, split=split)
+            inputs=batch['actions'], reconstructions=pred_action, posteriors=posterior, split=split)
+        
         return total_loss, log_dict
     
     def training_step(self, batch, batch_idx):
@@ -293,3 +288,4 @@ class DownsampleCVAE(pl.LightningModule):
         total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='val')
         self.log_dict(log_dict, prog_bar=True, sync_dist=True)
         return total_loss
+    
