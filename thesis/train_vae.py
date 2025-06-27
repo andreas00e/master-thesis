@@ -7,10 +7,8 @@ from termcolor import colored
 import torch
 import torch.multiprocessing as mp
 from torch.utils.data import DataLoader, random_split
-# from torch.nn.utils.rnn import pad_sequence 
 
 import lightning.pytorch as pl 
-from lightning.pytorch.trainer import Trainer
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import DeviceStatsMonitor, EarlyStopping, ModelCheckpoint, RichProgressBar
 from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBarTheme
@@ -25,11 +23,10 @@ os.environ['TORCH_USE_CUDA_DSA'] = '1'
 
 
 def get_train_val_loader(dataset, dataloader_kwargs):
-    train_ds, val_ds, _ = random_split(dataset, lengths=dataloader_kwargs.lengths)
-
+    train_set, val_set, _ = random_split(dataset, lengths=dataloader_kwargs.lengths)
     del dataloader_kwargs['lengths']
-    train_loader = DataLoader(dataset=train_ds, **dataloader_kwargs, shuffle=True)
-    val_loader = DataLoader(dataset=val_ds, **dataloader_kwargs, shuffle=False)
+    train_loader = DataLoader(dataset=train_set, **dataloader_kwargs, shuffle=True)
+    val_loader = DataLoader(dataset=val_set, **dataloader_kwargs, shuffle=False)
 
     return train_loader, val_loader
 
@@ -61,10 +58,8 @@ def get_parser_args():
 
 
 def main(): 
-    # Ensure compatibility and safety by setting the multiprocessing start method to "spawn"
-    mp.set_start_method("spawn", force=True)
-    # Release all unocuppied cached memory currently held by caching allocator
-    torch.cuda.empty_cache()
+    mp.set_start_method("spawn", force=True) # Ensure compatibility and safety by setting the multiprocessing start method to "spawn"
+    torch.cuda.empty_cache() # Release all unocuppied cached memory currently held by caching allocator
 
     args = get_parser_args()
     raw_config = OmegaConf.load(args.config_path)
@@ -81,7 +76,7 @@ def main():
         robot=None, 
         action_horizon=16, # Number of actions to be predicted
         image_horizon=10, # Number of past images given to network as input, only necessary if obseravtions='backwards' or 'both'
-        observations='single' , 
+        observations='forward', 
         expand_depth='colormap'
         )
     
@@ -100,10 +95,10 @@ def main():
     
     # Log variational autoencoder training statistics and save best model checkpoint
     wandb_logger = WandbLogger(
-        name='test', 
-        save_dir='/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/logs', 
-        version='1',
-        project='test',
+        name='train vae', 
+        save_dir='/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/logs/', 
+        version='free_bits_annealing',
+        project= 'test', # 'forward_10_depth_views', # 'single_depth_views'
         log_model='all'
         )
 
@@ -127,7 +122,6 @@ def main():
         filename='best_vae', 
         monitor='val/ae_total_loss', 
         verbose=True,
-        # save_last=True,
         save_top_k=1, 
         mode='min',
         every_n_epochs=5,       
@@ -148,7 +142,7 @@ def main():
             )
         )  
 
-    trainer = Trainer(
+    trainer = pl.Trainer(
         default_root_dir='logs/', 
         logger=wandb_logger, 
         callbacks=[device_stats_monitor, early_stopping, model_checkpoint, richProgressBar], 
@@ -161,7 +155,7 @@ def main():
         train_dataloaders=train_loader, 
         val_dataloaders=val_loader
         )
-
+    
 
 if __name__ == '__main__':
     main() 

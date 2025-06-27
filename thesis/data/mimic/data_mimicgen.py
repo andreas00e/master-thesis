@@ -174,6 +174,6 @@ class MimicgenDataset(Dataset):
         return {
             'actions': actions, # EEF ACTIONS       
             'image': images, # TASK OBSERVATIONS (dict)
-            'text': instructions # LANGUAGE INSTRUCTION 
+            'language': instructions # LANGUAGE INSTRUCTION 
         }
     
