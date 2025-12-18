@@ -1,4 +1,6 @@
-# Master's Thesis by Andreas Ehrensberger in Robotics, Coginition, Intelligence @ TUM 🤖
+# Master's Thesis by Andreas Ehrensberger 👨‍🎓
+# in Robotics, Coginition, Intelligence (RCI) 🤖 
+# @ TUM 🏫
 
 ## Dataset 💾
 
