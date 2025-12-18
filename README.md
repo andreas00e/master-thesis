@@ -3,7 +3,7 @@
     Master's Thesis 📖
     <br> Andreas Ehrensberger 👨‍🎓
     <br> Robotics, Cognition, Intelligence (RCI) 🤖
-    <br> @ TUM 🏫
+    <br> TUM 🏫
   </h1>
 </p>
 
