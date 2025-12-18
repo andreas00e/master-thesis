@@ -1,5 +1,7 @@
 <p align="center">
-### Master's Thesis by Andreas Ehrensberger 👨‍🎓 <br> in Robotics, Coginition, Intelligence (RCI) 🤖 <br> @ TUM 🏫
+  <h1>Master's Thesis by Andreas Ehrensberger 👨‍🎓<br>
+  in Robotics, Cognition, Intelligence (RCI) 🤖<br>
+  @ TUM 🏫</h1>
 </p>
 
 ## Dataset 💾
