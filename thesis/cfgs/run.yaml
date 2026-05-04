@@ -1,0 +1,103 @@
+seed: 42
+
+data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
+devices: 0 
+horizon: 16 
+
+data: 
+  dataloader: 
+    lengths: 
+      - 0.8 
+      - 0.1 
+      - 0.1
+    batch_size: 256 # base: 256
+    num_workers: 19 
+    pin_memory: True 
+    persistent_workers: True
+
+  dataset: 
+    file_dir: ${data_dir}
+    tasks: 
+      - stack
+    robots: ~
+    action_horizon: 16 # number of actions to be predicted 
+    image_horizon: 10 # number of images passed to the VAE
+    expand_depth: colormap 
+
+model:
+  model_kwargs:
+    action_dim: 7
+    hidden_size: 512
+    latent_size: 32
+    n_encoder_layers: 2 # 3
+    n_decoder_layers: 4 # 6
+    n_heads: 8
+    horizon: ${horizon}
+    dropout: 0.1
+    language_feature_dim: ~
+    low_dim_feature_dim: ~
+    with_obs: True
+    with_language: True
+    language_model: bert.bert-base-uncased
+    image_model: r3m.resnet18
+    ckpt_path: None 
+
+  training_kwargs:
+    lr: 1e-4
+    warmup_steps: 1000
+    num_training_steps: None 
+
+    loss_kwargs:
+      kl_weight: 1e-2
+
+  mode: pretraining
+
+logger: 
+  name: test 
+  save_dir: logs 
+  version: 1 
+  project: test 
+  log_model: all 
+
+callbacks: 
+  model_checkpoint: 
+    filename: best_vae 
+    monitor: val/ae_total_loss 
+    verbose: True 
+    save_top_k: 1 
+    mode: min 
+    every_n_epochs: 5 
+
+  early_stopping: 
+    monitor: val/ae_total_loss 
+    min_delta: 1e-4 
+    patience: 10 
+    verbose: True 
+    mode: min 
+    check_on_train_epoch_end: True
+
+  device_stats_monitor: 
+    cpu_stats: True 
+
+  rich_progress_bar: 
+    theme: 
+      description: green_yellow
+      progress_bar: green1
+      progress_bar_finished: green1
+      progress_bar_puls: 6206E0
+      batch_progress: green_yellow
+      time: grey82
+      processing_speed: grey82
+      metrics: grey82,
+      metrics_text_delimiter: \n
+      metrics_format: .3e
+   
+trainer: 
+  devices:
+    - 0 
+    - 1 
+    - 2 
+    - 3
+  default_root_dir: logs 
+  max_epochs: 400 
+  profiler: simple 

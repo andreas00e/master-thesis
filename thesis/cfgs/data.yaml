@@ -1,0 +1,6 @@
+file_dir: ~/ehrensberger/master-thesis/mimicgen/datasets/robot
+with_depth: True
+functions: 
+#  - anotate_file
+  - get_depth_limits 
+#  - get_n_actions 
