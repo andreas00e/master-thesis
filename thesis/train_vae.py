@@ -1,6 +1,7 @@
 import os
 import hydra 
 from termcolor import colored
+from omegaconf import OmegaConf
 
 import torch
 import torch.multiprocessing as mp
@@ -24,12 +25,14 @@ os.environ["TORCH_USE_CUDA_DSA"] = "1"
 def get_dataloader(dataset, dataloader):
     train_ds, val_ds, _ = random_split(dataset, lengths=dataloader.lengths)
     
+    dataloader = OmegaConf.to_container(dataloader, resolve=True)
     del dataloader["lengths"]
+    
     train_loader = DataLoader(dataset=train_ds, **dataloader, shuffle=True)
     val_loader = DataLoader(dataset=val_ds, **dataloader, shuffle=False)
     return train_loader, val_loader
 
-def preprocess_config(cfg, args):
+def preprocess_config(cfg):
     device_count = torch.cuda.device_count() # current server: 1
     if len(cfg.trainer.devices) > device_count:
         cfg.trainer.devices = list(range(device_count))
@@ -44,20 +47,20 @@ def main(cfg):
     mp.set_start_method("spawn", force=True) # ensure compatibility and safety by setting the mp start method to "spawn"
     torch.cuda.empty_cache() # release all unocuppied cached memory currently held by the caching allocator
     
+    cfg = preprocess_config(cfg)
     pl.seed_everything(cfg.seed)
     
     dataset = MimicgenDataset(**cfg.data.dataset)
-    train_loader, val_loader = get_dataloader(dataset=dataset, dataloader=cfg.data.datalaoder)
+    train_loader, val_loader = get_dataloader(dataset=dataset, dataloader=cfg.data.dataloader)
 
-    epoch_length = len(train_loader) // len(cfg.trainer.trainer_devices.trainer.devices)
+    epoch_length = len(train_loader) // len(cfg.trainer.devices)
     cfg.model.training_kwargs.num_training_steps = epoch_length * cfg.trainer.max_epochs 
 
     model = DownsampleCVAE(model_kwargs=cfg.model.model_kwargs, training_kwargs=cfg.model.training_kwargs, mode=cfg.model.mode) 
     
     wandb_logger = WandbLogger(**cfg.logger) # log VAE training statitistics, save best model 
-    
     model_checkpoint = ModelCheckpoint(**cfg.callbacks.model_checkpoint) # save model periodically by monitoring VAEs total val loss
-    early_stopping = EarlyStopping(**cfg.callbacks.early_stopping) # monitor VAEs total val loss, stop training when improvements stall 
+    early_stopping = EarlyStopping(**cfg.callbacks.early_stopping) # monitor VAEs total val loss, stop training when improvements stalls
     device_stats_monitor = DeviceStatsMonitor(**cfg.callbacks.device_stats_monitor) # log device statistics 
     rich_progress_bar = RichProgressBar(theme=RichProgressBarTheme(**cfg.callbacks.rich_progress_bar.theme))
     
