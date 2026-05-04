@@ -1,22 +1,17 @@
+import copy
 from termcolor import colored
 
-import os
-import copy
-from omegaconf import OmegaConf
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from transformers import BertTokenizer, BertModel
 from diffusers.optimization import get_cosine_schedule_with_warmup
 
 import lightning.pytorch as pl
-# from torchvision.models.resnet import BasicBlock
-from transformers import BertTokenizer, BertModel
 
 from RoLD.models.common import SinusoidalPosEmb, get_pe, WrappedTransformerEncoder, WrappedTransformerDecoder, ResBottleneck
 
-from thesis.models.autoencoder.common import DiagonalGaussianDistribution, AutoencoderLoss
-
 from models.vision.vision import VisionCombiner
+from models.autoencoder.common import DiagonalGaussianDistribution, AutoencoderLoss
 
 
 class DownsampleCVAE(pl.LightningModule):
