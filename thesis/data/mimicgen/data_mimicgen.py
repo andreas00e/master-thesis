@@ -13,15 +13,15 @@ class MimicgenDataset(Dataset):
         super().__init__()
         
         self.file_dir = file_dir
-        self.all_files = [file for file in os.listdir(self.file_dir) if file.endswith(".hdf5")]
+        self.all_files = [file for file in os.listdir(self.file_dir) if file.endswith("depth.hdf5")]
         
-        self.all_robots = [{f.split(".")[-2].split("_")[-1] for f in self.all_files}]
-        self.all_tasks = [{f.split(".")[-2].split("_")[0] for f in self.all_files}]
+        self.all_robots = list(set(f.split(".")[-2].split("_")[-1] for f in self.all_files))
+        self.all_tasks = list(set(f.split(".")[-2].split("_")[0] for f in self.all_files))
         
-        self.robots = robots if robots else self.all_robots # no given robot => all robots
-        self.task = tasks if tasks else self.all_tasks # no given task => all tasks
+        self.robots = robots if robots else self.all_robots # no given robot -> all robots
+        self.tasks = tasks if tasks else self.all_tasks # no given task -> all tasks
         
-        self.files = [file for file in self.all_files if robot in file for robot in self.robots and task in file for task in self.tasks]
+        self.files = [os.path.join(self.file_dir, file) for file in self.all_files if (robot in file for robot in self.robots) and (task in file for task in self.tasks)]
 
         self.action_horizon = action_horizon
         self.image_horizon = image_horizon 
@@ -30,7 +30,7 @@ class MimicgenDataset(Dataset):
         self.trajectory_map, self.rgb_views, self.depth_views = [], [], []
         
         for file in self.files: 
-            with h5py.File(file, "r") as hf:  
+            with h5py.File(file, "r") as hf: 
                 data = hf["data"]
                 for demo in data.keys(): 
                     n_actions = data[demo]["actions"][()].shape[0]

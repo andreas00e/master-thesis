@@ -4,7 +4,7 @@ import h5py
 import hydra
 import numpy as np
 from collections import defaultdict
-from typing import Callable, List, Tuple, Union
+from typing import Callable, Dict, List, Tuple, Union
 
 
 from mpi4py import MPI 
@@ -31,7 +31,8 @@ def anotate_files(file: os.PathLike) -> int:
     
     return 1 
 
-def get_depth_limits(file: os.PathLike) -> int: 
+def get_depth_limits(file: os.PathLike) -> List[Tuple[str, Dict[str, np.float32]]]: 
+    result = None 
     depth_limits = {}
     
     with h5py.File(file, "r+") as hf: 
@@ -55,15 +56,15 @@ def get_depth_limits(file: os.PathLike) -> int:
                 depth_limits[key] = np.min(depth_limits[key])
             elif "max" in key: 
                 depth_limits[key] = np.max(depth_limits[key])
-    
-    return depth_limits 
           
-    #     if hf.get("depth_limits", None):
-    #         hf["depth_limits"][()] = depth_limits 
-    #     else: 
-    #         hf.create_dataset(name="depth_limits", data=depth_limits)
-                    
-    # return 1           
+        grp = hf.require_group("depth_limits")
+
+        for k, v in depth_limits.items():
+            grp.pop(k, None)  # remove if exists
+            grp[k] = v
+                
+    result = [file, depth_limits]        
+    return result           
 
 def get_n_actions(file: os.PathLike, mode: str) -> np.float32: 
     n_actions = 0
@@ -85,13 +86,11 @@ def handle_files(function: Callable[[str], Union[int, np.float32]], files: List[
         
     return results 
 
-
 FUNCTIONS = {
     "anotate_files": anotate_files, 
     "get_depth_limits": get_depth_limits, 
     "get_n_actions": get_n_actions
     }
-
 
 @hydra.main(version_base = None, config_path="../../configs", config_name="data.yaml")
 def main(cfg): 

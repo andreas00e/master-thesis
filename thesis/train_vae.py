@@ -1,167 +1,69 @@
 import os
-import argparse
-from pathlib import Path
-from omegaconf import OmegaConf
+import hydra 
 from termcolor import colored
 
 import torch
 import torch.multiprocessing as mp
 from torch.utils.data import DataLoader, random_split
-# from torch.nn.utils.rnn import pad_sequence 
 
 import lightning.pytorch as pl 
 from lightning.pytorch.trainer import Trainer
 from lightning.pytorch.loggers import WandbLogger
-from lightning.pytorch.callbacks import DeviceStatsMonitor, EarlyStopping, ModelCheckpoint, RichProgressBar
 from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBarTheme
+from lightning.pytorch.callbacks import DeviceStatsMonitor, EarlyStopping, ModelCheckpoint, RichProgressBar
 
-from data.mimic.data_mimicgen import MimicgenDataset
+from data.mimicgen.data_mimicgen import MimicgenDataset
 from models.autoencoder.autoencoder import DownsampleCVAE
 
 # Suppress all unwanted tensorflow INFO, WARNING, and ERRORS messages
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['CUDA_LAUNCH_BLOCKING']= '1'
-os.environ['TORCH_USE_CUDA_DSA'] = '1'
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["CUDA_LAUNCH_BLOCKING"]= "1"
+os.environ["TORCH_USE_CUDA_DSA"] = "1"
 
 
-def get_train_val_loader(dataset, dataloader_kwargs):
-    train_ds, val_ds, _ = random_split(dataset, lengths=dataloader_kwargs.lengths)
-
-    del dataloader_kwargs['lengths']
-    train_loader = DataLoader(dataset=train_ds, **dataloader_kwargs, shuffle=True)
-    val_loader = DataLoader(dataset=val_ds, **dataloader_kwargs, shuffle=False)
-
+def get_dataloader(dataset, dataloader):
+    train_ds, val_ds, _ = random_split(dataset, lengths=dataloader.lengths)
+    
+    del dataloader["lengths"]
+    train_loader = DataLoader(dataset=train_ds, **dataloader, shuffle=True)
+    val_loader = DataLoader(dataset=val_ds, **dataloader, shuffle=False)
     return train_loader, val_loader
 
-def preprocess_config(config, args):
-    # Override horizon of config YAML file
-    config.horizon = args.horizon 
-    config.model.model_kwargs.horizon = args.horizon
-    config.dataset.horizon = args.horizon
-
-    # Avoid GPU rank overflow
-    device_count = torch.cuda.device_count() # Only one device available here
-    if len(config.trainer.devices) > device_count:
-        config.trainer.devices = list(range(device_count))
+def preprocess_config(cfg, args):
+    device_count = torch.cuda.device_count() # current server: 1
+    if len(cfg.trainer.devices) > device_count:
+        cfg.trainer.devices = list(range(device_count))
         if device_count == 1: 
-            print(colored(f'Using 1 device', 'green'))
+            print(colored(f"Using 1 device", "green"))
         else: 
-            print(colored(f'Using {device_count} devices', 'green'))      
+            print(colored(f"Using {device_count} devices", "green"))      
+    return cfg
 
-    return config
-
-def get_parser_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config_path', type=Path, default='thesis/configs/train_vae.yaml', help='Path to config yaml storing parameters for training')
-    parser.add_argument('--data_dir', type=Path, default='~/ehrensberger/mimicgen/datasets/core', help='Path to dataset containing actions, images, etc.')
-    parser.add_argument('--devices', type=str, default='0', help='Number/Name(s) of GPU(s) available for tria')
-    parser.add_argument('--horizon', type=int, default=16, help='Number of actions steps predicited by the VAE')
-
-    return parser.parse_args()
-
-
-def main(): 
-    # Ensure compatibility and safety by setting the multiprocessing start method to "spawn"
-    mp.set_start_method("spawn", force=True)
-    # Release all unocuppied cached memory currently held by caching allocator
-    torch.cuda.empty_cache()
-
-    args = get_parser_args()
-    raw_config = OmegaConf.load(args.config_path)
-    OmegaConf.resolve(raw_config)
-    config = preprocess_config(raw_config, args)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    pl.seed_everything(raw_config.seed)
-    data_dir = os.path.expanduser(args.data_dir)
+@hydra.main(config_path="cfgs", config_name="run.yaml", version_base=None)
+def main(cfg): 
+    mp.set_start_method("spawn", force=True) # ensure compatibility and safety by setting the mp start method to "spawn"
+    torch.cuda.empty_cache() # release all unocuppied cached memory currently held by the caching allocator
     
-    dataset = MimicgenDataset(
-        load_dir=data_dir,
-        task=['stack_d0_depth.hdf5', 'stack_d1_depth.hdf5'],
-        robot=None, 
-        action_horizon=16, # Number of actions to be predicted
-        image_horizon=10, # Number of past images given to network as input, only necessary if obseravtions='backwards' or 'both'
-        observations='single' , 
-        expand_depth='colormap'
-        )
+    pl.seed_everything(cfg.seed)
     
-    train_loader, val_loader = get_train_val_loader(dataset=dataset, dataloader_kwargs=config.dataloader)
+    dataset = MimicgenDataset(**cfg.data.dataset)
+    train_loader, val_loader = get_dataloader(dataset=dataset, dataloader=cfg.data.datalaoder)
 
-    epoch_length = len(train_loader) // len(config.trainer.devices)
-    config.model.training_kwargs['num_training_steps'] = epoch_length * config.trainer.max_epochs
+    epoch_length = len(train_loader) // len(cfg.trainer.trainer_devices.trainer.devices)
+    cfg.model.training_kwargs.num_training_steps = epoch_length * cfg.trainer.max_epochs 
 
-    model: pl.LightningModule = DownsampleCVAE(
-        config.model.model_kwargs, 
-        config.model.training_kwargs, 
-        mode='pretraining'
-        )
+    model = DownsampleCVAE(model_kwargs=cfg.model.model_kwargs, training_kwargs=cfg.model.training_kwargs, mode=cfg.model.mode) 
     
-    model.to(device)
+    wandb_logger = WandbLogger(**cfg.logger) # log VAE training statitistics, save best model 
     
-    # Log variational autoencoder training statistics and save best model checkpoint
-    wandb_logger = WandbLogger(
-        name='test', 
-        save_dir='/home/ubuntu/ehrensberger/master-thesis/master-thesis/thesis/logs', 
-        version='1',
-        project='test',
-        log_model='all'
-        )
-
-    # Monitor and log device statistics (e.g., CPU and GPU usage) during training
-    device_stats_monitor = DeviceStatsMonitor(
-        cpu_stats=True
-        )
+    model_checkpoint = ModelCheckpoint(**cfg.callbacks.model_checkpoint) # save model periodically by monitoring VAEs total val loss
+    early_stopping = EarlyStopping(**cfg.callbacks.early_stopping) # monitor VAEs total val loss, stop training when improvements stall 
+    device_stats_monitor = DeviceStatsMonitor(**cfg.callbacks.device_stats_monitor) # log device statistics 
+    rich_progress_bar = RichProgressBar(theme=RichProgressBarTheme(**cfg.callbacks.rich_progress_bar.theme))
     
-    # Monitor the total validation loss of the VAE and stop training when it stops improving 
-    early_stopping = EarlyStopping(
-        monitor='val/ae_total_loss', 
-        min_delta=1e-4, 
-        patience=10, 
-        verbose=True, 
-        mode='min', 
-        check_on_train_epoch_end=True
-        )
-   
-    # Save the model periodically by monitoring the total validation loss of the VAE 
-    model_checkpoint = ModelCheckpoint(
-        filename='best_vae', 
-        monitor='val/ae_total_loss', 
-        verbose=True,
-        # save_last=True,
-        save_top_k=1, 
-        mode='min',
-        every_n_epochs=5,       
-        )
-    
-    richProgressBar = RichProgressBar(
-        theme=RichProgressBarTheme(
-            description="green_yellow",
-            progress_bar="green1",
-            progress_bar_finished="green1",
-            progress_bar_pulse="#6206E0",
-            batch_progress="green_yellow",
-            time="grey82",
-            processing_speed="grey82",
-            metrics="grey82",
-            metrics_text_delimiter="\n",
-            metrics_format=".3e",
-            )
-        )  
-
-    trainer = Trainer(
-        default_root_dir='logs/', 
-        logger=wandb_logger, 
-        callbacks=[device_stats_monitor, early_stopping, model_checkpoint, richProgressBar], 
-        max_epochs=400, 
-        profiler='simple'
-        )
-
-    trainer.fit(
-        model=model, 
-        train_dataloaders=train_loader, 
-        val_dataloaders=val_loader
-        )
+    trainer = Trainer(logger=wandb_logger, callbacks=[device_stats_monitor, early_stopping, model_checkpoint, rich_progress_bar], **cfg.trainer)
+    trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 
