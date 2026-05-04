@@ -1,3 +1,5 @@
+from termcolor import colored
+
 import os
 import copy
 from omegaconf import OmegaConf
@@ -7,20 +9,23 @@ import torch.nn.functional as F
 from diffusers.optimization import get_cosine_schedule_with_warmup
 
 import lightning.pytorch as pl
+# from torchvision.models.resnet import BasicBlock
+from transformers import BertTokenizer, BertModel
 
-from RoLD.models.autoencoder.common import DiagonalGaussianDistribution, AutoencoderLoss
-from RoLD.models.common import SinusoidalPosEmb, get_pe, WrappedTransformerEncoder, WrappedTransformerDecoder, ResBottleneck, ImageAdapter
-from RoLD.utils import instantiate_from_config
+from RoLD.models.common import SinusoidalPosEmb, get_pe, WrappedTransformerEncoder, WrappedTransformerDecoder, ResBottleneck
 
-from models.common import Clip, ParametrizedSofmax, JointAttentionEncoder
+from thesis.models.autoencoder.common import DiagonalGaussianDistribution, AutoencoderLoss
+
+from models.vision.vision import VisionCombiner
+
 
 class DownsampleCVAE(pl.LightningModule):
     def __init__(
         self,
         model_kwargs,
-        joint_encoder_kwargs, 
+        # joint_encoder_kwargs, 
         training_kwargs,
-        mode,  # pretraining, finetuning, inference
+        mode, # pretraining, finetuning, inference
         all_config=None
     ):
         super().__init__()
@@ -40,7 +45,7 @@ class DownsampleCVAE(pl.LightningModule):
         self.all_config = all_config
         self.training_kwargs = training_kwargs
         self.model_kwargs = model_kwargs
-        self.joint_encoder_kwargs = joint_encoder_kwargs
+        # self.joint_encoder_kwargs = joint_encoder_kwargs
         self.save_hyperparameters()
 
         self.action_dim = action_dim = model_kwargs['action_dim']
@@ -49,22 +54,21 @@ class DownsampleCVAE(pl.LightningModule):
         self.horizon = horizon = model_kwargs['horizon']
 
         self.action_emb = nn.Linear(action_dim, hidden_size)
+        # self.lang_down = nn.Linear(hidden_size, int(hidden_size/2))
 
         self.cls = nn.Parameter(data=torch.zeros(size=(1, hidden_size)), requires_grad=True)
         self.z_encoder = WrappedTransformerEncoder(**model_kwargs)
         self.z_down = nn.Linear(hidden_size, latent_size * 2)
 
         self.z_up = nn.Linear(latent_size, hidden_size)
+
+        # self.z_up = nn.Linear(latent_size, int(hidden_size/2))
         self.conditioner = WrappedTransformerEncoder(**model_kwargs)
         self.decoder = WrappedTransformerDecoder(**model_kwargs)
 
         self.action_head = nn.Linear(hidden_size, action_dim)
-
-        self.joint_encoder = JointAttentionEncoder(**joint_encoder_kwargs)
-        
-        # TODO: Fix dataloading: KeyError: b'KUKA' -> 'KUKA
-        self.robot_dict = {'SAWYER': torch.tensor([0, 0, 1]), 'WIDOWX': torch.tensor([0, 1, 0]), 
-                           'BAXTER': torch.tensor([0, 1, 1]), 'KUKA': torch.tensor([1, 0, 0]), 'FRANKA': torch.tensor([1, 0, 1])}
+        # self.encoder_emb = nn.Linear(2*hidden_size, hidden_size)
+        # self.decoder_emb = nn.Linear(2*hidden_size, hidden_size)
 
         self.loss = AutoencoderLoss(
             **training_kwargs.loss_kwargs
@@ -81,16 +85,45 @@ class DownsampleCVAE(pl.LightningModule):
             else:
                 assert mode == 'pretraining'
                 self.low_dim_emb = None
-
-        if self.with_obs:  # fix this in config
-            if hidden_size == 512:
-                self.img_emb = ResBottleneck(hidden_size=hidden_size)
-            else:
-                self.img_emb = ImageAdapter(in_dim=512, out_dim=hidden_size)
-
+                
+        if self.model_kwargs.image_model: # Initialization of image embedding module 
+            img_emb_type, img_emb_version = self.model_kwargs.image_model.split('.')
+            print(colored(f"Using {img_emb_type} with version {img_emb_version} as image encoder", 'green'))
+            self.img_emb = VisionCombiner(hidden_size=self.hidden_size, out_size=128, resnet_version=img_emb_version)
+        else: 
+            raise NotImplementedError(colored('No model for embedding scene images could be found!', 'red'))
+        
+        self.img_emb.eval() # No effect on nn.Linear()
+        for module in self.img_emb.modules(): 
+            module.skip_init = True # Skip modules during DownsampleCVAE() weight initialization 
+            if not isinstance(module, nn.Linear): 
+                for param in module.parameters(): 
+                    param.requires_grad = False # Set paraemeters of pre-trained model to 'eval'
+            elif isinstance(module, nn.Linear): 
+                self.img_emb._init_weights(module)
+                for param in module.parameters(): 
+                    param.requires_grad = True # Set parameters of nn.Linear() for down projection to 'train'
+        
         self.with_language = model_kwargs.get('with_language', False)
-        if self.with_language:
-            self.language_emb = nn.Linear(in_features=768, out_features=hidden_size)
+        
+        # Initiliaze language embedding module 
+        if self.model_kwargs.language_model:
+            lang_emb_type, lang_emb_version = self.model_kwargs.language_model.split('.')
+            print(colored(f"Using {lang_emb_type} with version {lang_emb_version} as language encoder", 'green'))
+            if lang_emb_type == 'bert': # load bert tokenizer and model 
+                self.lang_tokenizer = BertTokenizer.from_pretrained(lang_emb_version) # pre-trained bert tokenizer
+                self.lang_emb_model = BertModel.from_pretrained(lang_emb_version) # pre-trained bert model
+                self.lang_emb = nn.Linear(in_features=768, out_features=hidden_size)
+            # elif lang_emb_type == 'clip': # load clip tokenizer and model 
+            #     self.img_emb = r3m.load_r3m(img_emb_version)
+            self.lang_emb_model.to(self.device)
+            self.lang_emb_model.eval()
+            for module in self.lang_emb_model.modules(): 
+                module.skip_init = True # skip modules during weight initialization 
+            for parameters in self.lang_emb_model.parameters(): 
+                parameters.requires_grad = False # ensure mode of module is not 'train'
+        else: 
+            raise NotImplementedError(colored('No model for embedding language task instructions could be found!', 'red'))
 
         self.last_training_batch = None
 
@@ -105,7 +138,8 @@ class DownsampleCVAE(pl.LightningModule):
             self.apply(self._init_weights)
     
     def _init_weights(self, module):
-        ignore_types = (nn.Dropout, 
+        ignore_types = (
+            nn.Dropout, 
             SinusoidalPosEmb, 
             nn.TransformerEncoderLayer, 
             nn.TransformerDecoderLayer,
@@ -116,16 +150,11 @@ class DownsampleCVAE(pl.LightningModule):
             nn.Sequential,
             WrappedTransformerDecoder,
             WrappedTransformerEncoder,
-            JointAttentionEncoder,
             nn.LeakyReLU,
-            nn.ELU, 
-            nn.Tanh, 
-            Clip,
-            ParametrizedSofmax,
-            ResBottleneck,
-            AutoencoderLoss,
-            ImageAdapter
+            AutoencoderLoss
         )
+        if getattr(module, 'skip_init', False): 
+            return 
         if isinstance(module, (nn.Linear, nn.Embedding)):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if isinstance(module, nn.Linear) and module.bias is not None:
@@ -174,7 +203,8 @@ class DownsampleCVAE(pl.LightningModule):
     
     def get_obs_emb(self, raw_image_features, raw_low_dim_data):
         if self.with_obs:
-            image_emb = self.img_emb(raw_image_features)
+            with torch.no_grad(): 
+                image_emb = self.img_emb(raw_image_features) # raw_image_feature: (B, C, W, H)
             if raw_low_dim_data is not None and self.low_dim_emb is not None:
                 low_dim_emb = self.low_dim_emb(raw_low_dim_data)
                 return torch.cat([image_emb, low_dim_emb], dim=1)
@@ -182,33 +212,26 @@ class DownsampleCVAE(pl.LightningModule):
                 return image_emb
         else:
             return None
-
+        
     def get_language_emb(self, raw_language_features):
         if self.with_language:
-            return self.language_emb(raw_language_features)
+            tokens = self.lang_tokenizer(text=raw_language_features, padding=True, return_tensors='pt').to(self.device)
+            with torch.no_grad():
+                language_features = self.lang_emb_model(**tokens) 
+                language_features = self.lang_emb(language_features.last_hidden_state[:, 0, :]) # pass cls token to linear layer for shape allignment 
+            return language_features.unsqueeze(1)
         else:
             return None
     
     def encode(self, batch):
-        # TODO: change 'actions' to 'action' in dataloading to stay closer to original repo implementation 
-        action = batch['actions'].to(torch.float)
-        # 2025-03-10: added JoinAttentionEncoder from: TODO: insert paper name here
-        qpos = batch['qpos'].to(torch.float)
-        qvel = batch['qvel'].to(torch.float)
-        state = batch['state'].to(torch.float).to(self.device)
-
-        batch_size = action.shape[0]
-
-        joint_state = torch.cat([qpos, qvel], dim=-1).to(torch.float).to(self.device) # -> Linear network:
-        # fixed-size vector uniquely describing the joint by using characteristic properties 
-        joint_desc = torch.stack([self.robot_dict['KUKA'] for _ in range(joint_state.shape[1])]).expand((batch_size, -1, -1)).to(torch.float).to(self.device)# -> torch.Size([14, 3]) -> torch.Size([8, 14, 3])
-        joint_emb = self.joint_encoder(joint_desc, joint_state, state)
-        print(joint_emb.shape)
-        exit()
-        # changed on 2025-03-07: no raw_low_dim_data in dataset; incompatible tensor shapes between batch['iamge'] and weight matrix
-        obs_emb = self.get_obs_emb(raw_image_features=batch['image'].to(torch.float).view(batch_size, -1, self.hidden_size), raw_low_dim_data=None)
- 
-        pos_action_emb = self.action_emb(action) + self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
+        actions = batch['actions'] # (B, action_horizon, action_dim)
+        image_features  = batch['image'] # (B, image_horizon, C, H, W)
+        
+        batch_size = actions.shape[0] 
+        
+        obs_emb = self.img_emb(image_features) # (B, image_horizon, hidden_size)
+                
+        pos_action_emb = self.action_emb(actions) + self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
         cls = self.cls.expand((batch_size, 1, self.hidden_size))
 
         z_encoder_input = torch.cat([cls, pos_action_emb], dim=1)
@@ -216,7 +239,8 @@ class DownsampleCVAE(pl.LightningModule):
             z_encoder_input = torch.cat([z_encoder_input, obs_emb], dim=1)
 
         z_encoder_output = self.z_encoder(z_encoder_input)[:, 0:1, :]
-        z_encoder_output = self.z_down(z_encoder_output)
+        z_encoder_output = self.z_down(z_encoder_output) # (B, 1, latent_size * 2)
+        
         posterior = DiagonalGaussianDistribution(z_encoder_output)
         return posterior, obs_emb
     
@@ -226,6 +250,7 @@ class DownsampleCVAE(pl.LightningModule):
                 z = posterior.sample()
             else:
                 z = posterior.mode()
+                       
         z = self.z_up(z)
         batch_size = z.shape[0]
         
@@ -233,7 +258,8 @@ class DownsampleCVAE(pl.LightningModule):
         if obs_emb is not None:
             condition_input = torch.cat([obs_emb, condition_input], dim=1)  # obs_emb, z
         if self.with_language:
-            condition_input = torch.cat([self.get_language_emb(raw_language_features), condition_input], dim=1)  # lang, obs, z
+            language_emb = self.get_language_emb(raw_language_features)
+            condition_input = torch.cat([language_emb, condition_input], dim=1)  # lang, obs, z
         condition = self.conditioner(condition_input)
 
         decoder_input = self.pe[:, :self.horizon, :].expand((batch_size, self.horizon, self.hidden_size))
@@ -243,21 +269,23 @@ class DownsampleCVAE(pl.LightningModule):
 
     def forward(self, batch, batch_idx, sample_posterior=True, split='train'):
         posterior, obs_emb = self.encode(batch)
-        # changed on 2025-03-10: Currently no available language features 
-        # pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior, raw_language_features=batch['language'])
-        pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior, raw_language_features=None)
-
+        pred_action = self.decode(posterior=posterior, obs_emb=obs_emb, sample_posterior=sample_posterior, raw_language_features=batch['text'])
+        
         total_loss, log_dict = self.loss.recon_kl_loss(
-            inputs=batch['actions'].to(torch.float), reconstructions=pred_action, posteriors=posterior, split=split)
+            # inputs=batch['actions'].squeeze(-1).to(torch.float), reconstructions=pred_action, posteriors=posterior, kl_weight=kl_weight[self.global_step], split=split)
+            inputs=batch['actions'], reconstructions=pred_action, posteriors=posterior, split=split)
+        
         return total_loss, log_dict
     
     def training_step(self, batch, batch_idx):
         self.last_training_batch = batch
+        
         total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='train')
-        self.log_dict(log_dict, sync_dist=True)
+        self.log_dict(log_dict, prog_bar=True, sync_dist=True)
         return total_loss
 
     def validation_step(self, batch, batch_idx):
         total_loss, log_dict = self.forward(batch=batch, batch_idx=batch_idx, split='val')
-        self.log_dict(log_dict, sync_dist=True)
+        self.log_dict(log_dict, prog_bar=True, sync_dist=True)
         return total_loss
+    

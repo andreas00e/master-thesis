@@ -1,0 +1,15 @@
+[submodule "imports/RoLD"]
+	path = imports/RoLD
+	url = https://github.com/AlbertTan404/RoLD/tree/master
+[submodule "imports/mimicgen"]
+	path = imports/mimicgen
+	url = https://github.com/NVlabs/mimicgen
+[submodule "imports/r3m"]
+	path = imports/r3m
+	url = https://github.com/facebookresearch/r3m
+[submodule "imports/robomimic"]
+	path = imports/robomimic
+	url = https://github.com/ARISE-Initiative/robomimic
+[submodule "imports/robosuite-task-zoo"]
+	path = imports/robosuite-task-zoo
+	url = https://github.com/ARISE-Initiative/robosuite-task-zoo
