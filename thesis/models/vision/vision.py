@@ -1,8 +1,14 @@
+import os 
+
 import torch 
 import torch.nn as nn
 import torch.nn.init as init
 
-import r3m 
+import lightning as pl
+from torchvision.models import resnet18, ResNet18_Weights
+from torchvision import transforms
+
+from r3m import load_r3m
 
 import wandb 
 from termcolor import colored
@@ -37,7 +43,7 @@ class VisionEncoder(nn.Module):
         self.logger = logger
         self.device = device
         self.combine = combine
-        self.img_emb = r3m.load_r3m(version)
+        self.img_emb = load_r3m(version)
         self.img_emb.eval().to(self.device)
     
     def forward(self, input): # input: (B, C, H, W)
@@ -80,7 +86,8 @@ class VisionCombiner(nn.Module):
         self.resnet_version = resnet_version
         self.device = device 
         
-        self.img_emb = r3m.load_r3m(self.resnet_version)
+        # self.img_emb = load_r3m(self.resnet_version)
+        self.img_emb = resnet18(weights=ResNet18_Weights.DEFAULT) # due to slow connections
         
         self.rgb_down = nn.Linear(self.hidden_size, self.out_size)
         self.depth_down = nn.Linear(self.hidden_size, self.out_size)
@@ -116,5 +123,31 @@ class VisionCombiner(nn.Module):
     
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):   
-           init.kaiming_normal_(module.weight, nonlinearity='relu')
+           init.kaiming_normal_(module.weight, nonlinearity="relu")
            nn.init.zeros_(module.bias)
+           
+class VisionEmbedder(pl.LightningModule): 
+    def __init__(self, weights_path: os.PathLike): 
+        super().__init__()
+        self.weights_path = weights_path
+        
+        if "r3m" in self.weeights_path: 
+            self.model = load_r3m
+        else: 
+            self.model = resnet18(weights=torch.load(f=self.weights_path, weights_only=True))
+     
+    def on_train_epoch_start(self): 
+        epoch = self.trainer.current_epoch 
+        self.trainer.datamodule.dataset.set_epoch(epoch) 
+    def forward(self, x): 
+        x = x.view(-1, *x.shape[2:]) # [B*horizon, H, W, C=3]
+        x = x.permute(0, 3, 1, 2) # [B*horizon, C=3, H, W]
+        x = self.model(x) # [B*horizon, hidden_dim]
+        return x
+
+    def test_step(self, batch, batch_idx): 
+        rgb_obs, files = batch.values() # [B, horizon, hidden_dim, H, W, C=3]
+        x = self(rgb_obs) # [B*horizon, hidden_dim]
+        x = x.view(*rgb_obs.shape[:2], -1) # [B, horizon, hidden_dim]
+        x = torch.mean(x, dim=1) # [B, hidden_dim]
+        return x, files
