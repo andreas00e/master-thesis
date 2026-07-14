@@ -11,29 +11,31 @@ from data.dataset.dataset import MimicGenRobotDataset
 
 class MimicGenRobotDataModule(pl.LightningDataModule): 
     def __init__(self, 
-        data_dir: os.PathLike, 
-        meta_dir: os.PathLike, 
-        horizon: Optional[int]=16,
-        robots: Optional[List[str]]=None,
-        tasks: Optional[List[str]]=None, 
-        depth: Optional[bool]=False, 
-        expand_depth: Optional[str]=None, # grayscale, colormap 
-        batch_size: int=16, 
-        shuffle: bool=False, 
-        num_workers: int=32, 
-        pin_memory: bool=True, 
-        persisent_workers: bool=True,
+        data_dir: os.PathLike, # directory containing the hdf5 trajectory files 
+        meta_dir: os.PathLike, # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
+        window: Optional[int] = 16, # number of steps looking into the future from current time-steps
+        robots: Optional[List[str]] = None, 
+        tasks: Optional[List[str]] = None, 
+        depth: Optional[bool] = True, # if depth maps are included or not  
+        expand_depth: Optional[str] = None, # grayscale, colormap 
+        batch_size: int = 16, 
+        shuffle: bool = False, 
+        num_workers: int = 32, 
+        pin_memory: bool = True, 
+        persisent_workers: bool = True,
         *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         
+        # data kwargs
         self.data_dir = data_dir
         self.meta_dir = meta_dir
-        self.horizon = horizon
+        self.window = window
         self.robots = robots 
         self.tasks = tasks 
         self.depth = depth
         self.expand_depth = expand_depth 
         
+        # dataloading kwargs
         self.batch_size = batch_size 
         self.shuffle = shuffle 
         self.num_workers = num_workers
@@ -44,8 +46,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         all_robots = list(set(f.split(".")[-2].split("_")[-1] for f in all_files)) # no given robot -> all robots
         all_tasks = list(set(f.split(".")[-2].split("_")[0] for f in all_files)) # no given task -> all tasks
         
-        self.robots = self.filtered_or_all(self.robots, all_robots)
-        self.tasks  = self.filtered_or_all(self.tasks, all_tasks)
+        self.robots = self._filtered_or_all(self.robots, all_robots)
+        self.tasks  = self._filtered_or_all(self.tasks, all_tasks)
         self.files = [os.path.join(data_dir, file) for file in all_files if (robot in file for robot in self.robots) and (task in file for task in self.tasks)]
         
         self.meta_data = self._get_metadata()
@@ -53,6 +55,12 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.train_dataset, self.val_dataset = self.setup()
         
         self.n_samples_per_epoch = len(self.demo_map)
+        
+    def _filtered_or_all(self, selected, available):
+        if selected is None:
+            return available
+        filtered = [x for x in selected if x in available]
+        return filtered if filtered else available
 
     def _get_metadata(self) -> pd.DataFrame: 
         meta_path = os.path.join(self.meta_dir, "meta.csv")
@@ -86,20 +94,20 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                         H = len_episode
                     demo_map.append([file, demo, len_episode, None])
         
-        if H > self.horizon: 
-            print(f"The chosen window size is bigger than the smallest episode length! \n \
-                  Therefore, the window size gets changed from {self.window_size} to {self.M}.")
-            self.horizon = H
+        if H > self.window: 
+            print(f"The chosen size of the window is bigger than the smallest episode length! \n \
+                  Therefore, the size of the window gets changed from {self.window} to {H}.")
+            self.window = H
         return demo_map
         
     def setup(self, stage=None) -> Tuple[DataLoader, DataLoader]:
         dataset = MimicGenRobotDataset(
             self.files, 
             self.demo_map,
-            self.horizon, 
+            self.window, 
             self.depth, 
             self.expand_depth, 
-            self.window_size
+            self.window
             )
         
         train_dataset, val_dataset = random_split(dataset, lengths=self.dataset_lengths)
@@ -125,9 +133,3 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             self.persisent_workers
             )
         return val_dataloader
-
-    def filtered_or_all(self, selected, available):
-        if selected is None:
-            return available
-        filtered = [x for x in selected if x in available]
-        return filtered if filtered else available
