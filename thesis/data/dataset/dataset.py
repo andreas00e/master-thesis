@@ -5,26 +5,26 @@ from typing import List, Optional
 
 from torch.utils.data import Dataset 
 
+from data.utils import get_transforms
+
 
 class MimicGenRobotDataset(Dataset): 
     def __init__(self, 
-        files: List[os.PathLike], 
-        demo_map: List[List[os.PathLike, int, int, None]],
-        horizon: Optional[int]=16,
-        depth: Optional[bool]=False, 
-        expand_depth: Optional[str]=None, # grayscale, colormap 
+        files, # : List[os.PathLike], # all hdf5 files
+        demo_map, #: List[os.PathLike, int, int],
+        window: int,
+        expand_depth: Optional[str] = None, # grayscale, colormap 
         *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__()
         
         self.files = files
         self.demo_map = demo_map
-        self.horizon = horizon
-        self.depth = depth
+        self.window = window
         self.expand_detph = expand_depth 
         
         self.len, self.epoch = 0, 0
-        self.demo_map, self.windows, self._rgb_views, self._depth_views = [], [], [], []        
-        self._file_cache = {}
+        self.windows, self.rgb_views, self.depth_vies = [], [], [] 
+        self.file_chache = {}
                        
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
@@ -32,36 +32,33 @@ class MimicGenRobotDataset(Dataset):
 
         for demo in self.demo_map:
             len_episode = demo[2]
-            demo[3] = int(rng.integers(0, len_episode - self.horizon))
+            demo[3] = int(rng.integers(0, len_episode - self.window))
                            
     def __len__(self) -> int:
-        return len(self.len)
+        return len(self.demo_map)
     
     def __getstate__(self):
         state = self.__dict__.copy() # when the worker is forked/pickled, clear the cache 
         state["_file_cache"] = {}
-        
         return state
     
     def __getitem__(self, idx): 
-        out = {}  
-        file, demo, len_episode, idx = self.demo_map[idx] 
-              
-        if file not in self._file_cache: # open file once per worker and cache it
-            self._file_cache[file] = h5py.File(os.path.join(self.data_dir, file), "r")
-            
-        hf = self._file_cache[file]
-        data = hf["data"][demo]
-        obs = data["obs"]    
-
-        rgb_obs = obs["robot0_eye_in_hand_image"][idx:idx+self.horizon, ...] # [horizon, H, W, 3]
-        rgb_obs = rgb_obs.astype(np.float32) / 255.0
-        out["rgb_obs"] = rgb_obs
-    
-        if self.depth: 
-            d_obs = obs["robot0_eye_in_hand_depth"][idx:idx+self.horizon, ...] # [horizon, H, W, 1]
-            out["d_obs"] = d_obs
-            # TODO: add normalization of depth image
+        item = {}  
+        file, demo, n_steps = self.demo_map[idx] 
+        idx_start = np.random.randint(0, n_steps-self.window)
         
-        out["file"] = "_".join(file.split(".")[0].split("_")[-1::-2])+"_"+str(idx)
-        return out
+        if file not in self.file_chache: # open file once per worker and cache it
+            self.file_chache[file] = h5py.File(file, "r")
+            
+        hf = self.file_chache[file]
+        data = hf["data"][demo]
+        obs = data["obs"] 
+        
+        rgb_obs = obs["robot0_eye_in_hand_image"][idx_start:idx_start+self.window, ...]
+        item["rgb_obs"] = rgb_obs.astype(np.float32) / 255.0
+        
+        depth_obs = obs["robot0_eye_in_hand_depth"][idx_start:idx_start+self.window, ...]
+        item["depth_obs"] = depth_obs 
+                              
+        item["file"] = "_".join(file.split(".")[0].split("_")[-1::-2])+"_"+str(idx)
+        return item

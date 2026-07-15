@@ -5,7 +5,7 @@ import pandas as pd
 from typing import List, Optional, Tuple
 
 import lightning as pl 
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split
 
 from data.dataset.dataset import MimicGenRobotDataset
 
@@ -13,18 +13,19 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     def __init__(self, 
         data_dir: os.PathLike, # directory containing the hdf5 trajectory files 
         meta_dir: os.PathLike, # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
+        batch_size: int,
+        shuffle: bool,  
+        num_workers: int, 
+        pin_memory: bool, 
+        persistent_workers: bool,
+        dataset_lengths: List[int], 
         window: Optional[int] = 16, # number of steps looking into the future from current time-steps
         robots: Optional[List[str]] = None, 
         tasks: Optional[List[str]] = None, 
         depth: Optional[bool] = True, # if depth maps are included or not  
         expand_depth: Optional[str] = None, # grayscale, colormap 
-        batch_size: int = 16, 
-        shuffle: bool = False, 
-        num_workers: int = 32, 
-        pin_memory: bool = True, 
-        persisent_workers: bool = True,
         *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__()
         
         # data kwargs
         self.data_dir = data_dir
@@ -37,10 +38,11 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         
         # dataloading kwargs
         self.batch_size = batch_size 
-        self.shuffle = shuffle 
+        self.shuffle = shuffle
         self.num_workers = num_workers
         self.pin_memory = pin_memory
-        self.persisent_workers = persisent_workers
+        self.persistent_workers = persistent_workers
+        self.dataset_lengths = dataset_lengths
 
         all_files = [file for file in os.listdir(self.data_dir) if ("depth" in file) == self.depth]
         all_robots = list(set(f.split(".")[-2].split("_")[-1] for f in all_files)) # no given robot -> all robots
@@ -51,10 +53,11 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.files = [os.path.join(data_dir, file) for file in all_files if (robot in file for robot in self.robots) and (task in file for task in self.tasks)]
         
         self.meta_data = self._get_metadata()
-        self.demo_map = self._get_demodata()
-        self.train_dataset, self.val_dataset = self.setup()
+        self.demo_map = self._get_demomap()
+        self.train_dataset, self.val_dataset, self.test_dataset = self.setup()
         
         self.n_samples_per_epoch = len(self.demo_map)
+    
         
     def _filtered_or_all(self, selected, available):
         if selected is None:
@@ -81,8 +84,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         df.to_csv(meta_path, index=False)
         return df 
     
-    def _get_demodata(self) -> Tuple[List[List[os.PathLike, int, int, None]], int]: 
-        H = np.inf # H: min. episode duration -> max. possible window size
+    def _get_demomap(self): # -> List[List[os.PathLike, int, int, None]]: 
+        H = np.inf # H: min episode duration -> max possible window size
         demo_map = []
         
         for file in self.files: 
@@ -92,44 +95,53 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                     len_episode = data[demo]["actions"][()].shape[0]
                     if len_episode < H:
                         H = len_episode
-                    demo_map.append([file, demo, len_episode, None])
+                    demo_map.append([file, demo, len_episode])
         
-        if H > self.window: 
+        if H < self.window: 
             print(f"The chosen size of the window is bigger than the smallest episode length! \n \
                   Therefore, the size of the window gets changed from {self.window} to {H}.")
             self.window = H
+        
         return demo_map
         
-    def setup(self, stage=None) -> Tuple[DataLoader, DataLoader]:
+    def setup(self, stage=None) -> Tuple[Dataset, Dataset, Dataset]:
         dataset = MimicGenRobotDataset(
-            self.files, 
-            self.demo_map,
-            self.window, 
-            self.depth, 
-            self.expand_depth, 
-            self.window
+            files=self.files, 
+            demo_map=self.demo_map,
+            window=self.window,
+            expand_depth=self.expand_depth
             )
         
-        train_dataset, val_dataset = random_split(dataset, lengths=self.dataset_lengths)
-        return train_dataset, val_dataset
+        train_dataset, val_dataset, test_dataset = random_split(dataset, lengths=self.dataset_lengths)
+        return train_dataset, val_dataset, test_dataset
     
     def train_dataloader(self):
         train_dataloader = DataLoader(
-            self.train_dataset, 
-            self.batch_size, 
-            self.shuffle, 
-            self.num_workers, 
-            self.pin_memory, 
-            self.persisent_workers
+            dataset=self.train_dataset, 
+            batch_size=self.batch_size, 
+            shuffle=self.shuffle,    
+            num_workers=self.num_workers,      
+            pin_memory=self.pin_memory, 
+            persistent_workers=self.persistent_workers, 
             )
         return train_dataloader
     
     def val_dataloader(self):
         val_dataloader = DataLoader(
-            self.val_dataset, 
-            self.batch_size, 
-            self.num_workers, 
-            self.pin_memory, 
-            self.persisent_workers
+            dataset=self.val_dataset, 
+            batch_size=self.batch_size, 
+            num_workers=self.num_workers, 
+            pin_memory=self.pin_memory, 
+            persistent_workers=self.persistent_workers, 
             )
         return val_dataloader
+    
+    def test_dataloader(self):
+        test_dataloader = DataLoader(
+            dataset=self.test_dataset, 
+            batch_size=self.batch_size, 
+            num_workers=self.num_workers, 
+            pin_memory=self.pin_memory, 
+            persistent_workers=self.persistent_workers,
+            )
+        return test_dataloader
