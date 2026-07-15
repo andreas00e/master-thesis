@@ -1,6 +1,9 @@
-file_dir: ~/ehrensberger/master-thesis/mimicgen/datasets/robot
+file_dir: ~/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
+data_path: ~/ehrensberger/master-thesis/thesis/data/files/depths.csv
+
 with_depth: True
+
 functions: 
-#  - anotate_file
+#  - anotate_files 
   - get_depth_limits 
-#  - get_n_actions 
+#  - get_n_actions
