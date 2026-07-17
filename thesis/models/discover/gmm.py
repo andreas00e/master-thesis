@@ -125,7 +125,7 @@ class GMM(nn.Module):
         d = torch.exp(self.sim(x, x_positive) / self.tau) + weight * torch.exp(self.sim(x, x_negative)) # [n]
         n = torch.exp(self.sim(x, x_positive) / self.tau) # [n]
         
-        loss_cl = - torch.log(n / torch.sum(d)) # [1]        return loss_cl
+        loss_cl = - torch.log(n / torch.sum(d)) # [1] 
         return loss_cl 
     
     def _false_negatives(self, x: TensorType["n", "d"], x_positive: TensorType["n", "d"]) -> TensorType["n", "d"]:
@@ -172,9 +172,20 @@ class GMM(nn.Module):
 
         return loss_bml
     
-    def _entropy(self): 
-    
-        return None 
+    def _entropy(self, x: TensorType["*"]) -> None: 
+        probs = self._posterior(x) # [n, k]
+        idxs = torch.argmax(probs, dim=-1) # [n, k]
+        
+        probs = probs[torch.arange(100), idxs] # [n, k]
+        probs = probs * torch.log(probs) # [n, k]
+        
+        unique_elements, inverse_indices = torch.unique(idxs, return_inverse=True)
+        output_tensor = torch.zeros(size=(unique_elements.shape[0], ))
+        
+        out = torch.zeros(size=(self.k, ))
+        out[unique_elements] = - torch.scatter_add(output_tensor, 0, inverse_indices, probs)
+        E_k = out 
+        return E_k
     
     def _zero_posterior_update(self, x: TensorType["*"]) -> None:
         probs = self._posterior(x) # [n, k]
@@ -215,7 +226,7 @@ def main():
     x_positive = torch.rand(size=(n, d))
     
     gmm = GMM(**gmm_kwargs)
-    loss = gmm._zero_posterior_update(x)
+    loss = gmm._entropy(x)
     print("FINISHED!")
 
 if __name__ == "__main__": 
