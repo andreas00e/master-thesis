@@ -187,8 +187,7 @@ def main():
     x_positive = torch.rand(size=(n, d))
     
     gmm = GMM(**gmm_kwargs)
-    
-    gmm.hard_negatives(x, x_positive)
+    loss = gmm.self(x, x_positive)
     
     print("FINISHED!")
 
