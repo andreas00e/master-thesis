@@ -103,7 +103,7 @@ class GMM(nn.Module):
         idxs_i_s = idxs_i[:, 1] # [n, 1]: indices of 2nd biggest posterior probabilities
         return probs_i_m, probs_i_s, idxs_i_m, idxs_i_s
     
-    def hard_negatives(self, x: TensorType["n", "d"], x_positive: TensorType["n", "d"]) -> TensorType["n", "d"]: 
+    def _hard_negatives(self, x: TensorType["n", "d"], x_positive: TensorType["n", "d"]) -> TensorType["n", "d"]: 
         probs = self._posterior(x) # [n, k]: k posterior probabilites
         probs_i_m, probs_i_s, idxs_i_m, idxs_i_s = self._get_m_s(probs)
          
@@ -128,16 +128,18 @@ class GMM(nn.Module):
         loss_cl = - torch.log(n / torch.sum(d)) # [1]        return loss_cl
         return loss_cl 
     
-    def false_negatives(self, x: TensorType["n", "d"], x_positive: TensorType["n", "d"]) -> TensorType["n", "d"]:
-        probs = self.posterior(x) # [n, k]: k posterior probabilites
-        probs_i_s, probs_i_m, _, _ = self.posterior_m_s(probs)
+    def _false_negatives(self, x: TensorType["n", "d"], x_positive: TensorType["n", "d"]) -> TensorType["n", "d"]:
+        n = x.shape[0]
+        
+        probs = self._posterior(x) # [n, k]: k posterior probabilites
+        probs_i_s, probs_i_m, _, _ = self._get_m_s(probs)
         probs_i = torch.topk(probs, k=2, dim=-1).values # [n, 2]: top 2 biggest posterior probabilities 
         probs_i_m = probs_i[:, 0] # [n, 1]: biggest posterior probabilities (p_max)
         probs_i_s = probs_i[:, 1] # [n, 1]: 2nd biggest posterior probabilities
         
         idxs = torch.argmax(probs, dim=-1) # [n]: dimension of biggest posterior probabilities
         idxs = idxs.unsqueeze(1) == idxs.unsqueeze(0) # [n, n] 
-        mask_idxs = ~torch.eye(x.shape[0], dtype=torch.bool) # [n, n]
+        mask_idxs = ~torch.eye(n, dtype=torch.bool) # [n, n]
         idxs &= mask_idxs # [n, n-1] # each rows is all x_j^m whose p_max is the same as x_i's p_max
         rows_idxs, cols_idxs = torch.nonzero(idxs, as_tuple=True) 
 
@@ -147,7 +149,7 @@ class GMM(nn.Module):
         probs_i_s = probs_i_s[rows_idxs, ...] # [..., 1]: x_i's (relevant) second biggest posterior probabilities
         
         weight = torch.sigmoid(torch.abs(probs_i_s - probs_j_s)) * torch.sigmoid(torch.abs(probs_i_m - probs_j_m))
-        _, inverse_indices = torch.unique(rows_idxs, return_inverse=True)
+        unique_elements, inverse_indices = torch.unique(rows_idxs, return_inverse=True)
         counts = torch.zeros(size=(torch.unique(rows_idxs).numel(),))
         counts = torch.scatter_add(counts, 0, inverse_indices, torch.ones_like(weight))
         output_tensor = torch.zeros(size=(torch.unique(rows_idxs).numel(), ))
@@ -160,14 +162,31 @@ class GMM(nn.Module):
         x_positive = x_positive[rows_idxs, ...]
         delta = self.sim(x, x_j) - self.sim(x, x_positive) 
         
-        loss_bm = weight / weight_avg * (self.relu(delta + self.alpha) + (self.relu(-delta - self.beta)))
-        return loss_bm
-    
-    def forward(self, x) -> float:
-        x = x[:, 0, :]
-        x_positive = x[:, 1, :]
-        return self.hard_negatives(x, x_positive) + self.lam * self.false_negatives(x, x_positive)
+        loss_bml = weight / weight_avg * (self.relu(delta + self.alpha) + (self.relu(-delta - self.beta)))
+        loss_bml = torch.scatter_add(output_tensor, 0, inverse_indices, loss_bml)
+        
+        if unique_elements.shape != n: 
+            out = torch.zeros(size=(n, ))
+            out[unique_elements] = loss_bml
+            loss_bml = out 
 
+        return loss_bml
+    
+    
+    def zero_posterior_update(self): 
+        pass 
+
+    def first_posterior_update(self): 
+        pass 
+
+    def second_posterior_update(self): 
+        pass 
+    
+    def forward(self, x, x_positive) -> float:
+        loss_cl = self._hard_negatives(x, x_positive) 
+        loss_bml = self._false_negatives(x, x_positive)
+        return loss_cl + self.lam * loss_bml 
+    
 def main():
     n = 100 
     d = 8
@@ -187,7 +206,7 @@ def main():
     x_positive = torch.rand(size=(n, d))
     
     gmm = GMM(**gmm_kwargs)
-    loss = gmm.self(x, x_positive)
+    loss = gmm(x, x_positive)
     
     print("FINISHED!")
 
