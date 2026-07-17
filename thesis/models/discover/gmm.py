@@ -59,6 +59,7 @@ class GMM(nn.Module):
         
         # Cholesky decomposition
         _, info = cholesky_ex(A)
+        
         return bool(torch.all(info == 0))
    
     def to_pos_definite(self, A: TensorType["k", "d", "d"]) -> TensorType["k", "d", "d"]: 
@@ -70,6 +71,7 @@ class GMM(nn.Module):
         eps = torch.abs(torch.amin(eigenvals, dim=-1, keepdim=True)) * 1.1 + 1e-6
         eigenvals = torch.where(eigenvals <= 0, eps, eigenvals)
         A = eigenvecs @ torch.diag_embed(eigenvals) @ eigenvecs.transpose(-1, -2)
+        
         return A  
 
     def confidence(self, x: TensorType["n", "d"]) -> TensorType["n"]: 
@@ -91,6 +93,7 @@ class GMM(nn.Module):
         log_probs = self.components.log_prob(x.unsqueeze(1))  # [n, k], unweighted log-density
         log_joint = log_probs + log_weights  # [n, k]: log(w_k * N(x|mu_k,Sigma_k))
         log_posterior = log_joint - torch.logsumexp(log_joint, dim=-1, keepdim=True)  # normalize over k
+        
         return log_posterior.exp()  # [n, k]: true p_{i,k}
     
     def _get_m_s(self, p: TensorType["n", "k"]) -> TensorType["n", "2"]:
@@ -99,6 +102,7 @@ class GMM(nn.Module):
         probs_i_s = probs_i[:, 1] # [n, 1]: 2nd biggest posterior probabilities
         idxs_i_m = idxs_i[:, 0] # [n, 1]: indices of biggest posterior probabilities (p_max)
         idxs_i_s = idxs_i[:, 1] # [n, 1]: indices of 2nd biggest posterior probabilities
+        
         return probs_i_m, probs_i_s, idxs_i_m, idxs_i_s
     
     def _hard_negatives(self, x: TensorType["n", "d"], x_positive: TensorType["n", "d"]) -> TensorType["n", "d"]: 
@@ -124,6 +128,7 @@ class GMM(nn.Module):
         n = torch.exp(self.sim(x, x_positive) / self.tau) # [n]
         
         loss_cl = - torch.log(n / torch.sum(d)) # [1] 
+        
         return loss_cl 
     
     def _false_negatives(self, x: TensorType["n", "d"], x_positive: TensorType["n", "d"]) -> TensorType["n", "d"]:
@@ -182,17 +187,19 @@ class GMM(nn.Module):
         
         E_k = torch.zeros(size=(self.k, ))
         E_k[unique_elements] = - torch.scatter_add(output_tensor, 0, inverse_indices, probs)
+        
         return E_k 
     
     def _zero_posterior_update(self, x: TensorType["*"]) -> None:
         probs = self._posterior(x) # [n, k]
         weights = self.weights[None, ...].repeat(x.shape[0], 1) # [k] -> [n, k]
         
-        n = probs * weights # [n, k]
-        d = torch.sum(n, dim=1, keepdim=True).repeat(1, weights.shape[1]) # [n, k]
-        probs = n / d
+        num = probs * weights # [n, k]
+        denom = torch.sum(num, dim=1, keepdim=True).repeat(1, weights.shape[1]) # [n, k]
+        probs = num / denom 
+        
         return probs
-
+        
     def _first_posterior_update(self, x): 
         E_k = self._entropy(x) # [k]
         
@@ -212,26 +219,46 @@ class GMM(nn.Module):
         x_max = x[idxs_max] # [count_G_max, self.d]
         
         num_means = torch.sum(torch.concat(tensors=(x_min, x_max), dim=0), dim=0)
-        denom_means = count_G_max + count_G_min
-        means = num_means / denom_means 
-        
-        num_weights = count_G_max + count_G_min
-        denom_weights = x.shape[0] - 1
-        weights =  num_weights / denom_weights 
+        means = num_means / (count_G_max + count_G_min)       
+
+        weights =  (count_G_max + count_G_min) / (x.shape[0] - 1)
 
         num_covs = (x - means)[:, :, None] * (x - means)[:, None, :] # [n, d, 1] * [n, 1, d] -> [n, d, d]
-        num_covs = torch.sum(num_covs, dim=0) # 
-        denom_covs = count_G_max + count_G_min
-        covs = num_covs / denom_covs 
+        num_covs = torch.sum(num_covs, dim=0)  
+        covs = num_covs / (count_G_max + count_G_min)
         
         return weights, means, covs 
 
-    def second_posterior_update(self): 
-        return None 
+    def _second_posterior_update(self, x): 
+        E_k = self._entropy(x) # [k]
+        
+        G_min = torch.argmin(E_k) # [1]: distribution with the largest entropy
+        G_max = torch.argmax(E_k) # [1]: distribution with the smallest entropy
+
+        probs = self._posterior(x) # [n, k]: k posterior probabilities
+        idxs = torch.argmax(probs, dim=-1) # [n]
+        
+        idxs_min = torch.nonzero(G_min == idxs) 
+        idxs_max = torch.nonzero(G_max == idxs) 
+        
+        count_G_max = idxs_max.shape[0]
+        
+        x_min = x[idxs_min]
+        
+        weights = count_G_max / x.shape[0]
+        
+        means = torch.sum(x_min, dim=0) / count_G_max
+        
+        num_covs = (x - means)[:, :, None] * (x - means)[:, None, :] # [n, d, 1] * [n, 1, d] -> [n, d, d]
+        num_covs = torch.sum(num_covs, dim=0) 
+        covs = num_covs / count_G_max  
+        
+        return weights, means, covs 
     
     def forward(self, x, x_positive) -> float:
         loss_cl = self._hard_negatives(x, x_positive) 
         loss_bml = self._false_negatives(x, x_positive)
+        
         return loss_cl + self.lam * loss_bml 
     
 def main():
@@ -253,7 +280,7 @@ def main():
     x_positive = torch.rand(size=(n, d))
     
     gmm = GMM(**gmm_kwargs)
-    loss = gmm._first_posterior_update(x)
+    loss = gmm._second_posterior_update(x)
     print("FINISHED!")
 
 if __name__ == "__main__": 
