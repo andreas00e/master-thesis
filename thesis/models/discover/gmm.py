@@ -6,8 +6,6 @@ import torch.distributions as D
 from torchtyping import TensorType
 from torch.linalg import cholesky_ex, eigh
 
-import lightning as pl 
-
 
 class GMM(nn.Module): 
     def __init__(
@@ -182,10 +180,9 @@ class GMM(nn.Module):
         unique_elements, inverse_indices = torch.unique(idxs, return_inverse=True)
         output_tensor = torch.zeros(size=(unique_elements.shape[0], ))
         
-        out = torch.zeros(size=(self.k, ))
-        out[unique_elements] = - torch.scatter_add(output_tensor, 0, inverse_indices, probs)
-        E_k = out 
-        return E_k
+        E_k = torch.zeros(size=(self.k, ))
+        E_k[unique_elements] = - torch.scatter_add(output_tensor, 0, inverse_indices, probs)
+        return E_k 
     
     def _zero_posterior_update(self, x: TensorType["*"]) -> None:
         probs = self._posterior(x) # [n, k]
@@ -196,8 +193,38 @@ class GMM(nn.Module):
         probs = n / d
         return probs
 
-    def first_posterior_update(self): 
-        return None 
+    def _first_posterior_update(self, x): 
+        E_k = self._entropy(x) # [k]
+        
+        G_min = torch.argmin(E_k) # [1]: distribution with the largest entropy
+        G_max = torch.argmax(E_k) # [1]: distribution with the smallest entropy
+
+        probs = self._posterior(x) # [n, k]: k posterior probabilities
+        idxs = torch.argmax(probs, dim=-1) # [n]
+        
+        idxs_min = torch.nonzero(G_min == idxs) 
+        idxs_max = torch.nonzero(G_max == idxs) 
+        
+        count_G_min = idxs_min.shape[0]
+        count_G_max = idxs_max.shape[0]
+        
+        x_min = x[idxs_min] # [count_G_min, self.d]
+        x_max = x[idxs_max] # [count_G_max, self.d]
+        
+        num_means = torch.sum(torch.concat(tensors=(x_min, x_max), dim=0), dim=0)
+        denom_means = count_G_max + count_G_min
+        means = num_means / denom_means 
+        
+        num_weights = count_G_max + count_G_min
+        denom_weights = x.shape[0] - 1
+        weights =  num_weights / denom_weights 
+
+        num_covs = (x - means)[:, :, None] * (x - means)[:, None, :] # [n, d, 1] * [n, 1, d] -> [n, d, d]
+        num_covs = torch.sum(num_covs, dim=0) # 
+        denom_covs = count_G_max + count_G_min
+        covs = num_covs / denom_covs 
+        
+        return weights, means, covs 
 
     def second_posterior_update(self): 
         return None 
@@ -226,7 +253,7 @@ def main():
     x_positive = torch.rand(size=(n, d))
     
     gmm = GMM(**gmm_kwargs)
-    loss = gmm._entropy(x)
+    loss = gmm._first_posterior_update(x)
     print("FINISHED!")
 
 if __name__ == "__main__": 
