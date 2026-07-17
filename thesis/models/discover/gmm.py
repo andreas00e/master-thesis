@@ -172,15 +172,24 @@ class GMM(nn.Module):
 
         return loss_bml
     
+    def _entropy(self): 
     
-    def zero_posterior_update(self): 
-        pass 
+        return None 
+    
+    def _zero_posterior_update(self, x: TensorType["*"]) -> None:
+        probs = self._posterior(x) # [n, k]
+        weights = self.weights[None, ...].repeat(x.shape[0], 1) # [k] -> [n, k]
+        
+        n = probs * weights # [n, k]
+        d = torch.sum(n, dim=1, keepdim=True).repeat(1, weights.shape[1]) # [n, k]
+        probs = n / d
+        return probs
 
     def first_posterior_update(self): 
-        pass 
+        return None 
 
     def second_posterior_update(self): 
-        pass 
+        return None 
     
     def forward(self, x, x_positive) -> float:
         loss_cl = self._hard_negatives(x, x_positive) 
@@ -206,8 +215,7 @@ def main():
     x_positive = torch.rand(size=(n, d))
     
     gmm = GMM(**gmm_kwargs)
-    loss = gmm(x, x_positive)
-    
+    loss = gmm._zero_posterior_update(x)
     print("FINISHED!")
 
 if __name__ == "__main__": 
