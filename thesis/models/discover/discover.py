@@ -1,9 +1,9 @@
 import lightning as pl 
-
 from typing import Dict
 
-from .visionBackbone import VisionBackbone
 from .gmm import GMM 
+from models.discover.visionBackbone import VisionBackbone
+
 
 class SkillDiscovery(pl.LightningModule): 
     def __init__(

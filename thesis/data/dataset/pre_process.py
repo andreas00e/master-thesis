@@ -3,8 +3,8 @@ import sys
 import h5py
 import hydra
 import numpy as np
+import pandas as pd
 from tqdm import tqdm 
-from collections import defaultdict
 from typing import Callable, Dict, List, Tuple, Union
 
 from mpi4py import MPI 
@@ -93,10 +93,14 @@ def main(cfg):
     
     if rank == root: 
         file_dir = os.path.expanduser(cfg.file_dir)
-        files = [os.path.join(file_dir, file) for file in os.listdir(file_dir) if ("depth" in file) == cfg.with_depth]
+        files = [os.path.join(file_dir, file) for file in os.listdir(file_dir) if ("depth" in file) == cfg.with_depth][:2]
+        
         n_files = len(files)
-        final_dict = (zip(files, [defaultdict]*n_files))
+        final_dict = dict(zip(files, [{}]*n_files))
+        print(final_dict)
+        exit()
         print("LET'S GET THIS PASSING STARTED!")
+        
     else: 
         files = None 
         n_files = None
@@ -126,12 +130,15 @@ def main(cfg):
             metric_name = None
             
         local_metrics = handle_files(function=function_name, files=local_files)   
+        print(f"Type of local_metrics: {local_metrics}")
+        print(f"Local metric: {local_metrics}")
         for file in local_files: 
             final_dict[file][metric_name] = local_metrics[file]
         
         final_metric = comm.gather(local_metrics, root=0)
         if rank == 0: 
             print(final_metric)
+
         
 if __name__ == "__main__": 
     main() 

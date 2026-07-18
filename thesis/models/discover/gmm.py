@@ -280,7 +280,7 @@ def main():
     x_positive = torch.rand(size=(n, d))
     
     gmm = GMM(**gmm_kwargs)
-    loss = gmm._second_posterior_update(x)
+    loss = gmm._hard_negatives(x, x_positive)
     print("FINISHED!")
 
 if __name__ == "__main__": 

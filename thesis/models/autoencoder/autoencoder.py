@@ -7,8 +7,8 @@ from transformers import BertTokenizer, BertModel
 from diffusers.optimization import get_cosine_schedule_with_warmup
 
 import lightning.pytorch as pl
-
-from RoLD.models.common import SinusoidalPosEmb, get_pe, WrappedTransformerEncoder, WrappedTransformerDecoder, ResBottleneck
+ 
+from RoLD.models.common  import SinusoidalPosEmb, get_pe, WrappedTransformerEncoder, WrappedTransformerDecoder, ResBottleneck
 
 from models.vision.vision import VisionCombiner
 from models.autoencoder.common import DiagonalGaussianDistribution, AutoencoderLoss

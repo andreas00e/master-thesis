@@ -20,8 +20,8 @@ data:
     tasks: 
       - stack
     robots: ~
-    action_horizon: 16 # number of actions to be predicted 
-    image_horizon: 10 # number of images passed to the VAE
+    # action_horizon: 16 # number of actions to be predicted 
+    # image_horizon: 10 # number of images passed to the VAE
     expand_depth: colormap 
 
 model:
@@ -40,12 +40,12 @@ model:
     with_language: True
     language_model: bert.bert-base-uncased
     image_model: r3m.resnet18
-    ckpt_path: None 
+    ckpt_path: ~ 
 
   training_kwargs:
     lr: 1e-4
     warmup_steps: 1000
-    num_training_steps: None 
+    num_training_steps: ~ 
 
     loss_kwargs:
       kl_weight: 1e-2
@@ -84,7 +84,7 @@ callbacks:
       description: green_yellow
       progress_bar: green1
       progress_bar_finished: green1
-      progress_bar_puls: 6206E0
+      progress_bar_pulse: 6206E0
       batch_progress: green_yellow
       time: grey82
       processing_speed: grey82
@@ -92,12 +92,3 @@ callbacks:
       metrics_text_delimiter: \n
       metrics_format: .3e
    
-trainer: 
-  devices:
-    - 0 
-    - 1 
-    - 2 
-    - 3
-  default_root_dir: logs 
-  max_epochs: 400 
-  profiler: simple 

@@ -38,6 +38,9 @@ model:
     d: 4
     alpha: 0.1
     beta: 0.2
+    sim: 
+      dim: 1  
+      eps: 1e-6
     weights: ~
     means: ~
     covs: ~

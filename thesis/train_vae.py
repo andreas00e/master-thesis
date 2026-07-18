@@ -13,7 +13,7 @@ from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBarTheme
 from lightning.pytorch.callbacks import DeviceStatsMonitor, EarlyStopping, ModelCheckpoint, RichProgressBar
 
-from data.mimicgen.data_mimicgen import MimicgenDataset
+from data.discover.dataset import MimicgenDataset
 from models.autoencoder.autoencoder import DownsampleCVAE
 
 # Suppress all unwanted tensorflow INFO, WARNING, and ERRORS messages

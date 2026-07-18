@@ -27,10 +27,13 @@ TRANSFORMS = {
             threshold=0.5, 
             p=random.choice([0.2, 0.5]), 
             ),     
+        
+    "rotate": 
+        v2.RandomRotation((-45, 45))
 }
 
 def get_transforms(transforms: List[str]) -> Sequence[Callable]: 
     transforms = [TRANSFORMS[k] for k in transforms]
-    transforms = nn.Compose(*transforms)
+    transforms =[*nn.Sequential(*transforms)]
     
     return transforms

@@ -129,8 +129,8 @@ class VisionCombiner(nn.Module):
 class VisionEmbedder(pl.LightningModule): 
     def __init__(self, weights_path: os.PathLike): 
         super().__init__()
-        self.weights_path = weights_path
         
+        self.weights_path = weights_path
         if "r3m" in self.weights_path: 
             self.model = load_r3m
         else: 
@@ -141,14 +141,15 @@ class VisionEmbedder(pl.LightningModule):
     #     self.trainer.datamodule.dataset.set_epoch(epoch) 
     
     def forward(self, x): 
-        x = x.view(-1, *x.shape[2:]) # [B*horizon, H, W, C=3]
-        x = x.permute(0, 3, 1, 2) # [B*horizon, C=3, H, W]
-        x = self.model(x) # [B*horizon, hidden_dim]
+        x = x.view(-1, *x.shape[2:]) # [batch*window, height, width, channels=3]
+        x = x.permute(0, 3, 1, 2) # [batch*window, channels=3, height, width]
+        x = self.model(x) # [batch*window, hidden_dim]
         return x
 
-    def test_step(self, batch, batch_idx): 
-        rgb_obs, depth_obs, files = batch.values() # [B, horizon, hidden_dim, H, W, C=3]
-        x = self(rgb_obs) # [B*horizon, hidden_dim]
-        x = x.view(*rgb_obs.shape[:2], -1) # [B, horizon, hidden_dim]
-        x = torch.mean(x, dim=1) # [B, hidden_dim]
+    def test_step(self, batch, batch_idx):
+        rgb_obs, files = batch.values() # [batch, window, height, width, C=3]
+        x = self(rgb_obs) # [batch*window, hidden_dim]
+        x = x.view(*rgb_obs.shape[:2], -1) # [batch, window, hidden_dim]
+        x = torch.mean(x, dim=1) # [batch, hidden_dim]
+        print(x.shape)
         return x, files
