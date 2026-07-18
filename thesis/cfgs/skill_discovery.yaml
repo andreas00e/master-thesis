@@ -1,0 +1,57 @@
+seed: 42
+data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
+meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
+
+data: 
+  datamodule: 
+    data_dir: ${data_dir}
+    meta_dir: ${meta_dir}
+    window: 8 
+    robots: ~
+    tasks: ~
+    expand_depth: colormap 
+
+    batch_size: 16
+    shuffle: True
+    num_workers: 32 
+    pin_memory: True
+    drop_last: True
+    persistent_workers: True 
+    dataset_lengths: 
+    - 0.8
+    - 0.1  
+    - 0.1 
+
+    transforms: 
+      - grayscale
+      - gaussian_blur
+      - color_jitter 
+      - solarize
+      - rotate 
+
+model: 
+  vision_backbone: 
+    weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/resNet18_Weights_DEFAULT.pth
+  
+  gmm: 
+    k: 20 
+    d: 4
+    alpha: 0.1
+    beta: 0.2
+    weights: ~
+    means: ~
+    covs: ~
+
+trainer: 
+  accelerator: cuda    
+  devices: 
+    - 0
+  default_root_dir: logs 
+  max_epochs: 400 
+  profiler: simple 
+
+TSNE: 
+  n_components: 2 
+  perplexity: 25
+  learning_rate: auto
+  init: pca
