@@ -1,5 +1,6 @@
-imports/
-sim/
+imports**
+../imports/
+../sim/
 
 .vscode/
 
@@ -9,4 +10,3 @@ outputs/
 requirements.txt
 
 **/__pychache__
-**/lightning_logs/
