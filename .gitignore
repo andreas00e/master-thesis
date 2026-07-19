@@ -1,0 +1,9 @@
+vscode/
+logs/
+notebooks/
+outputs/
+
+import.log
+requirements.txt
+
+**/__pycache__/
