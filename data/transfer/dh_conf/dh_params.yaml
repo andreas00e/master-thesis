@@ -1,0 +1,6 @@
+defaults:
+  - iiwa
+  - panda
+  - sawyer
+  - ur5e
+  - _self_
