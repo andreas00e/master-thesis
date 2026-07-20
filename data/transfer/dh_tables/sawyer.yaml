@@ -1,0 +1,29 @@
+# Denavit-Hartenberg (DH) parameters for the Rethink Robotics Sawyer
+# Every joint is a revolute joint => \theta_i are the joint variables 
+
+d: 
+  - 0.317
+  - 0.0 
+  - 0.400
+  - 0.0
+  - 0.374
+  - 0.0
+  - 0.1685
+
+a: 
+  - 0.081
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+
+alpha: 
+  - -${pi}$/2 
+  - ${pi}$/2
+  - -${pi}$/2
+  - ${pi}$/2
+  - -${pi}$/2
+  - ${pi}$/2 
+  - 0.0
