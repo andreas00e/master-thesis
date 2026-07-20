@@ -1,7 +1,7 @@
 import lightning as pl 
 from typing import Dict
 
-from .gmm import GMM 
+from ..discover.gmm import GMM 
 from models.discover.visionBackbone import VisionBackbone
 
 
@@ -19,7 +19,7 @@ class SkillDiscovery(pl.LightningModule):
         self.visionBackone = VisionBackbone(**vision_backbone)
         self.gmm = GMM(**gmm)        
         
-    def forward(self, x ): 
+    def forward(self, x): 
         x = self.visionBackbone(x) 
         return x 
  
