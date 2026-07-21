@@ -61,7 +61,6 @@ class JointAttentionEncoder(nn.Module):
         
         return emb 
     
-    
     def training_step(self, batch: TensorType["*"], batch_idx: TensorType["*"]) -> TensorType["*"]:
         joint_description, joint_observation = batch.values()
         emb = self.forward(joint_description, joint_observation)

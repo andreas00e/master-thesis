@@ -1,26 +1,30 @@
-import lightning as pl 
 from typing import Dict
 
-from ..discover.gmm import GMM 
+import lightning as pl 
+
+from models.discover.gmm import GMM 
 from models.discover.visionBackbone import VisionBackbone
+from models.discover.visionEncoder import VisionEncoder
 
 
 class SkillDiscovery(pl.LightningModule): 
     def __init__(
         self, 
-        vision_backbone: Dict, 
-        gmm: Dict, 
-        *args, **kwargs
+        vision_backbone_kwargs: Dict, 
+        vision_encoder_kwargs: Dict, 
+        gmm_kwargs: Dict
         ) -> None:
         
         super().__init__()
         self.save_hyperparameters() 
-        
-        self.visionBackone = VisionBackbone(**vision_backbone)
-        self.gmm = GMM(**gmm)        
+                
+        self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
+        self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
+        self.gmm = GMM(**gmm_kwargs)      
         
     def forward(self, x): 
         x = self.visionBackbone(x) 
+        x = self.visionEncoder(x)
         return x 
  
     def _shared_step(self, batch): 

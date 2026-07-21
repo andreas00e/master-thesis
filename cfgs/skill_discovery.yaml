@@ -30,10 +30,17 @@ data:
       - rotate 
 
 model: 
-  vision_backbone: 
+  vision_backbone_kwargs: 
     weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/resNet18_Weights_DEFAULT.pth
   
-  gmm: 
+  vision_encoder_kwargs: 
+    encoder_layer_kwargs: 
+      d_model: 1000 
+      nhead: 1 
+    transformer_encoder_kwargs:
+      num_layers: 1
+    
+  gmm_kwargs: 
     k: 20 
     d: 4
     alpha: 0.1
