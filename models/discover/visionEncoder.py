@@ -9,7 +9,7 @@ class EncoderLayer(nn.TransformerEncoderLayer):
         self,
         d_model,
         nhead,
-        dim_feedforward = 2048,
+        dim_feedforward = 1000,
         dropout = 0.1,
         activation = F.relu,
         layer_norm_eps = 1e-5,
@@ -34,7 +34,7 @@ class EncoderLayer(nn.TransformerEncoderLayer):
             dtype = dtype,
         )
         
-    def forward(self, src, src_mask = None, src_key_padding_mask = None, is_causal = False) -> TensorType["*"]:
+    def forward(self, src, src_mask = None, src_key_padding_mask = None, is_causal = False):
         return super().forward(src, src_mask, src_key_padding_mask, is_causal)
         
 class TransformerEncoder(nn.TransformerEncoder): 
@@ -55,7 +55,7 @@ class TransformerEncoder(nn.TransformerEncoder):
             mask_check = mask_check
         )
     
-    def forward(self, src, mask = None, src_key_padding_mask = None, is_causal = None) -> TensorType["*"]:
+    def forward(self, src, mask = None, src_key_padding_mask = None, is_causal = None):
         return super().forward(src, mask, src_key_padding_mask, is_causal)
 
 class VisionEncoder(nn.Module): 
@@ -66,9 +66,6 @@ class VisionEncoder(nn.Module):
         ) -> None:
         super().__init__()
         
-        print(encoder_layer_kwargs)
-        print(transformer_encoder_kwargs)
-
         self.encoder_layer_kwargs = encoder_layer_kwargs 
         self.transformer_encoder_kwargs = transformer_encoder_kwargs 
         
@@ -78,16 +75,16 @@ class VisionEncoder(nn.Module):
             **self.transformer_encoder_kwargs
             )
         self.linear_layer = nn.Linear(
-            in_features = self.encoder_layer_kwargs.d_model, 
+            in_features = self.encoder_layer.linear1.out_features * 2, 
             out_features = self.encoder_layer.linear1.out_features
             )
         
-        self.cls = nn.Parameter(data=torch.ones(size=(1, 1, self.encoder_layer.linear1.out_features)), dtype=torch.float32)
+        self.cls = nn.Parameter(data=torch.ones(size=(1, 1, self.encoder_layer.linear1.out_features)))
     
     def forward(self, x): 
-        x = self.linear_layer(x) # [batch, window, hidden_dim] -> [batch, window, d_model]
-        self.cls = torch.repeat(self.cls, x.shape[0]) 
-        x = torch.concat(tensors=(self.cls, x), dim=1) # [batch, window, d_model] -> [batch, 1 + window, d_model]
-        x = self.encoder_transformer(x) # [batch, 1 + window, d_model] -> [batch, 1 + window, d_model]
-        x = x[:, 0, :] # [batch, 1 + window, d_model] -> [batch, d_model]
+        x = self.linear_layer(x) # [batch, window, hidden_dim / 2]
+        cls = self.cls.repeat(x.shape[0], 1, 1) # [batch, 1, hidden_dim / 2)]
+        x = torch.concat(tensors=(cls, x), dim=1) # [batch, 1 + window, hidden_dim / ]
+        x = self.encoder_transformer(x) # [batch, 1 + window, d_model]
+        x = x[:, 0, :] # [batch, d_model]
         return x 

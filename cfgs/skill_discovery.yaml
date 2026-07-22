@@ -7,20 +7,20 @@ data:
     data_dir: ${data_dir}
     meta_dir: ${meta_dir}
     window: 8 
-    robots: ~
-    tasks: ~
+    robots: panda
+    tasks: threading
     expand_depth: colormap 
 
-    batch_size: 16
+    batch_size: 1
     shuffle: True
     num_workers: 32 
     pin_memory: True
     drop_last: True
     persistent_workers: True 
     dataset_lengths: 
-    - 0.8
-    - 0.1  
-    - 0.1 
+    - 0.98
+    - 0.01  
+    - 0.01 
 
     transforms: 
       - grayscale
@@ -35,8 +35,9 @@ model:
   
   vision_encoder_kwargs: 
     encoder_layer_kwargs: 
-      d_model: 1000 
+      d_model: 512 
       nhead: 1 
+      dim_feedforward: 500
     transformer_encoder_kwargs:
       num_layers: 1
     

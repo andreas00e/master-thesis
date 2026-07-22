@@ -34,13 +34,13 @@ class SkillDiscovery(pl.LightningModule):
         return x, x_plus
 
     def train_step(self, batch, batch_idx): 
-        x, x_plus = self._shared_step(self, batch)
+        x, x_plus = self._shared_step(batch)
         return x, x_plus
     
     def validation_step(self, batch, batch_idx):
-        x, x_plus = self._shared_step(self, batch)
+        x, x_plus = self._shared_step(batch)
         return x, x_plus
 
     def test_step(self, batch, batch_idx): 
-        x, x_plus = self._shared_step(self, batch)
+        x, x_plus = self._shared_step(batch)
         return x, x_plus

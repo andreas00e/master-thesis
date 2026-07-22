@@ -6,8 +6,7 @@ import numpy as np
 from typing import Dict, List, Optional, Union
 
 from torch.utils.data import Dataset 
-
-from data.utility.transforms import get_transforms
+from data.discover.utility.transforms import get_transforms
 
 
 class MimicGenRobotDataset(Dataset): 
@@ -16,8 +15,8 @@ class MimicGenRobotDataset(Dataset):
         depths: pd.DataFrame,
         window: Optional[int],
         expand_depth: str, # grayscale, colormap 
-        transforms: List[str],
-        *args, **kwargs) -> None:
+        transforms: List[str]
+        ) -> None:
         super().__init__()
         
         self.demo_map = demo_map
@@ -41,8 +40,6 @@ class MimicGenRobotDataset(Dataset):
         item = {}  
         file, demo, n_steps = self.demo_map[idx] 
         task = file.split(".")[0].split("/")[-1].replace("_depth", "")
-        print(task)
-        exit() 
         idx_start = np.random.randint(0, n_steps-self.window)
         
         if file not in self.file_chache: # open file once per worker and cache it
@@ -54,8 +51,8 @@ class MimicGenRobotDataset(Dataset):
         
         rgb_obs = obs["robot0_eye_in_hand_image"][idx_start:idx_start+self.window, ...]
         rgb_obs = rgb_obs.astype(np.float32) / 255.0
-        rgb_obs = self.transforms(rgb_obs)
         rgb_obs_plus = self.transforms_plus(rgb_obs)
+        rgb_obs = self.transforms(rgb_obs)
         item["rgb_obs"] = rgb_obs
         item["rgb_obs_plus"] = rgb_obs_plus
         
