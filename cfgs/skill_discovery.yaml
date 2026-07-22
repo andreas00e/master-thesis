@@ -18,9 +18,9 @@ data:
     drop_last: True
     persistent_workers: True 
     dataset_lengths: 
-    - 0.98
-    - 0.01  
-    - 0.01 
+    - 0.8
+    - 0.1  
+    - 0.1 
 
     transforms: 
       - grayscale
@@ -35,9 +35,9 @@ model:
   
   vision_encoder_kwargs: 
     encoder_layer_kwargs: 
-      d_model: 512 
+      d_model: 500 
       nhead: 1 
-      dim_feedforward: 500
+      dim_feedforward: 1024
     transformer_encoder_kwargs:
       num_layers: 1
     

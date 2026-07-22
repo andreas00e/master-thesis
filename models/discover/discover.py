@@ -2,9 +2,9 @@ from typing import Dict
 
 import lightning as pl 
 
-from models.discover.gmm import GMM 
-from models.discover.visionBackbone import VisionBackbone
-from models.discover.visionEncoder import VisionEncoder
+from .gmm import GMM 
+from .visionBackbone import VisionBackbone
+from .visionEncoder import VisionEncoder
 
 
 class SkillDiscovery(pl.LightningModule): 
