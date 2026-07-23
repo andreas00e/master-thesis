@@ -13,7 +13,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     def __init__(self, 
         data_dir: os.PathLike, # directory containing the hdf5 trajectory files 
         meta_dir: os.PathLike, # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
-        window: Optional[int],
+        window: int,
         robots: Optional[List[str]], 
         tasks: Optional[List[str]], 
         expand_depth: Optional[str], # grayscale, colormap 
@@ -52,7 +52,9 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         
         self.robots = self._filtered_or_all(self.robots, all_robots)
         self.tasks  = self._filtered_or_all(self.tasks, all_tasks)
-        self.files = [os.path.join(data_dir, file) for file in all_files if (robot in file for robot in self.robots) and (task in file for task in self.tasks)]
+        self.files = [os.path.join(data_dir, file) for file in all_files
+            if any(robot in file for robot in self.robots)
+            and any(task in file for task in self.tasks)]
         
         self.depths = self._get_depths()
         self.metadata = self._get_metadata()
@@ -72,6 +74,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         depth_path = os.path.join(self.meta_dir, "depths.csv")
         if os.path.isfile(depth_path):
             df = pd.read_csv(depth_path)
+        else: 
+            df = pd.DataFrame()
         return df
 
     def _get_metadata(self) -> pd.DataFrame: 
@@ -85,8 +89,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             if file in df.columns:
                 continue
 
-            file_path = os.path.join(self.data_dir, file)
-            with h5py.File(file_path, "r") as hf:
+            with h5py.File(file, "r") as hf:
                 data = hf["data"]
                 demos = [data[demo]["actions"][()].shape[0] for demo in data.keys()]
             df[file] = demos
@@ -97,11 +100,11 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         H = np.inf # H: min episode duration -> max possible window size
         demo_map = []
         
-        for file in self.files: 
-            with h5py.File(file, "r") as hf: 
-                data = hf["data"]
-                for demo in data.keys(): 
-                    n_steps = data[demo]["actions"][()].shape[0]
+
+        for file in self.files:
+            with h5py.File(file, "r") as hf:
+                for demo in hf["data"].keys():
+                    n_steps = hf["data"][demo]["actions"][()].shape[0]
                     if n_steps < H:
                         H = n_steps
                     demo_map.append([file, demo, n_steps])
