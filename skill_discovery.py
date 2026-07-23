@@ -4,7 +4,7 @@ from hydra.utils import instantiate
 import lightning as pl
 
 
-@hydra.main(config_path="cfgs/", config_name="skill_discovery.yaml", version_base=None)
+@hydra.main(config_path="cfgs/", config_name="skill_discovery", version_base=None)
 def main(cfg): 
     pl.seed_everything(cfg.seed)
 

@@ -101,10 +101,10 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             with h5py.File(file, "r") as hf: 
                 data = hf["data"]
                 for demo in data.keys(): 
-                    len_episode = data[demo]["actions"][()].shape[0]
-                    if len_episode < H:
-                        H = len_episode
-                    demo_map.append([file, demo, len_episode])
+                    n_steps = data[demo]["actions"][()].shape[0]
+                    if n_steps < H:
+                        H = n_steps
+                    demo_map.append([file, demo, n_steps])
         
         if H < self.window: 
             print(f"The chosen size of the window is bigger than the smallest episode length! \n \

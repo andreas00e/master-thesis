@@ -14,14 +14,14 @@ data:
 
     batch_size: 1
     shuffle: True
-    num_workers: 32 
+    num_workers: 1 # 31
     pin_memory: True
     drop_last: True
     persistent_workers: True 
     dataset_lengths: 
-    - 0.1
+    - 0.8
     - 0.1  
-    - 0.8 
+    - 0.1 
 
     transforms: 
       - grayscale
