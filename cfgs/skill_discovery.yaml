@@ -19,9 +19,9 @@ data:
     drop_last: True
     persistent_workers: True 
     dataset_lengths: 
-    - 0.8
+    - 0.1
     - 0.1  
-    - 0.1 
+    - 0.8 
 
     transforms: 
       - grayscale
@@ -55,6 +55,13 @@ model:
     weights: ~
     means: ~
     covs: ~
+  
+  optimizer_kwargs: 
+    optimizer: 
+      lr: 1e-3
+    lr_scheduler: 
+      start_factor: 0.5 
+      total_iters: 40 
 
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger

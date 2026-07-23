@@ -13,7 +13,7 @@ def main(cfg):
     logger = instantiate(cfg.logger)
 
     trainer = pl.Trainer(logger=logger, **cfg.trainer)
-    _  = trainer.test(model=model, datamodule=datamodule)
+    trainer.fit(model=model, datamodule=datamodule)
 
 
 if __name__ == "__main__": 

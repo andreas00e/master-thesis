@@ -1,6 +1,9 @@
 import wandb
 from typing import Dict
 
+import torch
+from torchtyping import TensorType
+
 import lightning as pl 
 
 from .gmm import GMM 
@@ -13,33 +16,50 @@ class SkillDiscovery(pl.LightningModule):
         self, 
         vision_backbone_kwargs: Dict, 
         vision_encoder_kwargs: Dict, 
-        gmm_kwargs: Dict
+        gmm_kwargs: Dict,
+        optimizer_kwargs: Dict, 
         ) -> None:
         
         super().__init__()
         self.save_hyperparameters() 
-                
-        self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
-        self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
-        self.gmm = GMM(**gmm_kwargs)      
         
+        self.vision_backbone_kwargs = vision_backbone_kwargs 
+        self.vision_encoder_kwargs = vision_encoder_kwargs 
+        self.gmm_kwargs = gmm_kwargs 
+        self.optimizer_kwargs = optimizer_kwargs
+                
+        self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
+        self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
+        self.gmm = GMM(**self.gmm_kwargs)      
+    
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
+        scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, **self.optimizer_kwargs.lr_scheduler)
+        
+        return {
+            "optimizer": optimizer, 
+            "scheduler": scheduler
+        }
+    
     def forward(self, x): 
         x = self.visionBackbone(x) 
         x = self.visionEncoder(x)
+        x = self.gmm(x) 
+        
         return x 
+    
+    def _log_image(self, x: TensorType["*"], x_name: str) -> None: 
+            self.logger.log_image(
+                key = x_name, 
+                image = [wandb.Image(img) for img in x.detach().cpu().numpy()]
+            )
  
     def _shared_step(self, batch): 
         x, x_plus, _ = batch.values()
         
-        if self.logger and hasattr(self.logger, "log_image"): 
-            self.logger.log_image(
-                key = "x", 
-                image = [wandb.Image(img) for img in x.detach().cpu().numpy()]
-            )
-            self.logger.log_image(
-                key = "x_plus", 
-                image = [wandb.Image(img) for img in x_plus.detach().cpu().numpy()]
-            )
+        if self.current_epoch == 1: 
+            self._log_image(x, "x")
+            self._log_image(x_plus, "x_plus")
         
         x_out = self(x)
         x_plus_out = self(x_plus)
