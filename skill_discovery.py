@@ -1,5 +1,9 @@
 import hydra 
+from datetime import datetime 
+from zoneinfo import ZoneInfo
+
 import lightning as pl
+from lightning.pytorch.loggers import WandbLogger
 
 from models.discover.discover import SkillDiscovery
 from data.discover.datamodule import MimicGenRobotDataModule
@@ -11,8 +15,14 @@ def main(cfg):
 
     datamodule = MimicGenRobotDataModule(**cfg.data.datamodule)
     model = SkillDiscovery(**cfg.model)
+    
+    cfg.logger.verion = datetime.now(ZoneInfo("Europe/Berlin")).strftime("%Y_%m_%d_%H_%M")
+    logger = WandbLogger(**cfg.logger)
 
-    trainer = pl.Trainer(**cfg.trainer)
+    trainer = pl.Trainer(
+        logger=logger, 
+        **cfg.trainer
+        )
     _ = trainer.test(model=model, datamodule=datamodule)
     
 

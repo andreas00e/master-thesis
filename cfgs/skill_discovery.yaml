@@ -53,6 +53,11 @@ model:
     means: ~
     covs: ~
 
+logger: 
+  name: debugging
+  version: ~
+  project: skill_discovery
+
 trainer: 
   accelerator: cuda    
   devices: 

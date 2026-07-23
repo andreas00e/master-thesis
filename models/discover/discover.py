@@ -1,3 +1,4 @@
+import wandb
 from typing import Dict
 
 import lightning as pl 
@@ -28,19 +29,34 @@ class SkillDiscovery(pl.LightningModule):
         return x 
  
     def _shared_step(self, batch): 
-        x, x_plus, _  = batch.values()
-        x = self(x)
-        x_plus = self(x_plus)
-        return x, x_plus
+        x, x_plus, _ = batch.values()
+        
+        if self.logger and hasattr(self.logger, "log_image"): 
+            self.logger.log_image(
+                key = "x", 
+                image = [wandb.Image(img) for img in x.detach().cpu().numpy()]
+            )
+            self.logger.log_image(
+                key = "x_plus", 
+                image = [wandb.Image(img) for img in x_plus.detach().cpu().numpy()]
+            )
+        
+        x_out = self(x)
+        x_plus_out = self(x_plus)
+        
+        return x_out, x_plus_out
 
     def train_step(self, batch, batch_idx): 
         x, x_plus = self._shared_step(batch)
+        
         return x, x_plus
     
     def validation_step(self, batch, batch_idx):
         x, x_plus = self._shared_step(batch)
+        
         return x, x_plus
 
     def test_step(self, batch, batch_idx): 
         x, x_plus = self._shared_step(batch)
+        
         return x, x_plus

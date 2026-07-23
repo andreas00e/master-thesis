@@ -51,6 +51,7 @@ class MimicGenRobotDataset(Dataset):
         
         rgb_obs = obs["robot0_eye_in_hand_image"][idx_start:idx_start+self.window, ...]
         rgb_obs = rgb_obs.astype(np.float32) / 255.0
+        print(f"Shape of rgb_obs: {rgb_obs}")
         rgb_obs_plus = self.transforms_plus(rgb_obs)
         rgb_obs = self.transforms(rgb_obs)
         item["rgb_obs"] = rgb_obs
