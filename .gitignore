@@ -2,6 +2,7 @@
 logs/
 notebooks/
 outputs/
+wandb/
 
 import.log
 requirements.txt
