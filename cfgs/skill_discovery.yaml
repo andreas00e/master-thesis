@@ -4,6 +4,7 @@ meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
 
 data: 
   datamodule: 
+    _target_: data.discover.datamodule.MimicGenRobotDataModule
     data_dir: ${data_dir}
     meta_dir: ${meta_dir}
     window: 8 
@@ -30,6 +31,8 @@ data:
       - rotate 
 
 model: 
+  _target_: models.discover.discover.SkillDiscovery
+
   vision_backbone_kwargs: 
     weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/resNet18_Weights_DEFAULT.pth
   
@@ -54,8 +57,9 @@ model:
     covs: ~
 
 logger: 
+  _target_: lightning.pytorch.loggers.WandbLogger
   name: debugging
-  version: ~
+  version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
 trainer: 

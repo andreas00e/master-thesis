@@ -1,0 +1,90 @@
+[34m[1mwandb[0m: Detected [huggingface_hub.inference] in use.
+[34m[1mwandb[0m: Use W&B Weave for improved LLM call tracing. Install Weave with `pip install weave` then add `import weave` to the top of your script.
+[34m[1mwandb[0m: For more information, check out the docs at: https://weave-docs.wandb.ai
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1,2,3,4,5,6,7]
+/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/lightning/pytorch/utilities/_pytree.py:21: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+[2KTesting [38;5;237m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m 0/700 [2m0:00:00 • -:--:--[0m [2;4m0.00it/s[0m
+[?25h
+Error executing job with overrides: []
+Traceback (most recent call last):
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/PIL/Image.py", line 3427, in fromarray
+    typemode, rawmode, color_modes = _fromarray_typemap[typekey]
+                                     ~~~~~~~~~~~~~~~~~~^^^^^^^^^
+KeyError: ((1, 1, 84, 3), '|u1')
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/bing_TUM/ehrensberger/master-thesis/thesis/skill_discovery.py", line 30, in <module>
+    main()
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/hydra/main.py", line 94, in decorated_main
+    _run_hydra(
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/hydra/_internal/utils.py", line 394, in _run_hydra
+    _run_app(
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/hydra/_internal/utils.py", line 457, in _run_app
+    run_and_report(
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/hydra/_internal/utils.py", line 223, in run_and_report
+    raise ex
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/hydra/_internal/utils.py", line 220, in run_and_report
+    return func()
+           ^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/hydra/_internal/utils.py", line 458, in <lambda>
+    lambda: hydra.run(
+            ^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/hydra/_internal/hydra.py", line 132, in run
+    _ = ret.return_value
+        ^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/hydra/core/utils.py", line 260, in return_value
+    raise self._return_value
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/hydra/core/utils.py", line 186, in run_job
+    ret.return_value = task_function(task_cfg)
+                       ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/thesis/skill_discovery.py", line 26, in main
+    _ = trainer.test(model=model, datamodule=datamodule)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 821, in test
+    return call._call_and_handle_interrupt(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 49, in _call_and_handle_interrupt
+    return trainer_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 864, in _test_impl
+    results = self._run(model, ckpt_path=ckpt_path, weights_only=weights_only)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1079, in _run
+    results = self._run_stage()
+              ^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1116, in _run_stage
+    return self._evaluation_loop.run()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/lightning/pytorch/loops/utilities.py", line 179, in _decorator
+    return loop_run(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 146, in run
+    self._evaluation_step(batch, batch_idx, dataloader_idx, dataloader_iter)
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 441, in _evaluation_step
+    output = call._call_strategy_hook(trainer, hook_name, *step_args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 329, in _call_strategy_hook
+    output = fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 425, in test_step
+    return self.lightning_module.test_step(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/thesis/models/discover/discover.py", line 60, in test_step
+    x, x_plus = self._shared_step(batch)
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/thesis/models/discover/discover.py", line 37, in _shared_step
+    image = [wandb.Image(img) for img in x.detach().cpu().numpy()]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/thesis/models/discover/discover.py", line 37, in <listcomp>
+    image = [wandb.Image(img) for img in x.detach().cpu().numpy()]
+             ^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/wandb/sdk/data_types/image.py", line 280, in __init__
+    self._initialize_from_data(data_or_path, mode, file_type, normalize)
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/wandb/sdk/data_types/image.py", line 440, in _initialize_from_data
+    self._image = pil_image.fromarray(data).convert(mode)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bing_TUM/ehrensberger/master-thesis/sim/lib/python3.11/site-packages/PIL/Image.py", line 3431, in fromarray
+    raise TypeError(msg) from e
+TypeError: Cannot handle this data type: (1, 1, 84, 3), |u1

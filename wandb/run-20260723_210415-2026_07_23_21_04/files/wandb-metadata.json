@@ -1,0 +1,89 @@
+{
+  "os":  "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+  "python":  "CPython 3.11.5",
+  "startedAt":  "2026-07-23T13:04:15.034800Z",
+  "program":  "/home/bing_TUM/ehrensberger/master-thesis/thesis/skill_discovery.py",
+  "codePath":  "skill_discovery.py",
+  "codePathLocal":  "skill_discovery.py",
+  "git":  {
+    "remote":  "https://andreas00e:@github.com/andreas00e/master-thesis.git",
+    "commit":  "10e8b980952016af3635ae3e77d87c923406d59c"
+  },
+  "email":  "andreas.ehrensberger@tum.de",
+  "root":  ".",
+  "host":  "S49",
+  "executable":  "/home/bing_TUM/ehrensberger/master-thesis/sim/bin/python3",
+  "cpu_count":  16,
+  "cpu_count_logical":  32,
+  "gpu":  "Tesla V100-PCIE-32GB",
+  "gpu_count":  8,
+  "disk":  {
+    "/":  {
+      "total":  "942429499392",
+      "used":  "203241627648"
+    }
+  },
+  "memory":  {
+    "total":  "270093410304"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "Tesla V100-PCIE-32GB",
+      "memoryTotal":  "34359738368",
+      "cudaCores":  5120,
+      "architecture":  "Volta",
+      "uuid":  "GPU-af370d4d-1cd7-7674-a75f-8d83ecec6959"
+    },
+    {
+      "name":  "Tesla V100-PCIE-32GB",
+      "memoryTotal":  "34359738368",
+      "cudaCores":  5120,
+      "architecture":  "Volta",
+      "uuid":  "GPU-be8d966c-6293-2be3-dfdc-d03e40ffdd12"
+    },
+    {
+      "name":  "Tesla V100-PCIE-32GB",
+      "memoryTotal":  "34359738368",
+      "cudaCores":  5120,
+      "architecture":  "Volta",
+      "uuid":  "GPU-deda47f4-3dbc-2542-52d2-6659ff78d272"
+    },
+    {
+      "name":  "Tesla V100-PCIE-32GB",
+      "memoryTotal":  "34359738368",
+      "cudaCores":  5120,
+      "architecture":  "Volta",
+      "uuid":  "GPU-c2307c63-9bc5-3414-60c7-a481da76651a"
+    },
+    {
+      "name":  "Tesla V100-PCIE-32GB",
+      "memoryTotal":  "34359738368",
+      "cudaCores":  5120,
+      "architecture":  "Volta",
+      "uuid":  "GPU-d9d83365-c6d3-b5b6-1e54-2dc99148454c"
+    },
+    {
+      "name":  "Tesla V100-PCIE-32GB",
+      "memoryTotal":  "34359738368",
+      "cudaCores":  5120,
+      "architecture":  "Volta",
+      "uuid":  "GPU-3b49b182-1e25-325c-e5c2-aca3c2c3d756"
+    },
+    {
+      "name":  "Tesla V100-PCIE-32GB",
+      "memoryTotal":  "34359738368",
+      "cudaCores":  5120,
+      "architecture":  "Volta",
+      "uuid":  "GPU-345ff00e-d3c8-3dd2-31ce-82fe1a0000c2"
+    },
+    {
+      "name":  "Tesla V100-PCIE-32GB",
+      "memoryTotal":  "34359738368",
+      "cudaCores":  5120,
+      "architecture":  "Volta",
+      "uuid":  "GPU-08192335-93e6-7441-1802-857184ac1107"
+    }
+  ],
+  "cudaVersion":  "12.8",
+  "writerId":  "wx9uacb4bammf97mq22z5tjynv96z5r0"
+}
