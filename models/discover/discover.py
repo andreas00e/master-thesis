@@ -21,6 +21,7 @@ class SkillDiscovery(pl.LightningModule):
         ) -> None:
         
         super().__init__()
+        
         self.save_hyperparameters() 
         
         self.vision_backbone_kwargs = vision_backbone_kwargs 
@@ -41,11 +42,10 @@ class SkillDiscovery(pl.LightningModule):
             "scheduler": scheduler
         }
     
-    def forward(self, x): 
-        x = self.visionBackbone(x) 
-        x = self.visionEncoder(x)
-        x = self.gmm(x) 
-        
+    def forward(self, x: TensorType[""]) -> TensorType["*"]:
+        x = self.visionBackbone(x)
+        x = self.visionEncoder(x) 
+
         return x 
     
     def _log_image(self, x: TensorType["*"], x_name: str) -> None: 
@@ -57,26 +57,26 @@ class SkillDiscovery(pl.LightningModule):
     def _shared_step(self, batch): 
         x, x_plus, _ = batch.values()
         
-        if self.current_epoch == 1: 
-            self._log_image(x, "x")
-            self._log_image(x_plus, "x_plus")
-        
-        x_out = self(x)
-        x_plus_out = self(x_plus)
-        
-        return x_out, x_plus_out
+        x_emb = self(x)
+        x_plus_emb = self(x_plus)
+        loss = self.gmm(x_emb, x_plus_emb)
 
-    def train_step(self, batch, batch_idx): 
-        x, x_plus = self._shared_step(batch)
+        return loss
+
+    def training_step(self, batch, batch_idx): 
+        loss = self._shared_step(batch)
+        self.log_dict({
+            "train_loss": loss
+        })
         
-        return x, x_plus
-    
     def validation_step(self, batch, batch_idx):
-        x, x_plus = self._shared_step(batch)
-        
-        return x, x_plus
+        loss = self._shared_step(batch)
+        self.log_dict({
+            "val_loss": loss
+        })
 
     def test_step(self, batch, batch_idx): 
-        x, x_plus = self._shared_step(batch)
-        
-        return x, x_plus
+        loss = self._shared_step(batch)
+        self.log_dict({
+            "test_loss": loss
+        })

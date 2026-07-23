@@ -59,4 +59,5 @@ class VisionBackbone(nn.Module):
         x = x.reshape(-1, *x.shape[2:]).permute(0, 3, 1, 2) # [batch*window, channels=3, height, width]
         x = self.model(x) # [batch*window, hidden_dim]
         x = x.reshape(batch, window, -1) # [batch, window, hidden_dim]
+        
         return x

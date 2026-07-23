@@ -255,33 +255,8 @@ class GMM(nn.Module):
         
         return weights, means, covs 
     
-    def forward(self, x, x_positive) -> float:
-        loss_cl = self._hard_negatives(x, x_positive) 
-        loss_bml = self._false_negatives(x, x_positive)
+    def forward(self, x, x_plus) -> TensorType["*"]:
+        loss_cl = self._hard_negatives(x, x_plus) 
+        loss_bml = self._false_negatives(x, x_plus)
         
         return loss_cl + self.lam * loss_bml 
-    
-def main():
-    n = 100 
-    d = 8
-    
-    gmm_kwargs = {
-        "k": 20, 
-        "d": 8, 
-        "alpha": 0.1,
-        "beta": 0.2, 
-        "sim": {
-            "dim": 1, 
-            "eps": 0.8
-        }
-    } 
-    
-    x = torch.rand(size=(n, d))
-    x_positive = torch.rand(size=(n, d))
-    
-    gmm = GMM(**gmm_kwargs)
-    loss = gmm._hard_negatives(x, x_positive)
-    print("FINISHED!")
-
-if __name__ == "__main__": 
-    main() 
