@@ -42,7 +42,6 @@ class SkillDiscovery(pl.LightningModule):
             "scheduler": scheduler
         }
     
-    
     def forward(self, x: TensorType[""]) -> TensorType["*"]:
         x = self.visionBackbone(x)
         x = self.visionEncoder(x) 
@@ -57,7 +56,6 @@ class SkillDiscovery(pl.LightningModule):
  
     def _shared_step(self, batch): 
         x, x_plus, _ = batch.values()
-        
         x_emb = self(x)
         x_plus_emb = self(x_plus)
         loss = self.gmm(x_emb, x_plus_emb)
@@ -69,15 +67,18 @@ class SkillDiscovery(pl.LightningModule):
         self.log_dict({
             "train_loss": loss
         })
+        return loss
         
     def validation_step(self, batch, batch_idx):
         loss = self._shared_step(batch)
         self.log_dict({
             "val_loss": loss
         })
+        return loss 
 
     def test_step(self, batch, batch_idx): 
         loss = self._shared_step(batch)
         self.log_dict({
             "test_loss": loss
         })
+        return loss

@@ -255,5 +255,6 @@ class GMM(nn.Module):
         
         loss_cl = self._hard_negatives(x, x_plus) 
         loss_bml = self._false_negatives(x, x_plus)
+        loss = torch.mean(loss_cl + self.lam * loss_bml)
         
-        return loss_cl + self.lam * loss_bml 
+        return loss
