@@ -12,7 +12,7 @@ data:
     tasks: threading
     expand_depth: colormap 
 
-    batch_size: 1
+    batch_size: 4
     shuffle: True
     num_workers: 1 # 31
     pin_memory: True
@@ -46,7 +46,7 @@ model:
     
   gmm_kwargs: 
     k: 20 
-    d: 4
+    d: ${model.vision_encoder_kwargs.encoder_layer_kwargs.d_model}
     alpha: 0.1
     beta: 0.2
     sim: 
@@ -75,6 +75,7 @@ trainer:
     - 0
   default_root_dir: logs 
   max_epochs: 400 
+  num_sanity_val_steps: 2
   profiler: simple 
 
 TSNE: 

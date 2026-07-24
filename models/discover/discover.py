@@ -4,7 +4,7 @@ from typing import Dict
 import torch
 from torchtyping import TensorType
 
-import lightning as pl 
+import lightning.pytorch as pl 
 
 from .gmm import GMM 
 from .visionBackbone import VisionBackbone
@@ -31,8 +31,8 @@ class SkillDiscovery(pl.LightningModule):
                 
         self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
-        self.gmm = GMM(**self.gmm_kwargs)      
-    
+        self.gmm = GMM(**self.gmm_kwargs)   
+
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
         scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, **self.optimizer_kwargs.lr_scheduler)
@@ -41,6 +41,7 @@ class SkillDiscovery(pl.LightningModule):
             "optimizer": optimizer, 
             "scheduler": scheduler
         }
+    
     
     def forward(self, x: TensorType[""]) -> TensorType["*"]:
         x = self.visionBackbone(x)

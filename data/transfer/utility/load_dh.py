@@ -13,6 +13,8 @@ def main(cfg: DictConfig) -> None:
         key: torch.stack([torch.tensor(v, dtype=torch.float32) for v in inner.values()]).T
         for key, inner in cfg.items()
     }
+    
+    print(cfg_dict)
         
 if __name__ == "__main__": 
     main()

@@ -28,29 +28,25 @@ class GMM(nn.Module):
         self.beta = beta 
         self.sim = sim
         
-        self.weights = weights if weights is not None else nn.Parameter(data=torch.ones(size = (self.k, )) / self.k)
-        self.means = means if means is not None else nn.Parameter(data=torch.rand(size = (self.k, self.d)))
-        self.covs = covs if covs is not None else nn.Parameter(data=torch.rand(size = (self.k, self.d, self.d)))
+        self.weights = weights if isinstance(weights, nn.Parameter) else nn.Parameter(weights) if weights is not None else nn.Parameter(data=torch.ones(size=(self.k, )) / self.k)
+        self.means = means if isinstance(means, nn.Parameter) else nn.Parameter(means) if means is not None else nn.Parameter(data=torch.rand(size=(self.k, self.d)))
+        self.covs = covs if isinstance(covs, nn.Parameter) else nn.Parameter(covs) if covs is not None else nn.Parameter(data=torch.rand(size=(self.k, self.d, self.d)))
         self.tau = nn.Parameter(data=torch.ones(1, )) 
         self.lam = nn.Parameter(data=torch.ones(1, ))
         
-        self.components, self.mixture = self.mixtureModel()
+        self.components = None
   
         self.sim = nn.CosineSimilarity(**self.sim)
         self.relu = nn.ReLU()
 
     def mixtureModel(self) -> torch.distributions.Distribution: 
-        covs = self.covs
 
-        if not self.is_pos_definite(covs.detach()):
-            with torch.no_grad():
-                covs = self.to_pos_definite(covs.detach())
-                self.covs.copy_(covs)
-            covs = self.covs
-
-        components = D.MultivariateNormal(loc=self.means, covariance_matrix=covs)
-        mixture = D.MixtureSameFamily(D.Categorical(self.weights), components)
-        return components, mixture
+        if not self.is_pos_definite(self.covs.data): # we don't have to change the Parameter if we only take the data here
+            self.covs.data = self.to_pos_definite(self.covs.data)
+        
+        components = D.MultivariateNormal(self.means, self.covs)
+        # mixture = D.MixtureSameFamily(D.Categorical(self.weights), components)
+        return components
     
     def is_pos_definite(self, A: TensorType["k", "d", "d"]) -> bool: 
         # ensure that the matrix is symmetrix first  
@@ -106,17 +102,16 @@ class GMM(nn.Module):
         return probs_i_m, probs_i_s, idxs_i_m, idxs_i_s
     
     def _hard_negatives(self, x: TensorType["n", "d"], x_positive: TensorType["n", "d"]) -> TensorType["n", "d"]: 
-        probs = self._posterior(x) # [n, k]: k posterior probabilites
-        probs_i_m, probs_i_s, idxs_i_m, idxs_i_s = self._get_m_s(probs)
+        probs = self._posterior(x) # [batch, k]: k posterior probabilites
+        probs_i_m, probs_i_s, _, idxs_i_s = self._get_m_s(probs)
          
         x_negative = self.means[idxs_i_s, :] 
         
-        cols_idxs = torch.argmax(probs, dim=1)[:, None] # [n] dimensions of the largest posterior probabilites       
-        rows_idxs = torch.arange(0, probs.shape[0])[:, None] # [n]
-        idxs = torch.concat(tensors=(rows_idxs, cols_idxs), dim=-1)
-        ones = torch.ones_like(probs, dtype=torch.bool) # [n, k]
-        ones[idxs] = False
-        probs_j = probs[ones]
+        cols_idxs = torch.argmax(probs, dim=1)[:, None] # [batch, 1] dimensions of the largest posterior probabilites       
+        rows_idxs = torch.arange(0, probs.shape[0], device=x.device)[:, None] # [batch, 1]
+        mask = torch.ones_like(probs, dtype=torch.bool, device=x.device) # [n, k]
+        mask[rows_idxs, cols_idxs] = False
+        probs_j = probs[mask] # set every biggest row value to zero
             
         conf_n = torch.sigmoid(probs_i_m - probs_i_s) # [n]
         conf_d = torch.var(probs_j, dim=-1) # [n]
@@ -142,7 +137,7 @@ class GMM(nn.Module):
         
         idxs = torch.argmax(probs, dim=-1) # [n]: dimension of biggest posterior probabilities
         idxs = idxs.unsqueeze(1) == idxs.unsqueeze(0) # [n, n] 
-        mask_idxs = ~torch.eye(n, dtype=torch.bool) # [n, n]
+        mask_idxs = ~torch.eye(n, dtype=torch.bool, device=x.device) # [n, n]
         idxs &= mask_idxs # [n, n-1] # each rows is all x_j^m whose p_max is the same as x_i's p_max
         rows_idxs, cols_idxs = torch.nonzero(idxs, as_tuple=True) 
 
@@ -153,9 +148,9 @@ class GMM(nn.Module):
         
         weight = torch.sigmoid(torch.abs(probs_i_s - probs_j_s)) * torch.sigmoid(torch.abs(probs_i_m - probs_j_m))
         unique_elements, inverse_indices = torch.unique(rows_idxs, return_inverse=True)
-        counts = torch.zeros(size=(torch.unique(rows_idxs).numel(),))
-        counts = torch.scatter_add(counts, 0, inverse_indices, torch.ones_like(weight))
-        output_tensor = torch.zeros(size=(torch.unique(rows_idxs).numel(), ))
+        counts = torch.zeros(size=(torch.unique(rows_idxs).numel(),), device=x.device)
+        counts = torch.scatter_add(counts, 0, inverse_indices, torch.ones_like(weight, device=x.device))
+        output_tensor = torch.zeros(size=(torch.unique(rows_idxs).numel(), ), device=x.device)
         weight_avg = torch.scatter_add(output_tensor, 0, inverse_indices, weight) 
         weight_avg /= counts
         weight_avg = weight_avg[inverse_indices, ...]
@@ -169,7 +164,7 @@ class GMM(nn.Module):
         loss_bml = torch.scatter_add(output_tensor, 0, inverse_indices, loss_bml)
         
         if unique_elements.shape != n: 
-            out = torch.zeros(size=(n, ))
+            out = torch.zeros(size=(n, ), device=x.device)
             out[unique_elements] = loss_bml
             loss_bml = out 
 
@@ -179,13 +174,13 @@ class GMM(nn.Module):
         probs = self._posterior(x) # [n, k]
         idxs = torch.argmax(probs, dim=-1) # [n, k]
         
-        probs = probs[torch.arange(100), idxs] # [n, k]
+        probs = probs[torch.arange(100, device=x.device), idxs] # [n, k]
         probs = probs * torch.log(probs) # [n, k]
         
         unique_elements, inverse_indices = torch.unique(idxs, return_inverse=True)
-        output_tensor = torch.zeros(size=(unique_elements.shape[0], ))
+        output_tensor = torch.zeros(size=(unique_elements.shape[0], ), device=x.device)
         
-        E_k = torch.zeros(size=(self.k, ))
+        E_k = torch.zeros(size=(self.k, ), device=x.device)
         E_k[unique_elements] = - torch.scatter_add(output_tensor, 0, inverse_indices, probs)
         
         return E_k 
@@ -256,6 +251,8 @@ class GMM(nn.Module):
         return weights, means, covs 
     
     def forward(self, x, x_plus) -> TensorType["*"]:
+        self.components = self.mixtureModel()
+        
         loss_cl = self._hard_negatives(x, x_plus) 
         loss_bml = self._false_negatives(x, x_plus)
         

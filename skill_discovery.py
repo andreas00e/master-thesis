@@ -3,6 +3,9 @@ from hydra.utils import instantiate
 
 import lightning as pl
 
+import multiprocessing
+multiprocessing.set_start_method('spawn', force=True)
+
 
 @hydra.main(config_path="cfgs/", config_name="skill_discovery", version_base=None)
 def main(cfg): 

@@ -1,8 +1,10 @@
 .vscode/
+data/images/
 logs/
 notebooks/
 outputs/
 wandb/
+
 
 import.log
 requirements.txt
