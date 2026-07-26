@@ -39,7 +39,10 @@ class SkillDiscovery(pl.LightningModule):
         
         return {
             "optimizer": optimizer, 
-            "scheduler": scheduler
+            "lr_scheduler": {
+                "scheduler": scheduler, 
+                "interval": "step"
+            }
         }
     
     def forward(self, x: TensorType[""]) -> TensorType["*"]:
@@ -54,31 +57,26 @@ class SkillDiscovery(pl.LightningModule):
                 image = [wandb.Image(img) for img in x.detach().cpu().numpy()]
             )
  
-    def _shared_step(self, batch): 
+    def _shared_step(self, batch: TensorType["*"], stage: str): 
         x, x_plus, _ = batch.values()
-        x_emb = self(x)
+        x_emb = self(x) 
         x_plus_emb = self(x_plus)
         loss = self.gmm(x_emb, x_plus_emb)
-
-        return loss
-
-    def training_step(self, batch, batch_idx): 
-        loss = self._shared_step(batch)
-        self.log_dict({
-            "train_loss": loss
-        })
-        return loss
         
-    def validation_step(self, batch, batch_idx):
-        loss = self._shared_step(batch)
         self.log_dict({
-            "val_loss": loss
-        })
-        return loss 
+            stage: loss
+            }, 
+            prog_bar=True,
+            batch_size=batch.shape[0]
+        )
 
-    def test_step(self, batch, batch_idx): 
-        loss = self._shared_step(batch)
-        self.log_dict({
-            "test_loss": loss
-        })
         return loss
+
+    def training_step(self, batch, batch_idx) -> TensorType["batch"]:  
+        return self._shared_step(batch, "train")
+        
+    def validation_step(self, batch, batch_idx) -> TensorType["batch"]:  
+        return self._shared_step(batch, "val")
+
+    def test_step(self, batch, batch_idx) -> TensorType["batch"]:        
+        return self._shared_step(batch, "train")

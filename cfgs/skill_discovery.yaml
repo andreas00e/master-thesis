@@ -73,10 +73,11 @@ trainer:
   accelerator: cuda    
   devices: 
     - 0
-  default_root_dir: logs 
   max_epochs: 400 
   num_sanity_val_steps: 2
+  enable_progress_bar: True
   profiler: simple 
+  default_root_dir: logs 
 
 TSNE: 
   n_components: 2 

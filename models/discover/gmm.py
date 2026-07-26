@@ -28,11 +28,11 @@ class GMM(nn.Module):
         self.beta = beta 
         self.sim = sim
         
-        self.weights = weights if isinstance(weights, nn.Parameter) else nn.Parameter(weights) if weights is not None else nn.Parameter(data=torch.ones(size=(self.k, )) / self.k)
-        self.means = means if isinstance(means, nn.Parameter) else nn.Parameter(means) if means is not None else nn.Parameter(data=torch.rand(size=(self.k, self.d)))
-        self.covs = covs if isinstance(covs, nn.Parameter) else nn.Parameter(covs) if covs is not None else nn.Parameter(data=torch.rand(size=(self.k, self.d, self.d)))
-        self.tau = nn.Parameter(data=torch.ones(1, )) 
-        self.lam = nn.Parameter(data=torch.ones(1, ))
+        self.weights = weights if isinstance(weights, nn.Parameter) else nn.Parameter(weights) if weights is not None else nn.Parameter(data=torch.ones(size=(self.k, )) / self.k) # [k, ]
+        self.means = means if isinstance(means, nn.Parameter) else nn.Parameter(means) if means is not None else nn.Parameter(data=torch.rand(size=(self.k, self.d))) # [k, d]
+        self.covs = covs if isinstance(covs, nn.Parameter) else nn.Parameter(covs) if covs is not None else nn.Parameter(data=torch.rand(size=(self.k, self.d, self.d))) # [k, d, d]
+        self.tau = nn.Parameter(data=torch.ones(1, )) # [1, ]
+        self.lam = nn.Parameter(data=torch.ones(1, )) # [1, ]
         
         self.components = None
   
@@ -251,7 +251,12 @@ class GMM(nn.Module):
         return weights, means, covs 
     
     def forward(self, x, x_plus) -> TensorType["*"]:
+        b = x.shape[0] # batch size 
         self.components = self.mixtureModel()
+
+        self.weights = self.weights.repeat(b, 1, 1) # [b, k, ]
+        self.means = self.means.repeat(b, 1, 1) # [b, k, d]
+        self.covs = self.covs.repeat(b, 1, 1, 1) # [b, k, d, d]
         
         loss_cl = self._hard_negatives(x, x_plus) 
         loss_bml = self._false_negatives(x, x_plus)
