@@ -1,0 +1,9 @@
+{
+  "search.useIgnoreFiles": true,
+  "watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/node_modules/**": true,
+    "**/.venv/**": true,
+    "**/env/**": true
+  }
+}

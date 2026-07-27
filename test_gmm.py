@@ -29,50 +29,25 @@ class GMM(nn.Module):
         self.sim = sim
         
         self.weights = weights if isinstance(weights, nn.Parameter) else nn.Parameter(weights) if weights is not None else nn.Parameter(data=torch.ones(size=(self.k, )) / self.k) # [k]
-        self.means = means if isinstance(means, nn.Parameter) else nn.Parameter(means) if means is not None else nn.Parameter(data=torch.rand(size=(self.k, self.d))) # [k, d]
-        self.covs = covs if isinstance(covs, nn.Parameter) else nn.Parameter(covs) if covs is not None else nn.Parameter(data=torch.rand(size=(self.k, self.d, self.d))) # [k, d, d]
-        self.tau = nn.Parameter(data=torch.ones(1, )) # [1]
-        self.lam = nn.Parameter(data=torch.ones(1, )) # [1]
+        self.means = means if isinstance(means, nn.Parameter) else nn.Parameter(means) if means is not None else nn.Parameter(data=torch.randn(size=(self.k, self.d))) # [k, d]
+        self.covs = covs if isinstance(covs, nn.Parameter) else nn.Parameter(covs) if covs is not None else nn.Parameter(data=torch.eye(self.d).unsqueeze(0).repeat(self.k, 1, 1)) # [k, d, d]
+        self.tau = nn.Parameter(data=torch.ones((1, ), dtype=torch.float64)) # [1]
+        self.lam = nn.Parameter(data=torch.ones((1, ), dtype=torch.float64)) # [1]
         
-        self.component_distribution, self.mixture = None, None 
+        self.component_distribution = None 
   
         self.sim = nn.CosineSimilarity(**self.sim)
         self.relu = nn.ReLU()
         
-    def mixtureModel(self) -> Tuple[D.MultivariateNormal, D.MixtureSameFamily]:
-        """
-        Create a mixture of Gaussian distributions.
-        
-        Constructs a MixtureSameFamily distribution from the learned weights, means,
-        and covariance matrices. Ensures covariance matrices are positive definite.
-        
-        Returns:
-            Tuple[D.MultivariateNormal, D.MixtureSameFamily]: Component distribution and mixture distribution.
-        """
-        mixture_distribution = D.Categorical(probs=self.weights.data) 
-        
-        if not self.is_pos_definite(self.covs.data):
-            self.covs.data = self.to_pos_definite(self.covs.data)
+    def mixtureModel(self) -> D.MultivariateNormal:        
+        if not self.is_pos_def(self.covs.data):
+            self.covs.data = self.to_pos_def(self.covs.data)
         
         component_distribution = D.MultivariateNormal(loc=self.means.data, covariance_matrix=self.covs.data)
-        mixture = D.MixtureSameFamily(mixture_distribution=mixture_distribution, component_distribution=component_distribution)
         
-        return component_distribution, mixture
+        return component_distribution
     
-    def is_pos_definite(self, A: TensorType["k", "d", "d"]) -> bool:
-        """
-        Check if a batch of matrices is positive definite.
-        
-        Verifies symmetry first, then performs Cholesky decomposition to determine
-        positive definiteness.
-        
-        Args:
-            A: Batch of square matrices of shape [k, d, d].
-            
-        Returns:
-            bool: True if all matrices are positive definite, False otherwise.
-        """
-        
+    def is_pos_def(self, A: TensorType["k", "d", "d"]) -> bool:
         if not torch.allclose(A, A.transpose(-1, -2)): # ensure that the matrix is symmetrix first  
             return False 
         
@@ -80,19 +55,7 @@ class GMM(nn.Module):
 
         return bool(torch.all(info == 0))
    
-    def to_pos_definite(self, A: TensorType["k", "d", "d"]) -> TensorType["k", "d", "d"]:
-        """
-        Convert matrices to positive definite form.
-        
-        Symmetrizes matrices and adjusts eigenvalues to ensure positive definiteness
-        by replacing non-positive eigenvalues with a small positive threshold.
-        
-        Args:
-            A: Batch of matrices of shape [k, d, d].
-            
-        Returns:
-            TensorType["k", "d", "d"]: Positive definite matrices.
-        """
+    def to_pos_def(self, A: TensorType["k", "d", "d"]) -> TensorType["k", "d", "d"]: 
         A = (A + A.transpose(-1, -2)) / 2 # make all covariance matrices symmetric
 
         eigenvals, eigenvecs = eigh(A) # make all covariance matrices positive definite
@@ -100,7 +63,7 @@ class GMM(nn.Module):
         eigenvals = torch.where(eigenvals <= 0, eps, eigenvals)
         A = eigenvecs @ torch.diag_embed(eigenvals) @ eigenvecs.transpose(-1, -2)
         
-        return A  
+        return A 
 
     def confidence(self, x: TensorType["n", "d"]) -> TensorType["n"]: 
         n = x.shape[0]
@@ -195,100 +158,35 @@ class GMM(nn.Module):
 
         return loss_bml
     
-    def _entropy_counts(self, x: TensorType["n", "d"]) -> Tuple[TensorType["1"], TensorType["1"]]:
-        """
-        Compute entropy counts for each Gaussian component and identify extreme components.
-
-        Args:
-            x: Input tensor of shape [n, d].
-
-        Returns:
-            Tuple with indices of the Gaussian component with minimum aggregated entropy
-            and the component with maximum aggregated entropy.
-        """
-        probs = self._posterior_unweighted(x) # [n, k]: likelihood of each sample belonging to Gaussian component k 
+    def _posterior(self, x: TensorType["n", "d"]) -> TensorType["n", "k"]:
+        log_probs = self.component_distribution.log_prob(x.unsqueeze(1)) # [n, k]: unweighted log-density
+        log_weights = torch.log(self.weights) # [k]
+        log_joint = log_probs + log_weights # [n, k]: log(w_k * log(N(x | mu_k, Sigma_k)) = log(w_k) + log(N(x | mu_k, Sigma_k))
+        log_posterior = log_joint - torch.logsumexp(log_joint, dim=-1, keepdim=True) # [n, k]: normalize over k 
         
-        rows_idxs = torch.arange(x.shape[0], device=x.device) # [n]
-        cols_idxs = torch.argmax(probs, dim=-1) # [n]: Gaussian component k each sample most likely belongs to 
-
-        probs = probs[rows_idxs, cols_idxs]# [n]: biggest likelihood for each sample       
-        probs *= torch.log(probs) # [n]: entropy for each sample 
+        return log_posterior.exp() # [n, k]: posterior probabilities p_{i,k} 
+    
+    def _entropy_indices(self, x: TensorType["n", "d"], p: TensorType["n", "k"], r_idxs: TensorType["n"], c_idxs: TensorType["n"]) -> Tuple[TensorType["1"], ...]:
+        p = p[r_idxs, c_idxs] # [n]: biggest component of each sample       
+        p *= torch.log(p) # [n]: entropy for each sample 
          
-        unique_elements, inverse_indices = torch.unique(cols_idxs, return_inverse=True) # [n], [n]
-        output_tensor = torch.zeros(size=(unique_elements.shape[0], ), device=x.device) # [n']
+        unique_elements, inverse_indices = torch.unique(c_idxs, return_inverse=True) # [n'], [n]
+        out = torch.zeros(size=(unique_elements.shape[0], ), device=x.device) # [n']
         
         E_k = torch.zeros(size=(self.k, ), device=x.device) # [k]
-        E_k[unique_elements] = -torch.scatter_add(output_tensor, 0, inverse_indices, probs) # [k]
+        E_k[unique_elements] = -torch.scatter_add(out, 0, inverse_indices, p) # [k]
         
-        G_min = torch.argmin(E_k) # [1]: distribution with the largest entropy
-        G_max = torch.argmax(E_k) # [1]: distribution with the smallest entropy
+        E_min = torch.min(E_k) # []: distribution with the smallest entropy
+        E_max = torch.max(E_k) # []: distribution with the largest entropy
+        G_min = torch.argmin(E_k) # []: distribution with the smallest entropy
+        G_max = torch.argmax(E_k) # []: distribution with the largest entropy
         
-        return G_min, G_max
-        
-    def _posterior_unweighted(self, x: TensorType["n", "d"]) -> TensorType["n", "k"]:
-        """
-        Compute unweighted posterior probabilities for the current GMM components.
-
-        Args:
-            x: Input tensor of shape [n, d].
-
-        Returns:
-            Tensor of shape [n, k] containing posterior probabilities p_{i,k}.
-        """
-        log_probs = self.component_distribution.log_prob(x.unsqueeze(1)) # [n, k]: unweighted log-density
-        log_weights = torch.log(self.weights.data) # [k]
-        log_joint = log_probs + log_weights[None, :].expand(x.shape[0], -1)  # [n, k]: log(w_k * log(N(x | mu_k, Sigma_k)) = log(w_k) + log(N(x | mu_k, Sigma_k))
-        log_posterior = log_joint - torch.logsumexp(log_joint, dim=-1, keepdim=True)  # normalize over k 
-        
-        return log_posterior.exp()  # [n, k]: posterior probabilities p_{i,k}
-
-    def _posterior_weighted(self, x: TensorType["n", "d"]) -> TensorType["n"]:
-        """
-        Compute the mixture density for each sample under the current GMM.
-
-        Args:
-            x: Input tensor of shape [n, d].
-
-        Returns:
-            Tensor of shape [n] containing the mixture density for each sample.
-        """
-        return self.mixture.log_prob(x).exp() # [n]: posterior probability of each sample  
+        return E_min, E_max, G_min, G_max
     
     def _zeroth_posterior_update(self, x: TensorType["n", "d"]) -> TensorType["n", "k"]:
-        """
-        Perform the zeroth posterior update step using the current mixture density.
-
-        Args:
-            x: Input tensor of shape [n, d].
-
-        Returns:
-            Tensor of shape [n] containing the current weighted posterior approximation.
-        """
-        return self._posterior_weighted(x) # [n, k]
+        return self._posterior(x) # [n, k]
         
-    def _first_posterior_update(self, x: TensorType["n", "d"], p: TensorType["n", "k"]) -> TensorType["count_G_max", "k"]: 
-        """
-        Update the GMM using samples from entropy-ranked components and compute a new posterior.
-
-        Args:
-            x: Input tensor of shape [n, d].
-            p: Posterior probability tensor of shape [n, k].
-
-        Returns:
-            Tensor containing updated posterior probabilities for the selected samples.
-        """
-        G_min, G_max = self._entropy_counts(x) # [], []: indices of the Gaussians with the smallest and biggest entropies
-        cols_idxs = torch.argmax(p, dim=-1) # [n]: Gaussian component k each sample most likely belongs to 
-        
-        idxs_min = torch.nonzero(G_min == cols_idxs) # [count_G_min]: indices of all samples belonging to the Gaussian with the smallest entropy
-        idxs_max = torch.nonzero(G_max == cols_idxs) # [count_G_max]: indices of all samples belonging to the Gaussian with the biggest entropy
-        
-        x_min = x[idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
-        x_max = x[idxs_max] # [count_G_max, d]: samples belonging to the Gaussian with the biggest entropy
-        
-        count_G_min = idxs_min.shape[0] # []: number of samples in the Gaussian with the smallest entropy 
-        count_G_max = idxs_max.shape[0] # []: number of samples in the Gaussian with the biggest entropy 
-        
+    def _first_posterior_update(self, x, p, G_max, count_G_min, count_G_max, idxs_max, x_min, x_max) -> TensorType["count_G_max", "k"]: 
         weight_max = (count_G_max+count_G_min) / (x.shape[0]-1) # []: new weight of the Gaussian with the biggest entropy 
         self.weights.data[G_max] = weight_max # update the weight of the Gaussian with the biggest entropy 
         
@@ -311,48 +209,69 @@ class GMM(nn.Module):
         d = torch.sum(n, dim=-1) # [count_G_min + count_G_max]
         p_new_weighted = n / d  # [count_G_min + count_G_max, k]
         
-        return p_new_weighted 
+        return p_new_weighted
 
     def _second_posterior_update(self, x: TensorType["n", "d"], p: TensorType["n", "k"]) -> None: 
-        p = self._posterior_weighted(x) # [n, k]: k posterior probabilities
-        G_min, G_max = self._entropy_counts(x) # [1], [1]: indices of the distributions with the smallest and biggest entropies
+        G_min, G_max = self._entropy_indices(x) # [], []: indices of the Gaussians with the smallest and biggest entropies
+        cols_idxs = torch.argmax(p, dim=-1) # [n]: Gaussian component k each sample most likely belongs to 
+        
+        idxs_min = torch.nonzero(G_min == cols_idxs) # [count_G_min]: indices of all samples belonging to the Gaussian with the smallest entropy
+        idxs_max = torch.nonzero(G_max == cols_idxs) # [count_G_max]: indices of all samples belonging to the Gaussian with the biggest entropy
 
-        cols_idxs = torch.argmax(p, dim=-1) # [n]
+        x_min = x[idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
+        count_G_max = idxs_max.shape[0] # []: number of samples in the Gaussian with the biggest entropy 
         
-        idxs_min = torch.nonzero(G_min == cols_idxs) 
-        idxs_max = torch.nonzero(G_max == cols_idxs) 
+        weight_max = count_G_max / x.shape[0] # []: new weight of the Gaussian with the biggest entropy 
+        self.weights.data[G_max] = weight_max  # update the weight of the Gaussian with the biggest entropy
+                    
+        mean_max = torch.sum(x_min, dim=0) / count_G_max # [d]: new mean vector of the Gaussian with the biggest entropy 
+        self.means.data[G_max] = mean_max # update the mean vector of the Gaussian with the biggest entropy
         
-        count_G_max = idxs_max.shape[0]
-        
-        weight_max = count_G_max / x.shape[0]
-        self.weights.data[G_max] = weight_max # update weight of distribution with maximum entropy 
+        p_max = p[idxs_max] # [count_G_max, k]: posterior probabilities of all samples belonging to the Gaussian with the biggest entropy 
 
-        x_min = x[idxs_min]
-                
-        mean_max = torch.sum(x_min, dim=0) / count_G_max
-        self.means.data[G_max] = mean_max # update mean vector of distribution with maximum entropy 
-        
-        p_x_max = p[idxs_max] # [count_g_max, self.k]
-
-        num_covs = (p_x_max - mean_max).unsqueeze(-1) * (p_x_max - mean_max).unsqueeze(-2) # [n, d, 1] * [n, 1, d] -> [n, d, d]
+        num_covs = (p_max - mean_max).unsqueeze(-1) * (p_max - mean_max).unsqueeze(-2) # [n, d, 1] * [n, 1, d] -> [n, d, d]
         cov_max = torch.sum(num_covs) / count_G_max # [d, d]
         self.covs.data[G_max] = cov_max
         
         return None
     
-    def _convergion_crieria(self):
-        pass 
+    def _is_convergence(self) -> torch.Tensor.bool:
+        return False  
 
     def _update_gmm(self, x: TensorType["n", "d"])  -> None: 
-        p_0 = self._zeroth_posterior_update(x)
-        p_1 = self._first_posterior_update(x, p_0)
-        p_2 = self._second_posterior_update(x, p_1)
+        # 0th posterior update
+        p = self._zeroth_posterior_update(x) # [n, k]: posterior probability of each sample belonging to Gaussian component k 
+        
+        # general computations         
+        r_idxs = torch.arange(x.shape[0], device=x.device) # [n]
+        c_idxs = torch.argmax(p, dim=-1) # [n]: Gaussian component k each sample most likely belongs to 
+        
+        # entropy-related calculation
+        E_min, E_max, G_min, G_max = self._entropy_indices(x, p, r_idxs, c_idxs) # [], [], [], []: indices of the Gaussians with the smallest and biggest entropies
+        
+        idxs_min = torch.nonzero(G_min == c_idxs) # [count_G_min]: indices of all samples belonging to the Gaussian with the smallest entropy
+        idxs_max = torch.nonzero(G_max == c_idxs) # [count_G_max]: indices of all samples belonging to the Gaussian with the biggest entropy
+        
+        x_min = x[idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
+        x_max = x[idxs_max] # [count_G_max, d]: samples belonging to the Gaussian with the biggest entropy
+        
+        count_G_min = idxs_min.shape[0] # []: number of samples in the Gaussian with the smallest entropy 
+        count_G_max = idxs_max.shape[0] # []: number of samples in the Gaussian with the biggest entropy 
+        
+        # posterior update loop: 
+        while(self._is_convergence() != True): 
+            if E_min <= E_max: 
+                # 1st posterior update
+                p = self._first_posterior_update(x, p, G_max, count_G_min, count_G_max, idxs_min, x_min, x_max)
+                
+                # 2nd posterior update
+                p = self._second_posterior_update(x, p)
     
     def _update_encoder(self): 
         pass
         
     def forward(self,  mode: str, x: TensorType["b", "n", "d"], x_plus: Optional[TensorType["b", "n", "d"]]=None) -> TensorType["*"]:
-        self.component_distribution, self.mixture = self.mixtureModel()
+        self.component_distribution = self.mixtureModel()
         
         if mode == "update_gmm": 
             return self._update_gmm(x) 
@@ -361,9 +280,11 @@ class GMM(nn.Module):
             return self._update_encoder(x, x_plus) 
         
 def main(): 
+    d = 128
+    
     kwargs = {
         "k": 20, 
-        "d": 512,
+        "d": d,
         "alpha": 0.1, 
         "beta": 0.2, 
         "sim": {
@@ -372,10 +293,14 @@ def main():
         }
     } 
     
-    gmm = GMM(**kwargs)
-    x = torch.rand(size=(100, 512))    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(device)
+    
+    gmm = GMM(**kwargs).to(device)
+    x = torch.rand(size=(100, d)).to(device) * 2 - 1
     
     out = gmm(mode="update_gmm", x=x)
+    print("Hello")
 
 if __name__ == "__main__": 
     main()
