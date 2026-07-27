@@ -1,4 +1,4 @@
-from typing import Dict, Optional 
+from typing import Dict, Optional, Tuple 
 
 import torch
 import torch.nn as nn 
@@ -14,8 +14,8 @@ class GMM(nn.Module):
         d: int, # dimension of data and parameters of Gaussian distributions 
         alpha: float, 
         beta: float, 
-        sim: Dict, 
-        weights: Optional[TensorType["k", "d"]] = None, 
+        sim: Dict, # parameters of cosine-similarity
+        weights: Optional[TensorType["k", "d"]] = None, # mixture weights of GMM's individual distributions 
         means: Optional[TensorType["k", "d"]] = None, # mean vectors of Gaussian distributions 
         covs: Optional[TensorType["k", "d", "d"]] = None # covariance matrices of Gaussian distributions 
         ) -> None: 
@@ -28,25 +28,27 @@ class GMM(nn.Module):
         self.beta = beta 
         self.sim = sim
         
-        self.weights = weights if isinstance(weights, nn.Parameter) else nn.Parameter(weights) if weights is not None else nn.Parameter(data=torch.ones(size=(self.k, 1)) / self.k) # [k, 1]
+        self.weights = weights if isinstance(weights, nn.Parameter) else nn.Parameter(weights) if weights is not None else nn.Parameter(data=torch.ones(size=(self.k, )) / self.k) # [k]
         self.means = means if isinstance(means, nn.Parameter) else nn.Parameter(means) if means is not None else nn.Parameter(data=torch.rand(size=(self.k, self.d))) # [k, d]
         self.covs = covs if isinstance(covs, nn.Parameter) else nn.Parameter(covs) if covs is not None else nn.Parameter(data=torch.rand(size=(self.k, self.d, self.d))) # [k, d, d]
-        self.tau = nn.Parameter(data=torch.ones(1, 1)) # [1, 1]
-        self.lam = nn.Parameter(data=torch.ones(1, 1)) # [1, 1]
+        self.tau = nn.Parameter(data=torch.ones(1, )) # [1]
+        self.lam = nn.Parameter(data=torch.ones(1, )) # [1]
         
-        self.components = None
+        self.component_distribution, self.mixture = None, None 
   
         self.sim = nn.CosineSimilarity(**self.sim)
         self.relu = nn.ReLU()
-
-    def mixtureModel(self, means: TensorType["k", "d"], covs: TensorType["k", "d", "d"]) -> torch.distributions.Distribution: 
-
-        if not self.is_pos_definite(covs):
-            covs= self.to_pos_definite(covs)
         
-        components = D.MultivariateNormal(means, covs)
+    def mixtureModel(self) -> Tuple[D.MultivariateNormal, D.MixtureSameFamily]: 
+        mixture_distribution = D.Categorical(probs=self.weights.data) 
         
-        return components
+        if not self.is_pos_definite(self.covs.data):
+            self.covs.data = self.to_pos_definite(self.covs.data)
+        
+        component_distribution = D.MultivariateNormal(loc=self.means.data, covariance_matrix=self.covs.data)
+        mixture = D.MixtureSameFamily(mixture_distribution=mixture_distribution, component_distribution=component_distribution)
+        
+        return component_distribution, mixture
     
     def is_pos_definite(self, A: TensorType["k", "d", "d"]) -> bool: 
         if not torch.allclose(A, A.transpose(-1, -2)): # ensure that the matrix is symmetrix first  
@@ -168,33 +170,39 @@ class GMM(nn.Module):
         return loss_bml
     
     def _entropy(self, x: TensorType["b", "n", "d"]) -> None: 
-        b, n, _ = x.shape
         
-        probs = self._posterior(x) # [b, n, k]
-        idxs = torch.argmax(probs, dim=-1) # [b, n, 1]
+        probs = self._posterior_components(x) # [n, k]
+        idxs = torch.argmax(probs, dim=-1) # [n]
         
-        probs = probs[:, torch.arange(n, device=x.device), idxs] # [b, n, k]
-        probs = probs * torch.log(probs) # [b, n, k]
+        probs = probs[:, torch.arange(x.shape[1], device=x.device), idxs] # [n, k]
+        probs = probs * torch.log(probs) # [n, k]
         
-        unique_elements, inverse_indices = torch.unique(idxs, return_inverse=True) # [b, n, 1], [b, n, 1]
-        output_tensor = torch.zeros(size=(b, unique_elements.shape[0], 1), device=x.device) # [b, n, 1]
+        unique_elements, inverse_indices = torch.unique(idxs, return_inverse=True) # [n], [n]
+        output_tensor = torch.zeros(size=(unique_elements.shape[0], ), device=x.device) # [n]
         
-        E_k = torch.zeros(size=(b, self.k, 1), device=x.device)
-        E_k[unique_elements] = - torch.scatter_add(output_tensor, 0, inverse_indices, probs)
+        E_k = torch.zeros(size=(self.k, ), device=x.device)
+        E_k[unique_elements] = -torch.scatter_add(output_tensor, 0, inverse_indices, probs)
         
         return E_k 
     
-    def _zeroth_posterior_update(self, x: TensorType["b", "n", "d"]) -> TensorType["b", "n", "k"]:
-        probs = self._posterior(x) # [b, n, k, 1]
-        weights = self.weights.data[None, None, :].expand(*x.shape[:2], -1) # [k] -> [b, n, k]
+    def _posterior_mixed(self, x: TensorType["b", "n", "d"]) -> TensorType["b", "n", "k"]:
+        probs = self.mixture.log_prob(x).exp()
+        return probs 
         
-        num = probs * weights # [b, n, k]
-        denom = torch.sum(num, dim=1, keepdim=True).repeat(1, weights.shape[1]) # [n, k]
-        probs = num / denom 
+    def _posterior_components(self, x: TensorType["b", "n", "d"]) -> TensorType["b", "n", "k"]:
+        _x = x.permute(1, 0, 2).unsqueeze(-2) # [n, b, 1, d]
+        log_probs = self.component_distribution.log_prob(_x).permute(1, 0, 2)  # [n, b, k] -> [b, n, k] unweighted log-density
+        log_weights = torch.log(self.weights)  # [k]
+        log_joint = log_probs + log_weights[None, None, :].expand(*x.shape[:2], -1)  # [b, n, k]: log(w_k * N(x|mu_k,Sigma_k))
+        log_posterior = log_joint - torch.logsumexp(log_joint, dim=-1, keepdim=True)  # normalize over k
         
+        return log_posterior.exp()  # [b, n, k]: true p_{i,k}
+    
+    def _zeroth_posterior_update(self, x: TensorType["n", "d"]) -> TensorType["n", "k"]:
+        probs = self._posterior_mixed(x) # [n, k]
         return probs
         
-    def _first_posterior_update(self, x): 
+    def _first_posterior_update(self, x: TensorType["n", "d"]) -> None: 
         E_k = self._entropy(x) # [k]
         
         G_min = torch.argmin(E_k) # [1]: distribution with the largest entropy
@@ -223,7 +231,7 @@ class GMM(nn.Module):
         
         return weights, means, covs 
 
-    def _second_posterior_update(self, x: TensorType["b", "n", "d"]) -> None: 
+    def _second_posterior_update(self, x: TensorType["n", "d"]) -> None: 
         E_k = self._entropy(x) # [b, k]
         
         G_min = torch.argmin(E_k) # [b, 1]: distributions with the largest entropies
@@ -255,34 +263,39 @@ class GMM(nn.Module):
     def _update(self): 
         pass
     
-    def _evalute(self, x: TensorType["b", "n", "d"]) -> None: 
-        weights, means, covs = self.weights.data, self.means.data, self.covs.data
-        probs = self._zero_posterior_update(x)
-        E_k = self.entropy(weights, means, covs) 
-        weights, means, covs = self._first_posterior_update()
-        weihgts, means, covs = self._second_posterior_update()
+    def _evaluate(self, x: TensorType["b", "n", "d"])  -> None: 
+        probs = self._zeroth_posterior_update(x)
+        self._entropy() 
+        self._first_posterior_update()
+        self._second_posterior_update()
+        
+        return None 
     
-    def forward(self, x: TensorType["b", "n", "d"], x_plus: TensorType["b", "n", "d"], mode: str) -> TensorType["*"]:
+    def forward(self,  mode: str, x: TensorType["b", "n", "d"], x_plus: Optional[TensorType["b", "n", "d"]]=None) -> TensorType["*"]:
+        self.component_distribution, self.mixture = self.mixtureModel()
+        
         if mode == "update": 
-            self._update() 
+            return self._update(x, x_plus) 
+        
         elif mode == "evaluate": 
-            self._evaluate() 
+            return self._evaluate(x) 
         
-        
-        
-        
-        
-        
-        b = x.shape[0] # batch size 
-        
-        self.components = self.mixtureModel(means=self.means.data, covs=self.covs.data)
+def main(): 
+    kwargs = {
+        "k": 20, 
+        "d": 512,
+        "alpha": 0.1, 
+        "beta": 0.2, 
+        "sim": {
+            "dim": 1.0, 
+            "eps": 1.0e-6
+        }
+    } 
+    
+    gmm = GMM(**kwargs)
+    x = torch.rand(size=(100, 512))    
+    
+    out = gmm(mode="evaluate", x=x)
 
-        weights = self.weights.expand(b, -1, -1) # [b, k, ]
-        means = self.means.expand(b, -1, -1) # [b, k, d]
-        covs = self.covs.expand(b, -1, -1, -1) # [b, k, d, d]
-        
-        loss_cl = self._hard_negatives(x, x_plus, weights, means, covs) 
-        loss_bml = self._false_negatives(x, x_plus, weights, means, covs)
-        loss = torch.mean(loss_cl + self.lam * loss_bml)
-        
-        return loss
+if __name__ == "__main__": 
+    main()

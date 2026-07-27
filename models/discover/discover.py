@@ -58,9 +58,9 @@ class SkillDiscovery(pl.LightningModule):
             )
  
     def _shared_step(self, batch: TensorType["*"], stage: str): 
-        x, x_plus, _ = batch.values()
-        x_emb = self(x) 
-        x_plus_emb = self(x_plus)
+        x, x_plus, _ = batch.values() # [b, n, d]
+        x_emb = self(x)  # [b, n, d_model]
+        x_plus_emb = self(x_plus) # [b, n, d_model]
         loss = self.gmm(x_emb, x_plus_emb)
         
         self.log_dict({
@@ -69,6 +69,16 @@ class SkillDiscovery(pl.LightningModule):
             prog_bar=True,
             batch_size=batch.shape[0]
         )
+        
+        labels = [f"{i}" for i in range(x.shape[1])]
+        columns = ["label", "embedding"]
+        data = [[lbl, emb] for emb, lbl in zip(labels, x[0, ...])]
+        
+        if stage == "train": 
+            self.log({
+                "latent_space_label": 
+                    wandb.Table(columns = columns, data = data)
+            })
 
         return loss
 
