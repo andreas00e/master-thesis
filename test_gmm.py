@@ -161,8 +161,8 @@ class GMM(nn.Module):
 
         return loss_bml
     
-    def _entropy(self, x: TensorType["n", "d"]) -> TensorType["k"]: 
-        probs = self._posterior_components(x) # [n, k]: likelihood of each sample belonging to Gaussian component k 
+    def _entropy_counts(self, x: TensorType["n", "d"]) -> Tuple[TensorType["1"], TensorType["1"]]: 
+        probs = self._posterior_unweighted(x) # [n, k]: likelihood of each sample belonging to Gaussian component k 
         
         rows_idxs = torch.arange(x.shape[0], device=x.device) # [n]
         cols_idxs = torch.argmax(probs, dim=-1) # [n]: Gaussian component k each sample most likely belongs to 
@@ -176,14 +176,17 @@ class GMM(nn.Module):
         E_k = torch.zeros(size=(self.k, ), device=x.device) # [k]
         E_k[unique_elements] = -torch.scatter_add(output_tensor, 0, inverse_indices, probs) # [k]
         
-        return E_k 
+        G_min = torch.argmin(E_k) # [1]: distribution with the largest entropy
+        G_max = torch.argmax(E_k) # [1]: distribution with the smallest entropy
+        
+        return G_min, G_max
     
-    def _posterior_mixed(self, x: TensorType["n", "d"]) -> TensorType["n"]:
+    def _posterior_weighted(self, x: TensorType["n", "d"]) -> TensorType["n"]:
         probs = self.mixture.log_prob(x).exp() # [n]: posterior probability of each sample 
         
         return probs 
         
-    def _posterior_components(self, x: TensorType["n", "d"]) -> TensorType["n", "k"]:
+    def _posterior_unweighted(self, x: TensorType["n", "d"]) -> TensorType["n", "k"]:
         log_probs = self.component_distribution.log_prob(x.unsqueeze(1)) # [n, k]: unweighted log-density
         log_weights = torch.log(self.weights.data) # [k]
         log_joint = log_probs + log_weights[None, :].expand(x.shape[0], -1)  # [n, k]: log(w_k * log(N(x | mu_k, Sigma_k)) = log(w_k) + log(N(x | mu_k, Sigma_k))
@@ -192,17 +195,14 @@ class GMM(nn.Module):
         return log_posterior.exp()  # [n, k]: posterior probabilities p_{i,k}
     
     def _zeroth_posterior_update(self, x: TensorType["n", "d"]) -> TensorType["n", "k"]:
-        probs = self._posterior_mixed(x) # [n, k]
+        probs = self._posterior_weighted(x) # [n, k]
         
         return probs
         
     def _first_posterior_update(self, x: TensorType["n", "d"]) -> None: 
-        E_k = self._entropy(x) # [k]
+        G_min, G_max = self._entropy_counts(x) # [1], [1]
         
-        G_min = torch.argmin(E_k) # [1]: distribution with the largest entropy
-        G_max = torch.argmax(E_k) # [1]: distribution with the smallest entropy
-
-        probs = self._posterior(x) # [n, k]: k posterior probabilities
+        probs = self._posterior_weighted(x) # [n, k]: k posterior probabilities
         idxs = torch.argmax(probs, dim=-1) # [n]
         
         idxs_min = torch.nonzero(G_min == idxs) 
@@ -226,10 +226,7 @@ class GMM(nn.Module):
         return weights, means, covs 
 
     def _second_posterior_update(self, x: TensorType["n", "d"]) -> None: 
-        E_k = self._entropy(x) # [b, k]
-        
-        G_min = torch.argmin(E_k) # [b, 1]: distributions with the largest entropies
-        G_max = torch.argmax(E_k) # [b, 1]: distributions with the smallest entropies
+        G_min, G_max = self._entropy_count(x) # [1], [1]
 
         probs = self._posterior(x) # [b, n, k]: k posterior probabilities
         idxs = torch.argmax(probs, dim=-1) # [b, n]
@@ -259,7 +256,6 @@ class GMM(nn.Module):
     
     def _evaluate(self, x: TensorType["n", "d"])  -> None: 
         probs = self._zeroth_posterior_update(x)
-        entropy = self._entropy(x) 
         self._first_posterior_update()
         self._second_posterior_update()
         
