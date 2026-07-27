@@ -81,14 +81,6 @@ class GMM(nn.Module):
         probs = probs[mask].view(n, self.k-1) # [b, n, k-1]
         
         return torch.sigmoid(vals[:, 0]-vals[:, 1]) / torch.sigmoid(torch.var(probs, dim=-1)) # [n]
-        
-    def _posterior(self, x: TensorType["b", "n", "d"], weights: TensorType["b", "n", "d"]) -> TensorType["b", "n", "k"]:
-        log_weights = torch.log(weights)  # [b, k]
-        log_probs = self.components.log_prob(x.unsqueeze(1))  # [b, n, k], unweighted log-density
-        log_joint = log_probs + log_weights  # [b, n, k]: log(w_k * N(x|mu_k,Sigma_k))
-        log_posterior = log_joint - torch.logsumexp(log_joint, dim=-1, keepdim=True)  # normalize over k
-        
-        return log_posterior.exp()  # [b, n, k]: true p_{i,k}
     
     def _get_m_s(self, p: TensorType["b", "n", "k"]) -> TensorType["b","n", "2"]:
         probs_i, idxs_i = torch.topk(p, k=2, dim=-1) # [n, 2], [n, 2]: top 2 biggest posterior probabilities 
@@ -185,8 +177,8 @@ class GMM(nn.Module):
         
         return E_k 
     
-    def _posterior_mixed(self, x: TensorType["b", "n", "d"]) -> TensorType["b", "n", "k"]:
-        probs = self.mixture.log_prob(x).exp()
+    def _posterior_mixed(self, x: TensorType["n", "d"]) -> TensorType["n"]:
+        probs = self.mixture.log_prob(x).exp() # [n]: posterior probability of each sample 
         return probs 
         
     def _posterior_components(self, x: TensorType["b", "n", "d"]) -> TensorType["b", "n", "k"]:
@@ -263,7 +255,7 @@ class GMM(nn.Module):
     def _update(self): 
         pass
     
-    def _evaluate(self, x: TensorType["b", "n", "d"])  -> None: 
+    def _evaluate(self, x: TensorType["n", "d"])  -> None: 
         probs = self._zeroth_posterior_update(x)
         self._entropy() 
         self._first_posterior_update()
