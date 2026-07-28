@@ -6,7 +6,7 @@ from torchtyping import TensorType
 
 import lightning.pytorch as pl 
 
-from .gmm import GMM 
+from .gmm.gmm import GMM 
 from .visionBackbone import VisionBackbone
 from .visionEncoder import VisionEncoder
 

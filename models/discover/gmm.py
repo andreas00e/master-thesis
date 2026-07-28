@@ -235,17 +235,25 @@ class GMM(nn.Module):
         idxs_min = torch.nonzero(G_min == idxs) 
         idxs_max = torch.nonzero(G_max == idxs) 
         
+        count_G_min = idxs_min.shape[-2]
         count_G_max = idxs_max.shape[-2]
         
         x_min = x[idxs_min]
+        x_max = x[idxs_max]
+
+        weights_min = count_G_min / x.shape[0]        
+        weights_max = count_G_max / x.shape[0]
         
-        weights = count_G_max / x.shape[0]
+        means_min = torch.sum(x_min, dim=0) / count_G_min
+        means_max = torch.sum(x_max, dim=0) / count_G_max
         
-        means = torch.sum(x_min, dim=0) / count_G_max
+        num_covs_min = (x - means_min).unsqueeze(-1) * (x - means_min).unsqueeze(-2) # [b, n, d, 1] * [b, n, 1, d] -> [b, n, d, d]
+        num_covs_min = torch.sum(num_covs_min, dim=-3) 
+        covs = num_covs_min / count_G_min
         
-        num_covs = (x - means).unsqueeze(-1) * (x - means).unsqueeze(-2) # [b, n, d, 1] * [b, n, 1, d] -> [b, n, d, d]
-        num_covs = torch.sum(num_covs, dim=-3) 
-        covs = num_covs / count_G_max  
+        num_covs_max = (x - means_max).unsqueeze(-1) * (x - means_max).unsqueeze(-2) # [b, n, d, 1] * [b, n, 1, d] -> [b, n, d, d]
+        num_covs_max = torch.sum(num_covs_max, dim=-3) 
+        covs = num_covs_max / count_G_max   
         
         return weights, means, covs
     
