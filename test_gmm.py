@@ -55,15 +55,27 @@ class GMM(nn.Module):
 
         return bool(torch.all(info == 0))
    
-    def to_pos_def(self, A: TensorType["k", "d", "d"]) -> TensorType["k", "d", "d"]: 
-        A = (A + A.transpose(-1, -2)) / 2 # make all covariance matrices symmetric
+    # def to_pos_def(self, A: TensorType["k", "d", "d"]) -> TensorType["k", "d", "d"]: 
+    #     A = (A + A.transpose(-1, -2)) / 2 # make all covariance matrices symmetric
 
-        eigenvals, eigenvecs = eigh(A) # make all covariance matrices positive definite
-        eps = torch.abs(torch.amin(eigenvals, dim=-1, keepdim=True)) * 1.1 + 1e-6 # TODO: MOVE THE HYPERPARAMETERS TO THE CONFIG
-        eigenvals = torch.where(eigenvals <= 0, eps, eigenvals)
-        A = eigenvecs @ torch.diag_embed(eigenvals) @ eigenvecs.transpose(-1, -2)
+    #     eigenvals, eigenvecs = eigh(A) # make all covariance matrices positive definite
+    #     eps = torch.abs(torch.amin(eigenvals, dim=-1, keepdim=True)) * 1.1 + 1e-6 # TODO: MOVE THE HYPERPARAMETERS TO THE CONFIG
+    #     eigenvals = torch.where(eigenvals <= 0, eps, eigenvals)
+    #     A = eigenvecs @ torch.diag_embed(eigenvals) @ eigenvecs.transpose(-1, -2)
         
-        return A 
+    #     return A 
+    
+    def to_pos_def(self, A: TensorType["k", "d", "d"]) -> TensorType["k", "d", "d"]:
+        A = (A + A.transpose(-1, -2)) / 2  # symmetrize
+
+        eigenvals, _ = eigh(A)
+        min_eig = eigenvals.amin(dim=-1)  # (k,)
+
+        shift = torch.clamp(-min_eig, min=0) * 1.1 + 1e-6  # (k,)
+        eye = torch.eye(A.shape[-1], device=A.device, dtype=A.dtype)
+        A = A + shift.view(-1, 1, 1) * eye
+
+        return A
 
     def confidence(self, x: TensorType["n", "d"]) -> TensorType["n"]: 
         n = x.shape[0]
