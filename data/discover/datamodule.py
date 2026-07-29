@@ -7,6 +7,7 @@ from typing import  List, Optional, Tuple
 import lightning as pl 
 from torch.utils.data import Dataset, DataLoader, random_split
 
+from .utils.collate import collate_fn
 from data.discover.dataset import MimicGenRobotDataset
 
 class MimicGenRobotDataModule(pl.LightningDataModule): 
@@ -21,6 +22,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         shuffle: bool,  
         num_workers: int, 
         pin_memory: bool, 
+        multiprocessing_context: str, 
         persistent_workers: bool,
         dataset_lengths: List[int], 
         transforms: List[str],
@@ -36,10 +38,11 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.expand_depth = expand_depth 
         
         # dataloading kwargs
-        self.batch_size = batch_size 
+        self.batch_size = batch_size
         self.shuffle = shuffle
         self.num_workers = num_workers
         self.pin_memory = pin_memory
+        self.multiprocessing_context = multiprocessing_context
         self.persistent_workers = persistent_workers
         self.dataset_lengths = dataset_lengths
         
@@ -99,7 +102,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     def _get_demomap(self): # -> List[List[os.PathLike, int, int, None]]: 
         H = np.inf # H: min episode duration -> max possible window size
         demo_map = []
-        
 
         for file in self.files:
             with h5py.File(file, "r") as hf:
@@ -130,31 +132,37 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     
     def train_dataloader(self):
         train_dataloader = DataLoader(
+            collate_fn=collate_fn,    
             dataset=self.train_dataset, 
             batch_size=self.batch_size, 
             shuffle=self.shuffle,    
-            num_workers=self.num_workers,      
+            num_workers=self.num_workers,  
             pin_memory=self.pin_memory, 
+            multiprocessing_context=self.multiprocessing_context, 
             persistent_workers=self.persistent_workers, 
             )
         return train_dataloader
     
     def val_dataloader(self):
         val_dataloader = DataLoader(
+            collate_fn=collate_fn,    
             dataset=self.val_dataset, 
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
             pin_memory=self.pin_memory, 
+            multiprocessing_context=self.multiprocessing_context, 
             persistent_workers=self.persistent_workers, 
             )
         return val_dataloader
     
     def test_dataloader(self):
         test_dataloader = DataLoader(
-            dataset=self.test_dataset, 
+            collate_fn=collate_fn,    
+            dataset=self.val_dataset, 
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
             pin_memory=self.pin_memory, 
-            persistent_workers=self.persistent_workers,
+            multiprocessing_context=self.multiprocessing_context, 
+            persistent_workers=self.persistent_workers, 
             )
         return test_dataloader

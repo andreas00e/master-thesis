@@ -12,12 +12,13 @@ data:
     tasks: threading
     expand_depth: colormap 
 
-    batch_size: 4
+    batch_size: 80
     shuffle: True
-    num_workers: 1 # 31
+    num_workers: 31 
     pin_memory: True
     drop_last: True
     persistent_workers: True 
+    multiprocessing_context: None # prevents fork deadlocks in CUDA DDP
     dataset_lengths: 
     - 0.8
     - 0.1  
@@ -70,9 +71,9 @@ logger:
   project: skill_discovery
 
 trainer: 
-  accelerator: cuda    
-  devices: 
-    - 0
+  accelerator: gpu   
+  # strategy: ddp # delete to run on single gpu
+  devices: 0 # -1
   max_epochs: 400 
   num_sanity_val_steps: 2
   enable_progress_bar: True

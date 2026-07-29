@@ -6,7 +6,7 @@ from torchtyping import TensorType
 
 import lightning.pytorch as pl 
 
-from .gmm.gmm import GMM 
+from .gmm import GMM 
 from .visionBackbone import VisionBackbone
 from .visionEncoder import VisionEncoder
 
@@ -21,7 +21,6 @@ class SkillDiscovery(pl.LightningModule):
         ) -> None:
         
         super().__init__()
-        
         self.save_hyperparameters() 
         
         self.vision_backbone_kwargs = vision_backbone_kwargs 
@@ -58,7 +57,7 @@ class SkillDiscovery(pl.LightningModule):
             )
  
     def _shared_step(self, batch: TensorType["*"], stage: str): 
-        x, x_plus, _ = batch.values() # [b, n, d]
+        x, x_plus = batch.values() 
         x_emb = self(x)  # [b, n, d_model]
         x_plus_emb = self(x_plus) # [b, n, d_model]
         loss = self.gmm(x_emb, x_plus_emb)

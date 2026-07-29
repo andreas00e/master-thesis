@@ -7,7 +7,7 @@ import multiprocessing
 multiprocessing.set_start_method("spawn", force=True)
 
 
-@hydra.main(config_path="cfgs/", config_name="skill_discovery", version_base=None)
+@hydra.main(config_path="cfgs/", config_name="discover_skills", version_base=None)
 def main(cfg): 
     pl.seed_everything(cfg.seed)
 
