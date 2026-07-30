@@ -22,7 +22,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         shuffle: bool,  
         num_workers: int, 
         pin_memory: bool, 
-        multiprocessing_context: str, 
+        # multiprocessing_context: str, 
         persistent_workers: bool,
         dataset_lengths: List[int], 
         transforms: List[str],
@@ -42,7 +42,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.shuffle = shuffle
         self.num_workers = num_workers
         self.pin_memory = pin_memory
-        self.multiprocessing_context = multiprocessing_context
+        # self.multiprocessing_context = multiprocessing_context
         self.persistent_workers = persistent_workers
         self.dataset_lengths = dataset_lengths
         
@@ -138,7 +138,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             shuffle=self.shuffle,    
             num_workers=self.num_workers,  
             pin_memory=self.pin_memory, 
-            multiprocessing_context=self.multiprocessing_context, 
+            # multiprocessing_context=self.multiprocessing_context, 
             persistent_workers=self.persistent_workers, 
             )
         return train_dataloader
@@ -150,7 +150,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
             pin_memory=self.pin_memory, 
-            multiprocessing_context=self.multiprocessing_context, 
+            # multiprocessing_context=self.multiprocessing_context, 
             persistent_workers=self.persistent_workers, 
             )
         return val_dataloader
@@ -162,7 +162,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
             pin_memory=self.pin_memory, 
-            multiprocessing_context=self.multiprocessing_context, 
+            # multiprocessing_context=self.multiprocessing_context, 
             persistent_workers=self.persistent_workers, 
             )
         return test_dataloader

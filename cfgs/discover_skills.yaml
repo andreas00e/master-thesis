@@ -18,7 +18,7 @@ data:
     pin_memory: True
     drop_last: True
     persistent_workers: True 
-    multiprocessing_context: None # prevents fork deadlocks in CUDA DDP
+    # multiprocessing_context: "forkserver" # prevents fork deadlocks in CUDA DDP
     dataset_lengths: 
     - 0.8
     - 0.1  
@@ -73,7 +73,8 @@ logger:
 trainer: 
   accelerator: gpu   
   # strategy: ddp # delete to run on single gpu
-  devices: 0 # -1
+  devices: # for ddp: -1 
+    - 0 # single gpu 
   max_epochs: 400 
   num_sanity_val_steps: 2
   enable_progress_bar: True
