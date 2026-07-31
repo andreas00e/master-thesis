@@ -12,9 +12,9 @@ data:
     tasks: threading
     expand_depth: colormap 
 
-    batch_size: 80
+    batch_size: 8
     shuffle: True
-    num_workers: 31 
+    num_workers: 1 
     pin_memory: True
     drop_last: True
     persistent_workers: True 

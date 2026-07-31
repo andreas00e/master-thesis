@@ -325,7 +325,7 @@ class GMM(nn.Module):
             return self._update_encoder(x, x_plus) 
         
 def main(): 
-    d = 128
+    d = 4
     
     kwargs = {
         "k": 20, 

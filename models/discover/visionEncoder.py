@@ -74,17 +74,26 @@ class VisionEncoder(nn.Module):
             encoder_layer=self.encoder_layer, 
             **self.transformer_encoder_kwargs
             )
-        self.linear_layer = nn.Linear(
+        
+        self.linear_in = nn.Linear(
             in_features = self.encoder_layer_kwargs.d_model * 2, 
             out_features = self.encoder_layer_kwargs.d_model 
             )
         
+        self.linear_out = nn.Sequential(
+            nn.Linear(in_features=self.encoder_layer_kwargs.d_model, out_features=64), 
+            nn.ReLU(), 
+            nn.Linear(in_features=64, out_features=16) # TODO: Move the size of the layers to the config file
+        )
+
         self.cls = nn.Parameter(data=torch.ones(size=(1, 1, self.encoder_layer_kwargs.d_model)))
     
-    def forward(self, x) -> TensorType["batch", "d_model"]: 
-        x = self.linear_layer(x) # [batch, window, d_model]
+    def forward(self, x: TensorType["*"]) -> TensorType["*"]: 
+        x = self.linear_in(x) # [batch, window, d_model]
         cls = self.cls.repeat(x.shape[0], 1, 1) # [batch, 1, d_model]
         x = torch.concat(tensors=(cls, x), dim=1) # [batch, 1 + window, d_model]
         x = self.encoder_transformer(x) # [batch, 1 + window, d_model]
         x = x[:, 0, :] # [batch, d_model]
+        x = self.linear_out(x)
+        
         return x 

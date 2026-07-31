@@ -68,3 +68,27 @@ class MimicGenRobotDataset(Dataset):
         rgb_obs_plus = rgb_obs_plus.data.to(torch.float32).permute(0, 2, 3, 1)                   
         
         return rgb_obs, rgb_obs_plus
+    
+    def __getitem__(self, idx) -> Tuple[TensorType["*"], ...]: 
+        file, demo, n_steps = self.demo_map[idx] 
+        idx_start = np.random.randint(0, n_steps - self.window + 1)
+        
+        if file not in self._file_cache: # open file once per worker and cache it
+            self._file_cache[file] = h5py.File(file, "r")
+            
+        hf = self._file_cache[file]
+        data = hf["data"][demo]
+        obs = data["obs"] 
+        
+                
+        rgb_obs = obs["robot0_eye_in_hand_image"][idx_start:idx_start+self.window, ...] # [window, height=84, width=84, channels=3]
+        rgb_obs = np.transpose(rgb_obs, (0, 3, 1, 2)) 
+        rgb_obs = Video(rgb_obs)
+        
+        rgb_obs_plus = self.transforms_plus(rgb_obs)
+        rgb_obs = self.transforms(rgb_obs)
+        
+        rgb_obs = rgb_obs.data.to(torch.float32).permute(0, 2, 3, 1)
+        rgb_obs_plus = rgb_obs_plus.data.to(torch.float32).permute(0, 2, 3, 1)                   
+        
+        return rgb_obs, rgb_obs_plus

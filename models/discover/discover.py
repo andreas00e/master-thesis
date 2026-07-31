@@ -1,12 +1,13 @@
 import wandb
+import numpy as np 
 from typing import Dict
 
 import torch
 from torchtyping import TensorType
-
 import lightning.pytorch as pl 
 
-from .gmm import GMM 
+from .clustering.kmeans import KMeans
+from .clustering.rgmm import GMM 
 from .visionBackbone import VisionBackbone
 from .visionEncoder import VisionEncoder
 
@@ -30,6 +31,7 @@ class SkillDiscovery(pl.LightningModule):
                 
         self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
+        self.kmeans = KMeans().eval()
         self.gmm = GMM(**self.gmm_kwargs)   
 
     def configure_optimizers(self):
@@ -44,43 +46,40 @@ class SkillDiscovery(pl.LightningModule):
             }
         }
     
-    def forward(self, x: TensorType[""]) -> TensorType["*"]:
+    def forward(self, x: TensorType["batch"]) -> TensorType["batch"]:
         x = self.visionBackbone(x)
-        x = self.visionEncoder(x) 
+        x = self.visionEncoder(x)
 
         return x 
-    
-    def _log_image(self, x: TensorType["*"], x_name: str) -> None: 
-            self.logger.log_image(
-                key = x_name, 
-                image = [wandb.Image(img) for img in x.detach().cpu().numpy()]
-            )
  
-    def _shared_step(self, batch: TensorType["*"], stage: str): 
+    def _shared_step(self, batch: TensorType["batch"], stage: str) -> None: 
         x, x_plus = batch.values() 
-        x_emb = self(x)  # [b, n, d_model]
-        x_plus_emb = self(x_plus) # [b, n, d_model]
-        loss = self.gmm(x_emb, x_plus_emb)
+        x_emb = self(x)  # [b, d_emb]
+        # x_plus_emb = self(x_plus) # [b, d_emb]
+        # loss = self.gmm(x_emb, x_plus_emb)
         
-        self.log_dict({
-            stage: loss
-            }, 
-            prog_bar=True,
-            batch_size=batch.shape[0]
-        )
+        stage = self.trainer.state.stage
+        # self.log_dict({
+        #     stage: loss
+        #     }, 
+        #     prog_bar=True,
+        #     batch_size=x.shape
+        # )
         
-        labels = [f"{i}" for i in range(x.shape[1])]
-        columns = ["label", "embedding"]
-        data = [[lbl, emb] for emb, lbl in zip(labels, x[0, ...])]
-        
-        if stage == "train": 
-            self.log({
-                "latent_space_label": 
-                    wandb.Table(columns = columns, data = data)
-            })
+        if stage == "train":  
+            with torch.no_grad(): 
+                labels = self.kmeans(x_emb)
+            
+            labels = labels.detach().cpu().numpy()
+            features = x_emb.detach().cpu().numpy()
+            data = np.hstack((features, labels))
+            columns = [f"feature_{i}" for i in range(x_emb.shape[0])] + ["label"]        
+            
+            table = wandb.Table(columns=columns, data=data)
+            self.logger.experiment.log({"assignments": table})
 
-        return loss
-
+        return None 
+        
     def training_step(self, batch, batch_idx) -> TensorType["batch"]:  
         return self._shared_step(batch, "train")
         
