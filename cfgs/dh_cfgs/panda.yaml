@@ -1,5 +1,6 @@
 # DH parameters of the Franka Emika Panda
 # Every joint is a revolute joint => \theta_i are the joint variables 
+
 panda: 
   d: 
     - 0.3330 

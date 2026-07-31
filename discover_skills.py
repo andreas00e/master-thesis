@@ -1,13 +1,15 @@
 import hydra
 from hydra.utils import instantiate
 
-import lightning as pl
+import lightning.pytorch as pl
 
 import multiprocessing
 
 
 @hydra.main(config_path="cfgs/", config_name="discover_skills", version_base=None)
 def main(cfg): 
+    multiprocessing.set_start_method("spawn", force=True)
+    
     pl.seed_everything(cfg.seed)
 
     datamodule = instantiate(cfg.data.datamodule)
@@ -19,5 +21,4 @@ def main(cfg):
 
 
 if __name__ == "__main__": 
-    multiprocessing.set_start_method("spawn", force=True)
     main()

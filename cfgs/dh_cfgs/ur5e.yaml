@@ -1,5 +1,6 @@
 # DH parameters of the Universal Robots ur5e
 # Every joint is a revolute joint => \theta_i are the joint variables 
+
 ur5e: 
   d: 
     - 0.0891

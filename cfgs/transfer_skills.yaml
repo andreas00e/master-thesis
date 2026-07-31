@@ -1,0 +1,26 @@
+seed: 42 
+data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
+
+stage: train # test, predict
+
+data: 
+  datamodule: 
+    _target_: data.transfer.datamodule.TransferDataModule 
+    data_dir: ${data_dir}
+    window: 8 
+    robots: panda 
+    tasks: threading 
+    expand_depth: color_map 
+
+    config_path_dh: /cfgs/dh_cfgs/dh_params.yaml
+
+    batch_size: 8 
+    shuffle: True
+    num_workers: 1 
+    pin_memory: True 
+    drop_last: True 
+    persistent_workers: True 
+    dataset_lengths: 
+    - 0.8 
+    - 0.1 
+    - 0.1

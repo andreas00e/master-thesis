@@ -1,7 +1,7 @@
 import os 
-import h5py 
-
-
+import h5py
+import torch  
+                
 def main(): 
     file_dir = "~/ehrensberger/master-thesis/imports/mimicgen/datasets/robot"
     file_dir = os.path.expanduser(file_dir)
@@ -17,8 +17,6 @@ def main():
                 joint_vel = data[demo]["obs"]["robot0_joint_vel"][()]
                 print(joint_pos.shape)
                 print(joint_vel.shape)
-                
-                
                 
                 
                 exit()
