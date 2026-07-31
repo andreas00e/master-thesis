@@ -53,7 +53,7 @@ class TransferDataModule(pl.LightningDataModule):
             and any(task in file for task in self.tasks)]
         
         self.demo_map = None
-        self.joint_descr = None 
+        self.joint_dsc = None 
         self.train_dataset, self.val_dataset, self.test_dataset = self.setup()
         
         self.n_samples_per_epoch = len(self.demo_map)
@@ -83,21 +83,21 @@ class TransferDataModule(pl.LightningDataModule):
         
         return demo_map
     
-    def _get_joint_descr(self) -> Dict[str: TensorType["*"]]: 
+    def _get_joint_dsc(self) -> Dict[str, TensorType["*"]]: 
         files = [os.path.join(self.config_file_dir, file) for file in os.listdir(self.config_file_dir)]
         cfgs = [OmegaConf.to_container(OmegaConf.load(file), resolve=True) for file in files]
         
-        joint_descr = {}
+        joint_dsc = {}
         for cfg in cfgs: 
             robot = next(iter(cfg))
             cfg = cfg[robot]
-            joint_descr[self.robots] = torch.stack([torch.tensor(value) for value in cfg.values()], dim=0)
+            joint_dsc[self.robots] = torch.stack([torch.tensor(value) for value in cfg.values()], dim=0)
             
-        return joint_descr
+        return joint_dsc
         
     def setup(self, stage=None) -> Tuple[Dataset, Dataset, Dataset]:
         self.demo_map = self._get_demomap()
-        self.joint_descr = self._get_joint_descr()
+        self.joint_dsc = self._get_joint_dsc()
         
         dataset = TransferDataset(
             demo_map=self.demo_map,

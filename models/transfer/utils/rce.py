@@ -5,7 +5,7 @@ import torch.nn as nn
 from torchtyping import TensorType
 
 
-class JointAttentionEncoder(nn.Module): 
+class RCE(nn.Module): 
     def __init__(self, 
         description_kwargs: Dict,  
         observation_kwargs: Dict, 

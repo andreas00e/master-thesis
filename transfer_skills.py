@@ -1,9 +1,11 @@
-import multiprocessing 
-
 import hydra
 from hydra.utils import instantiate
 
+import multiprocessing 
+
 import lightning.pytorch as pl 
+
+from data.transfer.datamodule import TransferDataModule
 
 
 @hydra.main(config_path="cfgs/", config_name="transfer_skills", version_base=None)
@@ -11,8 +13,13 @@ def main(cfg):
     multiprocessing.set_start_method("spawn", force=True)
     
     pl.seed_everything(cfg.seed) 
+     
+     
     
-    datamodule = instantiate(cfg.data.datamodule)
+    
+    datamodule = TransferDataModule(**cfg.data.datamodule)
+    
+    
     model = instantiate(cfg.model)
     logger = instantiate(cfg.logger)
 

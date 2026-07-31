@@ -3,6 +3,7 @@ import h5py
 import numpy as np 
 from typing import Dict, List, Tuple
 
+import torch 
 from torchtyping import TensorType 
 from torch.utils.data import Dataset 
 
@@ -10,13 +11,15 @@ class TransferDataset(Dataset):
     def __init__(self, 
         demo_map: List[Tuple[os.PathLike, int, int]],
         window: int,
-        joint_descr: Dict[str, TensorType["*"]],
+        joint_dsc: Dict[str, TensorType["*"]],
         ) -> None:
         super().__init__()
         
         self.demo_map = demo_map
         self.window = window
-        self.joint_descr = joint_descr
+        self.joint_dsc = joint_dsc
+        
+        self.depth = True
         
         self._file_cache = {}
                        
@@ -35,22 +38,25 @@ class TransferDataset(Dataset):
           except Exception:
               pass
     
-    def __getitem__(self, idx) -> Tuple[TensorType["*"], ...]: 
+    def __getitem__(self, idx) -> Dict[str, TensorType["*"]]: 
+        item = {}
         file, demo, n_steps = self.demo_map[idx] 
         idx_start = np.random.randint(0, n_steps - self.window + 1)
         
-        
-        
-        
+        robot = file.split(".")[0].split("_")[-2] if self.depth else file.split(".")[0].split("_")[-1]
+        joint_dsc = self.joint_dsc[robot]
+
         if file not in self._file_cache: # open file once per worker and cache it
             self._file_cache[file] = h5py.File(file, "r")
             
         hf = self._file_cache[file]
-        data = hf["data"][demo]
-        obs = data["obs"] 
+        obs = hf["data"][demo]["obs"]
         
-                
-        rgb_obs = obs["robot0_eye_in_hand_image"][idx_start:idx_start+self.window, ...] # [window, height=84, width=84, channels=3]
-        rgb_obs = np.transpose(rgb_obs, (0, 3, 1, 2)) 
+        joint_pos = obs["robot0_joint_pos"][idx_start:idx_start+self.window, :] # [window, 3]
+        joint_vel = obs["robot0_joint_vel"][idx_start:idx_start+self.window, :] # [window, 3]
+        joint_obs = torch.vstack((joint_pos, joint_vel))
         
-        return rgb_obs
+        item["joint_dsc"] = joint_dsc
+        item["joint_obs"] = joint_obs 
+        
+        return item

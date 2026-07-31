@@ -5,15 +5,12 @@ stage: train # test, predict
 
 data: 
   datamodule: 
-    _target_: data.transfer.datamodule.TransferDataModule 
+    # _target_: data.transfer.datamodule.TransferDataModule 
     data_dir: ${data_dir}
     window: 8 
     robots: panda 
     tasks: threading 
-    expand_depth: color_map 
-
-    config_path_dh: /cfgs/dh_cfgs/dh_params.yaml
-
+    config_file_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/cfgs/dh_cfgs
     batch_size: 8 
     shuffle: True
     num_workers: 1 

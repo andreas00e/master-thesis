@@ -1,9 +1,9 @@
 import hydra
 from hydra.utils import instantiate
 
-import lightning.pytorch as pl
-
 import multiprocessing
+
+import lightning.pytorch as pl
 
 
 @hydra.main(config_path="cfgs/", config_name="discover_skills", version_base=None)
