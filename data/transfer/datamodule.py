@@ -11,6 +11,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 
 from data.transfer.dataset import TransferDataset
 
+
 class TransferDataModule(pl.LightningDataModule): 
     def __init__(self, 
         data_dir: os.PathLike, # directory containing the hdf5 trajectory files 
@@ -88,10 +89,10 @@ class TransferDataModule(pl.LightningDataModule):
         cfgs = [OmegaConf.to_container(OmegaConf.load(file), resolve=True) for file in files]
         
         joint_dsc = {}
-        for cfg in cfgs: 
-            robot = next(iter(cfg))
+        for cfg in cfgs:
+            robot = next(iter(cfg.keys()))
             cfg = cfg[robot]
-            joint_dsc[self.robots] = torch.stack([torch.tensor(value) for value in cfg.values()], dim=0)
+            joint_dsc[robot] = torch.stack([torch.tensor(value) for value in cfg.values()], dim=0)
             
         return joint_dsc
         
@@ -102,7 +103,7 @@ class TransferDataModule(pl.LightningDataModule):
         dataset = TransferDataset(
             demo_map=self.demo_map,
             window=self.window,
-            config_path_dh=self.config_path_dh, 
+            joint_dsc=self.joint_dsc
             )
         
         train_dataset, val_dataset, test_dataset = random_split(dataset, lengths=self.dataset_lengths)

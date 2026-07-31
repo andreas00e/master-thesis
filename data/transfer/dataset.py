@@ -52,9 +52,9 @@ class TransferDataset(Dataset):
         hf = self._file_cache[file]
         obs = hf["data"][demo]["obs"]
         
-        joint_pos = obs["robot0_joint_pos"][idx_start:idx_start+self.window, :] # [window, 3]
-        joint_vel = obs["robot0_joint_vel"][idx_start:idx_start+self.window, :] # [window, 3]
-        joint_obs = torch.vstack((joint_pos, joint_vel))
+        joint_pos = torch.tensor(obs["robot0_joint_pos"][idx_start:idx_start+self.window, :], dtype=torch.float32) # [window, 3]
+        joint_vel = torch.tensor(obs["robot0_joint_vel"][idx_start:idx_start+self.window, :], dtype=torch.float32) # [window, 3]
+        joint_obs = torch.hstack((joint_pos, joint_vel)) # [window, 6]
         
         item["joint_dsc"] = joint_dsc
         item["joint_obs"] = joint_obs 

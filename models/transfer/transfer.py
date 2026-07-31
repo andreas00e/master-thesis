@@ -3,8 +3,7 @@ from typing import Dict
 import torch
 import lightning.pytorch as pl
 
-
-from models.transfer.utils.rce import RCE
+from .utils.rce import RCE
 
 
 class SkillTransfer(pl.LightningModule): 

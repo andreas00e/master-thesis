@@ -1,67 +1,75 @@
-from typing import Dict
+from typing import Dict, Any
 
 import torch 
 import torch.nn as nn 
 from torchtyping import TensorType
 
 
-class RCE(nn.Module): 
-    def __init__(self, 
-        description_kwargs: Dict,  
-        observation_kwargs: Dict, 
-        entropy_kwargs: Dict,
-        *args, **kwargs) -> None: 
+class RCE(nn.Module):
+    def __init__(
+        self,
+        dsc_kwargs: Dict[str, Any],
+        obs_kwargs: Dict[str, Any],
+        h_kwargs: Dict[str, Any],
+    ) -> None:
         super().__init__()
-        
-        self.description_kwargs = description_kwargs
-        self.observation_kwargs = observation_kwargs
-        self.entropy_kwargs = entropy_kwargs
- 
-        self.tau = nn.Parameter(
-            data=torch.tensor(
-                self.entropy_kwargs.tau-self.entropy_kwargs.tau_min
-                ), requires_grad=True
-            )
 
-        self.description_encoder = nn.Sequential(
-            nn.Linear(
-                self.description_kwargs.input_dim, 
-                self.description_kwargs.hidden_dim
-                ), 
-            nn.LayerNorm(
-                self.description_kwargs.hidden_dim
-                ), 
+        # retain original kwargs for flexibility
+        self.dsc_kwargs = dsc_kwargs
+        self.obs_kwargs = obs_kwargs
+        self.h_kwargs = h_kwargs
+
+        # learnable temperature offset (originally: tau - tau_min)
+        init_tau = getattr(self.h_kwargs, "tau", None)
+        init_tau_min = getattr(self.h_kwargs, "tau_min", 0.0)
+        if init_tau is None:
+            # fall back to dict-style access if attributes not present
+            init_tau = self.h_kwargs.get("tau", 1.0)
+            init_tau_min = self.h_kwargs.get("tau_min", 0.0)
+
+        self.tau = nn.Parameter(torch.tensor(init_tau - init_tau_min), requires_grad=True)
+
+        # encoders
+        self.dsc_encoder = self._build_dsc_encoder()
+        self.obs_encoder = self._build_obs_encoder()
+
+    def _build_dsc_encoder(self) -> nn.Sequential:
+        in_dim = getattr(self.dsc_kwargs, "input_dim", None) or self.dsc_kwargs.get("input_dim")
+        hidden = getattr(self.dsc_kwargs, "hidden_dim", None) or self.dsc_kwargs.get("hidden_dim")
+        out = getattr(self.dsc_kwargs, "output_dim", None) or self.dsc_kwargs.get("output_dim")
+
+        return nn.Sequential(
+            nn.Linear(in_dim, hidden),
+            nn.LayerNorm(hidden),
             nn.ELU(),
-            nn.Linear(
-                self.description_kwargs.hidden_dim, 
-                self.description_kwargs.output_dim
-                )
-            )
-        
-        self.observation_encoder = nn.Sequential(
-            nn.Linear(
-                self.observation_kwargs.input_dim, 
-                self.observation_kwargs.output_dim
-                ), 
-            nn.ELU()
-            )
+            nn.Linear(hidden, out),
+        )
 
-    def forward(self, joint_descriptions: TensorType["*"], joint_observations: TensorType["*"]) -> TensorType["batch", "1"]:
-        description_emb = self.description_encoder(joint_descriptions)
-        description_emb = torch.clamp(
-            nn.Tanh(description_emb), -1.0 + self.entropy_kwargs.epsilon, 1.0 + self.entropy_kwargs.epsilon
-            )
+    def _build_obs_encoder(self) -> nn.Sequential:
+        in_dim = getattr(self.obs_kwargs, "input_dim", None) or self.obs_kwargs.get("input_dim")
+        out = getattr(self.obs_kwargs, "output_dim", None) or self.obs_kwargs.get("output_dim")
 
-        observation_emb = self.observation_encoder(joint_observations) # [batch, n_joints, dim] -> [batch, n_joints, emb]
-        observation_emb = torch.exp(observation_emb / (self.entropy_kwargs.tau + self.entropy_kwargs.epsilon)) # [batch, n_joints, emb]
-        observation_emb = observation_emb / torch.sum(observation_emb, dim=-1) # [batch, n_joints, hidden_dim]
-        
-        emb = observation_emb * description_emb * observation_emb  # [batch, n_joints, hidden_dim]
-        emb = torch.sum(emb, dim=1)  # [batch, hidden_dim]
-        
-        return emb 
-    
-    def training_step(self, batch: TensorType["*"], batch_idx: TensorType["*"]) -> TensorType["*"]:
-        joint_description, joint_observation = batch.values()
-        emb = self.forward(joint_description, joint_observation)
-        return emb 
+        return nn.Sequential(nn.Linear(in_dim, out), nn.ELU())
+
+    def forward(self, joint_dsc: TensorType["*"], joint_obs: TensorType["*"]):
+        # description embedding: [batch, n_joints, hidden]
+        description_emb = self.dsc_encoder(joint_dsc)
+        eps = getattr(self.h_kwargs, "epsilon", None)
+        if eps is None:
+            eps = self.h_kwargs.get("epsilon", 1e-6)
+
+        description_emb = torch.clamp(torch.tanh(description_emb), -1.0 + eps, 1.0 - eps)
+
+        # observation embedding and normalization
+        tau_val = getattr(self.h_kwargs, "tau", None)
+        if tau_val is None:
+            tau_val = self.h_kwargs.get("tau", 1.0)
+
+        observation_emb = self.obs_encoder(joint_obs)  # [batch, n_joints, emb]
+        observation_emb = torch.exp(observation_emb / (tau_val + eps))
+        observation_emb = observation_emb / torch.sum(observation_emb, dim=-1, keepdim=True)
+
+        # combine and pool over joints
+        emb = observation_emb * description_emb * observation_emb
+        emb = torch.sum(emb, dim=1)
+        return emb

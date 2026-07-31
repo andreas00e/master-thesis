@@ -5,7 +5,7 @@ stage: train # test, predict
 
 data: 
   datamodule: 
-    # _target_: data.transfer.datamodule.TransferDataModule 
+    _target_: data.transfer.datamodule.TransferDataModule 
     data_dir: ${data_dir}
     window: 8 
     robots: panda 
@@ -21,3 +21,41 @@ data:
     - 0.8 
     - 0.1 
     - 0.1
+  
+model: 
+  _target_: models.transfer.transfer.SkillTransfer
+  rce_kwargs:
+    dsc_kwargs: 
+      input_dim: 512
+      hidden_dim: 128
+      output_dim: 32
+    obs_kwargs: 
+      input_dim: 512
+      output_dim: 128
+    h_kwargs: 
+      tau: 0.1
+      tau_min: 0.01
+
+  optimizer_kwargs: 
+    optimizer: 
+      lr: 1e-3
+    lr_scheduler: 
+      start_factor: 0.5 
+      total_iters: 40 
+
+logger: 
+  _target_: lightning.pytorch.loggers.WandbLogger
+  name: debugging
+  version: ${now:%Y_%m_%d_%H_%M}
+  project: skill_discovery
+
+trainer: 
+  accelerator: gpu   
+  # strategy: ddp # delete to run on single gpu
+  devices: # for ddp: -1 
+    - 0 # single gpu 
+  max_epochs: 400 
+  num_sanity_val_steps: 2
+  enable_progress_bar: True
+  profiler: simple 
+  default_root_dir: logs/skill_discovery/
