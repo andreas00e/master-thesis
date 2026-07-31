@@ -2,10 +2,86 @@ from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn 
+import torch.nn.functional as F
 import torch.distributions as D
 from torchtyping import TensorType
 from torch.linalg import cholesky_ex, eigh
 
+
+class KMeans(nn.Module):
+    def __init__(self, n_clusters: int=3, max_iter: int=300, tol: float=1e-4):
+        super().__init__()
+        self.n_clusters = n_clusters
+        self.max_iter = max_iter
+        self.tol = tol
+        self.means = nn.Parameter(torch.empty(0), requires_grad=False) # [n_cluster, d]
+        self.is_fitted = False
+         
+    def _compute_distances(self, X: TensorType["n", "d"]) -> TensorType["n"]:
+        # ||X - C||^2 = ||X||^2 + ||C||^2 - 2*X*C.T  
+        x_norm = (X ** 2).sum(dim=1, keepdim=True)
+        c_norm = (self.means ** 2).sum(dim=1, keepdim=True).T
+        norm = x_norm + c_norm  
+        distances = torch.addmm(norm, X, self.means.T, alpha=-2, beta=1)
+        return distances
+
+    def forward(self, x: TensorType["n", "d"]) -> TensorType["n"]:
+        if not self.is_fitted:
+            _ = self.fit(x)
+            
+        distances = self._compute_distances(x)
+        labels = torch.argmin(distances, dim=1) # [n]
+        
+        covs = self._get_covariance(x)
+        
+        
+        return {
+            "labels": labels, 
+            "means": self.means,
+            "covs": covs
+        } 
+        
+    def _get_covariance(self, x, labels):
+        covs = []
+        
+        for idx in range(labels.shape[0]):
+            idx = int(idx)
+            # idxs = torch.zeros(size=(x.shape[0], ), device=x.device)
+            idxs = labels[idx] == idx
+            data = x[idxs]
+            cov = torch.cov(data)
+            covs.append(cov)
+        
+        covs = torch.stack(covs, dim=0) 
+
+        return covs 
+    
+
+    def fit(self, x: TensorType["n", "d"]) -> bool:
+        n = x.shape[0]
+
+        random_indices = torch.randperm(n, device=x.device)[:self.n_clusters] # initialize centroids from a random permutation of the data points
+        self.means.data = x[random_indices].clone()  
+
+        for _ in range(self.max_iter):
+            old_centroids = self.means.data.clone() #
+
+            distances = self._compute_distances(x) # [n, n_clusters]:
+
+            cluster_assignments = torch.argmin(distances, dim=1) # [n]: hard cluster assignment
+
+            one_hot = F.one_hot(cluster_assignments, num_classes=self.n_clusters).to(x.dtype) # [n, k]: one-hot centroid mapping matrix 
+                      
+            counts = torch.clamp(torch.sum(one_hot, dim=0, keepdim=True).T, min=1e-8) # [k, 1] # count points in each cluster (prevent division by zero with small epsilon)
+
+            self.means.data = (one_hot.T @ x) / counts # [k, n] @ [n, d] / [k, 1]
+
+            center_shift = torch.norm(self.means.data - old_centroids)
+            if center_shift < self.tol: # check for convergence by tracking the shift of the centroids
+                break
+
+        self.is_fitted = True
+        return self
 
 class GMM(nn.Module): 
     def __init__(
