@@ -116,7 +116,7 @@ class GMM(nn.Module):
         self.tau = nn.Parameter(data=torch.ones((1, ), dtype=torch.float64)) # [1]
         self.lam = nn.Parameter(data=torch.ones((1, ), dtype=torch.float64)) # [1]
         
-        self.component_distribution = None 
+        self.component_distribution, self.dtype, self.device = [None]*3
   
         self.sim = nn.CosineSimilarity(**self.sim)
         self.relu = nn.ReLU()
@@ -315,8 +315,8 @@ class GMM(nn.Module):
 
         return p_new, weight_max, mean_max, cov_max
 
-    def _second_posterior_update(self, x, p_0, p_1, weight_max, mean_max, cov_max,G_min, G_max, count_G_min, count_G_max, idxs_min, idxs_max, x_min, x_max) -> None:         
-        x_new = torch.vstack(tensors=(x_min, x_max))
+    def _second_posterior_update(self, x, p_0, p_1, weight_max, mean_max, cov_max, G_min, G_max, count_G_min, count_G_max, idxs_min, idxs_max, x_min, x_max) -> None:         
+        x_new = torch.vstack(tensors=(x_min, x_max)) # [count_G_min+count_G_max, d]: samples belonging to the merged Gaussian distribution 
         idx_max = torch.argmax(torch.diagonal(cov_max)) # []: dimension with the biggest variance
         
         # swap of posterior probabilities 
@@ -324,40 +324,41 @@ class GMM(nn.Module):
         r_swap = torch.nonzero(idxs_swap).squeeze()
         p_1[r_swap][:, [G_min, G_max]] = p_1[r_swap][:, [G_max, G_min]] # [count_G_min+count_G_max, k-1]
         
-        idxs = torch.hstack((idxs_min, idxs_max))
-        p_0[idxs] = p_1 # [n, k_]
+        idxs = torch.hstack((idxs_min, idxs_max)) # [count_G_min+count_G_max]  
+        
+        p_max = p_0[:, G_max].clone() 
+        p_max[idxs] = p_1[:, G_max]
         
         # update the mixture weights of the two new Gaussian distributions
-        weight_min = count_G_min / x.shape[0] # []: new weight of the Gaussian with the past smallest entropy 
-        weight_max = count_G_max / x.shape[0] # []: new weight of the Gaussian with the past biggest entropy 
-         
+        weight_min = torch.tensor(count_G_min / x.shape[0]) # []: new weight of the Gaussian with the past smallest entropy 
+        weight_max = torch.tensor(count_G_max / x.shape[0]) # []: new weight of the Gaussian with the past biggest entropy 
+        weights_two = torch.hstack((weight_min, weight_max)).to(self.dtype).to(self.device) # [2]
+        
         # update the mean vectorss of the two new Gaussian distributions
-        mean_min = torch.sum(x_min, dim=0) / count_G_max # [d]: new mean vector of the Gaussian with the biggest entropy                
+        mean_min = torch.sum(x_min, dim=0) / count_G_min # [d]: new mean vector of the Gaussian with the biggest entropy                
         mean_max = torch.sum(x_max, dim=0) / count_G_max # [d]: new mean vector of the Gaussian with the past biggest entropy 
-
-        num_covs = p_0[:, G_max][:, None, None] * ((x - mean_max).unsqueeze(-1) * (x - mean_max).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
-        cov_max = torch.sum(num_covs) / count_G_max # [d, d]
+        means_two = torch.vstack((mean_min, mean_max)) # [2, d]
         
-        cov_min = None 
-        
-        
-        G_min = G_min.item()
-        G_max = G_max.item()
+        cov_min = p_max[:, None, None] * ((x - mean_min).unsqueeze(-1) * (x - mean_min).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
+        cov_min = torch.sum(cov_min, dim=0) / count_G_min # [d, d]
+        cov_max = p_max[:, None, None] * ((x - mean_max).unsqueeze(-1) * (x - mean_max).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
+        cov_max = torch.sum(cov_max, dim=0) / count_G_max # [d, d]
+        covs_two = torch.vstack((cov_min[None, ...], cov_max[None, ...]))
         
         # update weights
         weights = self.weights.data.clone() 
-        weights[[G_min, G_max]] = weight_min, weight_max
+        weights[[G_min.item(), G_max.item()]] = weights_two
         
         # update means 
         means = self.means.data.clone()
-        means[[G_min, G_max], :] = mean_min, mean_max 
-
+        means[[G_min.item(), G_max.item()], :] = means_two
+        
         # update covariance matrices 
         covs = self.covs.data.clone() 
-        covs[[G_min, G_max], ...] = cov_min, cov_max
-
+        covs[[G_min.item(), G_max.item()], ...] = covs_two 
+        
         component_distribution = self.mixtureModel(means=means, covs=covs)
-        p_2 = self._posterior(x=x_new, weights=weights)
+        p_2 = self._posterior(x=x_new, weights=weights, distribution=component_distribution)
 
         return p_2
     
@@ -381,8 +382,8 @@ class GMM(nn.Module):
         x_min = x[idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
         x_max = x[idxs_max] # [count_G_max, d]: samples belonging to the Gaussian with the biggest entropy
         
-        count_G_min = idxs_min.shape[0] # []: number of samples in the Gaussian with the smallest entropy 
-        count_G_max = idxs_max.shape[0] # []: number of samples in the Gaussian with the biggest entropy 
+        count_G_min = idxs_min.numel() # []: number of samples in the Gaussian with the smallest entropy 
+        count_G_max = idxs_max.numel() # []: number of samples in the Gaussian with the biggest entropy 
         
         # posterior update loop: 
         while(self._is_convergence() != True): 
@@ -398,6 +399,8 @@ class GMM(nn.Module):
         return loss_cl + loss_bml
         
     def forward(self,  mode: str, x: TensorType["b", "n", "d"], x_plus: Optional[TensorType["b", "n", "d"]]=None) -> TensorType["*"]:
+        self.dtype = x.dtype
+        self.device = x.device
         self.component_distribution = self.mixtureModel(means=self.means, covs=self.covs)
         
         if mode == "update_gmm": 
