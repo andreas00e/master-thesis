@@ -27,13 +27,11 @@ class KMeans(nn.Module):
 
     def forward(self, x: TensorType["n", "d"]) -> TensorType["n"]:
         if not self.is_fitted:
-            _ = self.fit(x)
+            _ = self._fit(x)
             
         distances = self._compute_distances(x)
         labels = torch.argmin(distances, dim=1) # [n]
-        
-        covs = self._get_covariance(x)
-        
+        covs = self._get_covariance(x, labels)
         
         return {
             "labels": labels, 
@@ -41,23 +39,24 @@ class KMeans(nn.Module):
             "covs": covs
         } 
         
-    def _get_covariance(self, x, labels):
+    def _get_covariance(self, x: TensorType["n", "d"], labels: TensorType["n"]) -> TensorType["d", "d"]: 
         covs = []
         
         for idx in range(labels.shape[0]):
-            idx = int(idx)
-            # idxs = torch.zeros(size=(x.shape[0], ), device=x.device)
-            idxs = labels[idx] == idx
-            data = x[idxs]
-            cov = torch.cov(data)
-            covs.append(cov)
+            if labels[idx].numel() != 0: 
+                idxs = labels == idx
+                data = x[idxs]
+                cov = torch.cov(data.T)
+                covs.append(cov)
+            else:
+                cov = torch.eye(x.shape[-1])
+                covs.append(cov)
         
         covs = torch.stack(covs, dim=0) 
 
         return covs 
-    
 
-    def fit(self, x: TensorType["n", "d"]) -> bool:
+    def _fit(self, x: TensorType["n", "d"]) -> bool:
         n = x.shape[0]
 
         random_indices = torch.randperm(n, device=x.device)[:self.n_clusters] # initialize centroids from a random permutation of the data points

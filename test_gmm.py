@@ -33,10 +33,10 @@ def main():
 
     # x_plus = torch.rand(size=(100, d)).to(device)
     
-    labels = kmeans(x)
+    labels, means, covs = kmeans(x).values()
     
     
-    idxs, counts = torch.unique(labels, return_counts=True)
+    _, counts = torch.unique(labels, return_counts=True)
     print(counts)
     # print(labels)
     exit()
