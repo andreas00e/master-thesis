@@ -8,7 +8,7 @@ def main():
     d = 4
     
     kmeans_kwargs = {
-        "n_clusters": k, 
+        "k": k, 
         "max_iter": 300, 
         "tol": 1e-4
     }
@@ -30,16 +30,16 @@ def main():
     gmm = GMM(**gmm_kwargs).to(device)
     
     x = torch.rand(size=(100, d)).to(device)
-
     # x_plus = torch.rand(size=(100, d)).to(device)
     
-    labels, means, covs = kmeans(x).values()
+    weights, means, covs, labels = kmeans(x).values()
     
+    print(f"weights: {weights.shape}")
+    print(f"means: {means.shape}")
+    print(f"covs: {covs.shape}")
     
-    _, counts = torch.unique(labels, return_counts=True)
-    print(counts)
-    # print(labels)
     exit()
+    
     
     out = gmm(mode="update_gmm", x=x)
     # out = gmm(mode="update_encoder", x=x, x_plus=x_plus)

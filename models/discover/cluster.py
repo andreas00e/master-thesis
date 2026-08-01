@@ -9,78 +9,85 @@ from torch.linalg import cholesky_ex, eigh
 
 
 class KMeans(nn.Module):
-    def __init__(self, n_clusters: int=3, max_iter: int=300, tol: float=1e-4):
+    def __init__(
+        self, 
+        k: int=3, 
+        max_iter: int=300, 
+        tol: float=1e-4
+        ):
         super().__init__()
-        self.n_clusters = n_clusters
+        
+        self.k = k
         self.max_iter = max_iter
         self.tol = tol
-        self.means = nn.Parameter(torch.empty(0), requires_grad=False) # [n_cluster, d]
+        self.register_buffer("means", torch.empty(0)) # [k, d]
         self.is_fitted = False
          
-    def _compute_distances(self, X: TensorType["n", "d"]) -> TensorType["n"]:
+    def _compute_distances(self, x: TensorType["n", "d"]) -> TensorType["n", "k"]:
         # ||X - C||^2 = ||X||^2 + ||C||^2 - 2*X*C.T  
-        x_norm = (X ** 2).sum(dim=1, keepdim=True)
-        c_norm = (self.means ** 2).sum(dim=1, keepdim=True).T
-        norm = x_norm + c_norm  
-        distances = torch.addmm(norm, X, self.means.T, alpha=-2, beta=1)
+        x_norm = (x ** 2).sum(dim=1, keepdim=True) # [n, 1]
+        c_norm = (self.means ** 2).sum(dim=1, keepdim=True).T # [1, k]
+        distances = x_norm + c_norm- 2 * x @ self.means.T # [n, k]
         return distances
-
-    def forward(self, x: TensorType["n", "d"]) -> TensorType["n"]:
-        if not self.is_fitted:
-            _ = self._fit(x)
-            
-        distances = self._compute_distances(x)
-        labels = torch.argmin(distances, dim=1) # [n]
-        covs = self._get_covariance(x, labels)
+     
+    def _fit(self, x: TensorType["n", "d"]) -> "KMeans":
+        n, d = x.shape
+        assert n >= self.k, "Need at least k points"
         
-        return {
-            "labels": labels, 
-            "means": self.means,
-            "covs": covs
-        } 
+        # Random init from data 
+        rand_idxs = torch.randperm(n, device=x.device)[:self.k]
+        self.means.resize_(self.k, d).copy_(x[rand_idxs])
         
-    def _get_covariance(self, x: TensorType["n", "d"], labels: TensorType["n"]) -> TensorType["d", "d"]: 
-        covs = []
-        
-        for idx in range(labels.shape[0]):
-            if labels[idx].numel() != 0: 
-                idxs = labels == idx
-                data = x[idxs]
-                cov = torch.cov(data.T)
-                covs.append(cov)
-            else:
-                cov = torch.eye(x.shape[-1])
-                covs.append(cov)
-        
-        covs = torch.stack(covs, dim=0) 
-
-        return covs 
-
-    def _fit(self, x: TensorType["n", "d"]) -> bool:
-        n = x.shape[0]
-
-        random_indices = torch.randperm(n, device=x.device)[:self.n_clusters] # initialize centroids from a random permutation of the data points
-        self.means.data = x[random_indices].clone()  
-
         for _ in range(self.max_iter):
-            old_centroids = self.means.data.clone() #
-
+            old_means = self.means.data.clone() #
             distances = self._compute_distances(x) # [n, n_clusters]:
-
-            cluster_assignments = torch.argmin(distances, dim=1) # [n]: hard cluster assignment
-
-            one_hot = F.one_hot(cluster_assignments, num_classes=self.n_clusters).to(x.dtype) # [n, k]: one-hot centroid mapping matrix 
-                      
+            labels = torch.argmin(distances, dim=1) # [n]: hard cluster assignments
+            one_hot = F.one_hot(labels, num_classes=self.k).to(x.dtype) # [n, k]: one-hot centroid mapping matrix       
             counts = torch.clamp(torch.sum(one_hot, dim=0, keepdim=True).T, min=1e-8) # [k, 1] # count points in each cluster (prevent division by zero with small epsilon)
 
-            self.means.data = (one_hot.T @ x) / counts # [k, n] @ [n, d] / [k, 1]
-
-            center_shift = torch.norm(self.means.data - old_centroids)
-            if center_shift < self.tol: # check for convergence by tracking the shift of the centroids
+            self.means.copy_((one_hot.T @ x) / counts) # [k, n] @ [n, d] / [k, 1]
+            # Check for convergence by tracking the shift of the centroids
+            if torch.norm(self.means - old_means) < self.tol:
                 break
 
         self.is_fitted = True
         return self
+    
+    def _get_covariance(self, x: TensorType["n", "d"], labels: TensorType["n"]) -> TensorType["k", "d", "d"]: 
+        covs = []
+        
+        for k in range(self.k):
+            mask = labels == k
+            data = x[mask]
+            
+            if mask.sum().item() <= 1: # not enough samples to estiamte covariance matrix 
+                cov = torch.eye(x.shape[-1], dtype=x.dtype, device=x.device) # [d, d]
+            else:
+                cov = torch.cov(data.T) # [d, d]
+            covs.append(cov)
+            
+        covs = torch.stack(covs, dim=0) # [k, d, d]
+        return covs 
+    
+    def forward(self, x: TensorType["n", "d"]) -> Dict[str,TensorType["*"]]:
+        if not self.is_fitted:
+            self._fit(x)
+            
+        distances = self._compute_distances(x)
+        labels = torch.argmin(distances, dim=1) # [n]
+        counts = torch.zeros(self.k, dtype=torch.long, device=x.device)
+        counts.scatter_add_(0, labels, torch.ones_like(labels))
+
+        weights = counts.float() / x.shape[0] # [k], sum to 1 
+        
+        covs = self._get_covariance(x, labels) # [k, d, d]
+        
+        return {
+            "weights": weights, # [k]
+            "means": self.means.data, #[k, d]
+            "covs": covs, # [k, d, d]
+            "labels": labels # [n]
+        } 
 
 class GMM(nn.Module): 
     def __init__(
