@@ -299,7 +299,7 @@ class GMM(nn.Module):
         # update of the covariance matrix of the Gaussian with the biggest entropy
         num_cov = p_zero[:, self.G_max][:, None, None] * ((x - mean_m)[:, :, None] * (x - mean_m)[:, None, :]) # [n, 1, 1] * ([n, d, 1] * .[n, 1, d]) -> [n, d, d]
         num_cov = torch.sum(num_cov, dim=0) # [d, d]
-        cov_m = num_cov / (self.count_G_max + self.count_G_min) # [d, d]: new covariance matrix of the Gaussian with the biggest entropy 
+        cov_m = num_cov / (self.count_G_min + self.count_G_max) # [d, d]: new covariance matrix of the Gaussian with the biggest entropy 
         cov_buf = torch.eye(self.d).to(self.dtype).to(self.device) # [d, d]
         
         # update weight
@@ -310,18 +310,23 @@ class GMM(nn.Module):
         
         # update covariance matrices
         self.covs.data[[self.G_min, self.G_max]] = torch.vstack((cov_buf[None, ...], cov_m[None, ...])) # [k, d, d]
-        
-        component_distribution = self._get_mixture_model(means=self.means, covs=self.covs)
+        if not self._is_pos_def(self.covs.data): 
+            self.covs.data = self._to_pos_def(self.covs.data)     
+               
+        component_distribution = self._get_mixture_model(means=self.means.data.clone(), covs=self.covs.data.clone())
         
         # recalculate posterior probabilities of the samples belonging to the updated posterior probability
         x_m = torch.vstack((x_min, x_max)) # [count_G_min+count_G_max, d]
-        p_m = self._posterior(x=x_m, weights=self.weights, distribution=component_distribution) # [count_G_min+count_G_max, k-1]
+        p_m = self._posterior(x=x_m, weights=self.weights.data, distribution=component_distribution) # [count_G_min+count_G_max, k-1]
         idxs = torch.hstack((self.idxs_min, self.idxs_max))
-        p_zero[idxs] = p_m[idxs]
+        p_zero[idxs] = p_m
 
         return p_zero
 
-    def _second_posterior_update(self, x, p_zero, p_one, mean_one, cov_one, x_min, x_max) -> None:         
+    def _second_posterior_update(self, x, p_one, x_min, x_max) -> None:  
+        mean_one = self.means[self.G_max].data.clone()        
+        cov_one = self.covs[self.G_max].data.clone()
+    
         x_one = torch.vstack(tensors=(x_min, x_max)) # [count_G_min+count_G_max, d]: samples belonging to the merged Gaussian distribution 
         idx_max_var = torch.argmax(torch.diagonal(cov_one)).item() # []: dimension with the biggest variance
         
@@ -464,7 +469,7 @@ class GMM(nn.Module):
                 # 1st posterior update
                 p_one = self._first_posterior_update(x, p_zero, x_min, x_max)
                 # 2nd posterior update
-                p_two = self._second_posterior_update(x, p_zero, p_one,  x_min, x_max)
+                p_two = self._second_posterior_update(x, p_one, x_min, x_max)
                 
                 is_convergence = self._is_convergence(x, x_min, x_max)
                 if is_convergence: 
