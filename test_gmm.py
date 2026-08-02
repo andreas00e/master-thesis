@@ -28,7 +28,7 @@ def main():
     
     kmeans = KMeans(**kmeans_kwargs).to(device)
 
-    x = torch.rand(size=(100, d)).to(device)
+    x = torch.rand(size=(10_000, d)).to(device)
     # x_plus = torch.rand(size=(100, d)).to(device)
     
     weights, means, covs, labels = kmeans(x).values()
