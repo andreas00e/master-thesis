@@ -277,126 +277,99 @@ class GMM(nn.Module):
     def _first_posterior_update(
         self, 
         x: TensorType["n", "d"], 
-        p_zero: TensorType["n", "k"], 
+        p: TensorType["n", "k"], 
         x_min: TensorType["count_G_min", "d"],
         x_max: TensorType["count_G_max", "d"]
         ) -> TensorType["n", "k"]: 
         
         # Mixture weight of the merged distribution 
-        weight_m = (self.count_G_min + self.count_G_max) / x.shape[0] # float32
+        weight_new = (self.count_G_min + self.count_G_max) / x.shape[0] # float32
         weight_buf = 0.0
         
         # Mean vector of the merged distribution 
-        mean_m = (torch.sum(x_min, dim=0) + torch.sum(x_max, dim=0)) / (self.count_G_min + self.count_G_max) # [d]
-        mean_buf = torch.zeros_like(mean_m) # [d]
+        mean_new = (torch.sum(x_min, dim=0) + torch.sum(x_max, dim=0)) / (self.count_G_min + self.count_G_max) # [d]
         
-        # Exchange posterior probabilities   
-        p_m = p_zero.clone()      
-        p_m[self.idxs_min, self.G_max] = p_zero[self.idxs_min, self.G_min] # swap posterior probabilites
-        p_m[self.idxs_min, self.G_min] = torch.zeros(size=(self.idxs_min.numel(), ), dtype=self.dtype, device=self.device) # set posterior probabilities to zero 
-        p_m[self.idxs_max, self.G_min] = torch.zeros(size=(self.idxs_max.numel(), ), dtype=self.dtype, device=self.device) # set posterior probabilities to zero 
+        # Exchange posterior probabilities      
+        p[self.idxs_min][:, [self.G_min, self.G_max]] = p[self.idxs_min][:, [self.G_min, self.G_max]]  
         
         # Covariance matrix of the merged distribution 
-        num_cov = p_m[:, self.G_max][:, None, None] * ((x - mean_m)[:, :, None] * (x - mean_m)[:, None, :]) # [n, 1, 1] * ([n, d, 1] * .[n, 1, d]) -> [n, d, d]
+        num_cov = p[:, self.G_max][:, None, None] * ((x - mean_new)[:, :, None] * (x - mean_new)[:, None, :]) # [n, 1, 1] * ([n, d, 1] * .[n, 1, d]) -> [n, d, d]
         num_cov = torch.sum(num_cov, dim=0) # [d, d]
         cov_m = num_cov / (self.count_G_min + self.count_G_max) # [d, d]: new covariance matrix of the Gaussian with the biggest entropy 
-        cov_buf = torch.eye(self.d, dtype=self.dtype, device=self.device) # [d, d]
         
         # Update weights
-        self.weights.data[[self.G_min, self.G_max]] = torch.tensor((weight_buf, weight_m), dtype=self.dtype, device=self.device) # [k]
+        self.weights.data[[self.G_min, self.G_max]] = torch.tensor((weight_buf, weight_new), dtype=self.dtype, device=self.device) # [2]
         
         # Update means
-        self.means.data[[self.G_min, self.G_max]] = torch.vstack((mean_buf, mean_m)) # [k, d]
+        self.means.data[self.G_max] = mean_new # [d]
         
         # Update covariance matrices
-        self.covs.data[[self.G_min, self.G_max]] = torch.vstack((cov_buf[None, ...], cov_m[None, ...])) # [k, d, d]
+        self.covs.data[self.G_max] = cov_m # [d, d]
         if not self._is_pos_def(self.covs.data): 
             self.covs.data = self._to_pos_def(self.covs.data)     
-               
+       
         component_distribution = self._get_mixture_model(means=self.means.data.clone(), covs=self.covs.data.clone())
         
         # Recalculate posterior probabilities of the samples belonging to the updated posterior probability
-        x_m = torch.vstack((x_min, x_max)) # [count_G_min+count_G_max, d]
-        idxs = torch.hstack((self.idxs_min, self.idxs_max))
-        p_zero[idxs] = self._posterior(x=x_m, weights=self.weights.data, distribution=component_distribution) # [count_G_min+count_G_max, k-1]
+        p[self.idxs_min] = self._posterior(x=x_min, weights=self.weights.data, distribution=component_distribution) # [n, k]
+        p[self.idxs_max] = self._posterior(x=x_max, weights=self.weights.data, distribution=component_distribution) # [n, k]
         
-        return p_zero
+        return p
 
-    def _second_posterior_update(self, x, p_one, x_min, x_max) -> None:  
-        mean_one = self.means[self.G_max].data.clone()        
+    def _second_posterior_update(self, x, p, x_min, x_max) -> None:          
+        mean_one = self.means[self.G_max].data.clone()    
         cov_one = self.covs[self.G_max].data.clone()
-    
-        x_one = torch.vstack(tensors=(x_min, x_max)) # [count_G_min+count_G_max, d]: samples belonging to the merged Gaussian distribution 
-        idx_max_var = torch.argmax(torch.diagonal(cov_one)).item() # []: dimension with the biggest variance
-        
-        # swap of posterior probabilities 
-        idxs_new_min = x_one[:, idx_max_var] > mean_one[idx_max_var]
-        idxs_new_min = torch.nonzero(idxs_new_min)
-        idxs_new_max = x_one[:, idx_max_var] <= mean_one[idx_max_var]
-        idxs_new_max = torch.nonzero(idxs_new_max)
-        
-        count_new_min = idxs_new_min.numel() 
-        count_new_max = idxs_new_max.numel()    
+        dim_max_var = torch.argmax(torch.diagonal(cov_one)).item() # []: dimension with the biggest variance
 
+        idxs = torch.hstack((self.idxs_min, self.idxs_max))
+        # Global indices of samples that have to be swapped -> new "G_min" 
+        swap = x[idxs, dim_max_var] > mean_one[dim_max_var] # [count_G_new_min] 
+        swap = torch.sort(idxs[swap]).values
+        # Global indices of samples that have to stay -> new "G_max" 
+        stay = x[idxs, dim_max_var] <= mean_one[dim_max_var] # [count_G_new_max]
+        stay = torch.sort(idxs[stay]).values
+        
+        count_new_min = swap.numel()
+        count_new_max = stay.numel() 
+        
         if count_new_min <= 0: 
-            raise ValueError(f"There are no samples to swap!! {count_new_min}")
-        elif count_new_min == 1: 
-            idxs_new_min = idxs_new_min.item() 
-        else:
-            idxs_new_min = idxs_new_min.squeeze()         
-            
+            raise ValueError(f"There are no samples to swap!! {count_new_min}")       
         if count_new_max <= 0: 
             raise ValueError(f"There are no samples to swap!! {count_new_max}")
-        elif count_new_max == 1: 
-            idxs_new_max = idxs_new_max.item() 
-        else:
-            idxs_new_max = idxs_new_max.squeeze()
 
-        x_new_min = x_one[idxs_new_max]
-        x_new_max = x_one[idxs_new_min]
+        x_new_min = x[swap]
+        x_new_max = x[stay]
+        
+        p[swap][:, [self.G_min, self.G_max]] = p[swap][:, [self.G_max, self.G_min]]
 
-        # p_new_min = p_one[idxs_new_max].clone() 
-        # p_new_min[:, [self.G_min, self.G_max]] = p_new_min[:, [self.G_max, self.G_min]] # [idxs_swap, k-1]
-        
-        # p_new_max = p_one[idxs_new_min].clone() # [idxs_stay, k-1]
-        
-        # idxs = torch.hstack((self.idxs_min, self.idxs_max)) # [count_G_min+count_G_max]  
-
-        # p_new_min_max = p_new_min[:, self.G_max]
-        # P_new_max_max = p_new_max[:, self.G_max]
-        
-        # update the mixture weights of the two new Gaussian distributions
-        weight_min = torch.tensor(count_new_max / x.shape[0]) # []: new weight of the Gaussian with the past smallest entropy 
-        weight_max = torch.tensor(count_new_min / x.shape[0]) # []: new weight of the Gaussian with the past biggest entropy 
-        weights_two = torch.hstack((weight_min, weight_max)).to(self.dtype).to(self.device) # [2]
+        # Update the mixture weights of the two new Gaussian distributions
+        weight_new_min = torch.tensor(count_new_max / x.shape[0]) # []: new weight of the Gaussian with the past smallest entropy 
+        weight_new_max = torch.tensor(count_new_min / x.shape[0]) # []: new weight of the Gaussian with the past biggest entropy 
+        self.weights.data[[self.G_min, self.G_max]] = torch.hstack((weight_new_min, weight_new_max)).to(self.dtype).to(self.device) # [2]
         
         # update the mean vectorss of the two new Gaussian distributions
-        mean_min = torch.sum(x_new_min, dim=0) / count_new_max # [d]: new mean vector of the Gaussian with the biggest entropy                
-        mean_one = torch.sum(x_new_max, dim=0) / count_new_min # [d]: new mean vector of the Gaussian with the past biggest entropy 
-        means_two = torch.vstack((mean_min, mean_one)) # [2, d]
+        mean_new_min = torch.sum(x_new_min, dim=0) / count_new_min # [d]: new mean vector of the Gaussian with the biggest entropy                
+        mean_new_max = torch.sum(x_new_max, dim=0) / count_new_max # [d]: new mean vector of the Gaussian with the past biggest entropy 
+        self.means.data[[self.G_min, self.G_max]] = torch.vstack((mean_new_min, mean_one)) # [2, d]
         
-        # cov_min = p_new_min[:, None, None] * ((x - mean_min).unsqueeze(-1) * (x - mean_min).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
-        # cov_min = torch.sum(cov_min, dim=0) / self.count_G_min # [d, d]
-        # cov_one = p_new_max[:, None, None] * ((x - mean_one).unsqueeze(-1) * (x - mean_one).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
-        # cov_one = torch.sum(cov_one, dim=0) / self.count_G_max # [d, d]
-        # covs_two = torch.vstack((cov_min[None, ...], cov_one[None, ...]))
+        cov_new_min = p[:, self.G_min][:, None, None] * ((x - mean_new_min).unsqueeze(-1) * (x - mean_new_min).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
+        cov_new_min = torch.sum(cov_new_min, dim=0) / count_new_min # [d, d]
+        cov_new_max = p[:, self.G_max][:, None, None] * ((x - mean_new_max).unsqueeze(-1) * (x - mean_new_max).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
+        cov_new_max = torch.sum(cov_new_max, dim=0) / count_new_max # [d, d]
+        self.covs.data[[self.G_min, self.G_max]] = torch.vstack((cov_new_min[None, ...], cov_new_max[None, ...]))
         
-        # update weights
-        weights = self.weights.data.clone() 
-        weights[[self.G_min, self.G_max]] = weights_two
+        if not self._is_pos_def(self.covs.data): 
+            self.covs.data = self._to_pos_def(self.covs.data) 
+            
+        component_distribution = self._get_mixture_model(means=self.means.data, covs=self.covs.data)
         
-        # update means 
-        means = self.means.data.clone()
-        means[[self.G_min, self.G_max], :] = means_two
+        p_new_min = self._posterior(x=x_new_min, weights=self.weights.data, distribution=component_distribution) # [count_G_min, k]
+        p_new_max = self._posterior(x=x_new_max, weights=self.weights.data, distribution=component_distribution) # [count_G_max, k]
+
+        p[swap] = p_new_min
+        p[stay] = p_new_max
         
-        # update covariance matrices 
-        # covs = self.covs.data.clone() 
-        # covs[[self.G_min, self.G_max], ...] = covs_two 
-        
-        # component_distribution = self._get_mixture_model(means=means, covs=covs)
-        
-        # p_new_min = self._posterior(x=x_one, weights=weights, distribution=component_distribution)
-        # return p_new_min, weights, means, covs
+        return p
     
     def _mahalanobis_distance(self, x, mean, cov): 
         distances = (x - mean)[:, None, :] * torch.inverse(cov)[None, :, :] * (x - mean)[:, :, None] #  [n, 1, d] * [1, d, d] * [n, d, 1] -> [n, 1, 1]
@@ -427,11 +400,11 @@ class GMM(nn.Module):
 
     def _update_gmm(self, x: TensorType["n", "d"])  -> None: 
         # Initial posterior update: hard assignments -> soft assignments 
-        p_zero = self._zeroth_posterior_update(x) # [n, k]: posterior probability of each sample belonging to Gaussian component k 
+        p = self._zeroth_posterior_update(x) # [n, k]: posterior probability of each sample belonging to Gaussian component k 
         
         # General computations         
         r_idxs = torch.arange(x.shape[0], device=x.device) # [n]
-        c_idxs = torch.argmax(p_zero, dim=-1) # [n]: Gaussian component k each sample most likely belongs to 
+        c_idxs = torch.argmax(p, dim=-1) # [n]: Gaussian component k each sample most likely belongs to 
         
         # Initial mixture weights update
         counts = torch.zeros(size=(self.k, ), dtype=self.dtype, device=self.device)
@@ -439,7 +412,7 @@ class GMM(nn.Module):
         self.weights.data = counts / x.shape[0] # [k]
         
         # Entropy-related calculation
-        E_min, E_max, G_min, G_max = self._entropy_indices(x, p_zero, r_idxs, c_idxs) # [], [], [], []: smallest/ biggest entropy, indices of the Gaussians with the smallest/ biggest entropies
+        E_min, E_max, G_min, G_max = self._entropy_indices(x, p, r_idxs, c_idxs) # [], [], [], []: smallest/ biggest entropy, indices of the Gaussians with the smallest/ biggest entropies
         self.G_min = G_min.item() 
         self.G_max = G_max.item() 
         
@@ -466,9 +439,9 @@ class GMM(nn.Module):
         while(True):
             if E_min <= E_max: 
                 # 1st posterior update
-                p_one = self._first_posterior_update(x, p_zero, x_min, x_max)
+                p = self._first_posterior_update(x, p, x_min, x_max)
                 # 2nd posterior update
-                p_two = self._second_posterior_update(x, p_one, x_min, x_max)
+                p = self._second_posterior_update(x, p, x_min, x_max)
                 
                 is_convergence = self._is_convergence(x, x_min, x_max)
                 if is_convergence: 
