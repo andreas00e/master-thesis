@@ -1,9 +1,13 @@
 import torch
 
-from models.discover.cluster import KMeans, GMM
+from models.discover.cluster import KMeans, GMM 
 
+import wandb
         
 def main(): 
+    wandb.init(project="scatter-plot")
+    
+    
     k = 20
     d = 4
     
@@ -32,6 +36,13 @@ def main():
     # x_plus = torch.rand(size=(100, d)).to(device)
     
     weights, means, covs, labels = kmeans(x).values()
+    
+    # columns = [f"dim_{i}" for i in range(d)] + ["label"]
+    # data = [list(vec)+[lbl] for vec, lbl in zip(x, labels)]
+    
+    # table = wandb.Table(columns=columns, data=data)
+    # wandb.log({"embeddings": table})
+    
     
     gmm = GMM(weights=weights, means=means, covs=covs, **gmm_kwargs).to(device)
     _ = gmm(mode="update_gmm", x=x)

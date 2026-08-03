@@ -1,3 +1,4 @@
+import numpy as np 
 from typing import Dict, Optional, Tuple 
 
 import torch
@@ -6,6 +7,8 @@ import torch.nn.functional as F
 import torch.distributions as D
 from torchtyping import TensorType
 from torch.linalg import cholesky_ex, eigh
+
+import wandb 
 
 
 class KMeans(nn.Module):
@@ -150,7 +153,13 @@ class GMM(nn.Module):
 
         return A
 
-    def _posterior(self, x: TensorType["n", "d"], weights: TensorType["k"], distribution: D.MultivariateNormal) -> TensorType["n", "k"]:
+    def _posterior(
+        self,
+        x: TensorType["n", "d"],
+        weights: TensorType["k"], 
+        distribution: D.MultivariateNormal
+        
+    ) -> TensorType["n", "k"]:
         log_probs = distribution.log_prob(x.unsqueeze(1)) # [n, k]: unweighted log-density
         log_weights = torch.log(weights) # [k]
         log_joint = log_probs + log_weights # [n, k]: log(w_k * log(N(x | mu_k, Sigma_k)) = log(w_k) + log(N(x | mu_k, Sigma_k))
@@ -250,7 +259,14 @@ class GMM(nn.Module):
 
         return loss_bml
     
-    def _entropy_indices(self, x: TensorType["n", "d"], p: TensorType["n", "k"], r_idxs: TensorType["n"], c_idxs: TensorType["n"]) -> Tuple[TensorType["1"], ...]:
+    def _entropy_indices(
+        self, 
+        x: TensorType["n", "d"], 
+        p: TensorType["n", "k"], 
+        r_idxs: TensorType["n"], 
+        c_idxs: TensorType["n"]
+        ) -> Tuple[TensorType["1"], ...]:
+        
         p = p[r_idxs, c_idxs] # [n]: biggest component of each sample       
         p *= torch.log(p) # [n]: entropy for each sample 
          
@@ -277,23 +293,24 @@ class GMM(nn.Module):
     def _first_posterior_update(
         self, 
         x: TensorType["n", "d"], 
-        p: TensorType["n", "k"], 
+        p_zero: TensorType["n", "k"], 
         x_min: TensorType["count_G_min", "d"],
         x_max: TensorType["count_G_max", "d"]
         ) -> TensorType["n", "k"]: 
         
         # Mixture weight of the merged distribution 
-        weight_new = (self.count_G_min + self.count_G_max) / x.shape[0] # float32
+        weight_new = (self.count_G_min + self.count_G_max) / x.shape[0]
         weight_buf = 0.0
         
         # Mean vector of the merged distribution 
         mean_new = (torch.sum(x_min, dim=0) + torch.sum(x_max, dim=0)) / (self.count_G_min + self.count_G_max) # [d]
         
-        # Exchange posterior probabilities      
-        p[self.idxs_min][:, [self.G_min, self.G_max]] = p[self.idxs_min][:, [self.G_min, self.G_max]]  
+        # Exchange posterior probabilities
+        p_one = p_zero.clone()      
+        p_one[self.idxs_min][:, [self.G_min, self.G_max]] = p_one[self.idxs_min][:, [self.G_max, self.G_min]]  
         
         # Covariance matrix of the merged distribution 
-        num_cov = p[:, self.G_max][:, None, None] * ((x - mean_new)[:, :, None] * (x - mean_new)[:, None, :]) # [n, 1, 1] * ([n, d, 1] * .[n, 1, d]) -> [n, d, d]
+        num_cov = p_one[:, self.G_max][:, None, None] * ((x - mean_new)[:, :, None] * (x - mean_new)[:, None, :]) # [n, 1, 1] * ([n, d, 1] * .[n, 1, d]) -> [n, d, d]
         num_cov = torch.sum(num_cov, dim=0) # [d, d]
         cov_m = num_cov / (self.count_G_min + self.count_G_max) # [d, d]: new covariance matrix of the Gaussian with the biggest entropy 
         
@@ -305,46 +322,56 @@ class GMM(nn.Module):
         
         # Update covariance matrices
         self.covs.data[self.G_max] = cov_m # [d, d]
-        if not self._is_pos_def(self.covs.data): 
-            self.covs.data = self._to_pos_def(self.covs.data)     
-       
+        if not self._is_pos_def(self.covs.data[self.G_max]): 
+            self.covs.data[self.G_max] = self._to_pos_def(self.covs.data[self.G_max])    
+
         component_distribution = self._get_mixture_model(means=self.means.data.clone(), covs=self.covs.data.clone())
         
         # Recalculate posterior probabilities of the samples belonging to the updated posterior probability
-        p[self.idxs_min] = self._posterior(x=x_min, weights=self.weights.data, distribution=component_distribution) # [n, k]
-        p[self.idxs_max] = self._posterior(x=x_max, weights=self.weights.data, distribution=component_distribution) # [n, k]
+        p_one[self.idxs_min] = self._posterior(x=x_min, weights=self.weights.data, distribution=component_distribution) # [n, k]
+        p_one[self.idxs_max] = self._posterior(x=x_max, weights=self.weights.data, distribution=component_distribution) # [n, k]
         
-        return p
+        return p_one
 
-    def _second_posterior_update(self, x, p) -> Tuple[TensorType["*"], ...]:          
+    def _second_posterior_update(
+        self, 
+        x: TensorType["n", "d"], 
+        p_one: TensorType["n", "k"]
+        ) -> Tuple[TensorType["*"], ...]: 
+                 
         mean_one = self.means[self.G_max].data.clone()    
         cov_one = self.covs[self.G_max].data.clone()
+        
         dim_max_var = torch.argmax(torch.diagonal(cov_one)).item() # []: dimension with the biggest variance
 
-        idxs = torch.hstack((self.idxs_min, self.idxs_max))
-        # Global indices of samples that have to be swapped -> new "G_min" 
-        swap = x[idxs, dim_max_var] > mean_one[dim_max_var] # [count_G_new_min] 
-        swap = torch.sort(idxs[swap]).values
-        # Global indices of samples that have to stay -> new "G_max" 
-        stay = x[idxs, dim_max_var] <= mean_one[dim_max_var] # [count_G_new_max]
-        stay = torch.sort(idxs[stay]).values
+        idxs = torch.hstack((self.idxs_min, self.idxs_max)) # [count_G_min+count_G_max, d]: all data points belonging to the merged distribution 
+        idxs = idxs.flatten()
         
-        count_new_min = swap.numel()
-        count_new_max = stay.numel() 
+        swap_mask = x[idxs, dim_max_var] > mean_one[dim_max_var] 
+        stay_mask = ~swap_mask
+        swap_idxs = torch.sort(idxs[swap_mask]).values # [count_G_min_two]: indices of all samples belonging to the new smallest distribution 
+        stay_idxs = torch.sort(idxs[stay_mask]).values # [count_G_max_two]: indices of all samples belonging to the new biggest distribution 
+         
+        count_new_min = swap_idxs.numel()
+        count_new_max = stay_idxs.numel() 
+        
+        wandb.log({"diff_min": count_new_min - self.count_G_min})
+        wandb.log({"diff_max": count_new_max - self.count_G_max})
         
         if count_new_min <= 0: 
             raise ValueError(f"There are no samples to swap!! {count_new_min}")       
         if count_new_max <= 0: 
             raise ValueError(f"There are no samples to swap!! {count_new_max}")
-
-        x_min_two = x[swap]
-        x_max_two = x[stay]
         
-        p[swap][:, [self.G_min, self.G_max]] = p[swap][:, [self.G_max, self.G_min]]
+        x_min_two = x[swap_idxs]
+        x_max_two = x[stay_idxs]
+        
+        p_two = p_one.clone()
+        p_two[stay_idxs][:, [self.G_min, self.G_max]] = p_two[stay_idxs][:, [self.G_max, self.G_min]]
 
         # Update the mixture weights of the two new Gaussian distributions
-        weight_min_two = torch.tensor(count_new_max / x.shape[0]) # []: new weight of the Gaussian with the past smallest entropy 
-        weight_max_two = torch.tensor(count_new_min / x.shape[0]) # []: new weight of the Gaussian with the past biggest entropy 
+        weight_min_two = torch.tensor(count_new_min / x.shape[0]) # []: new weight of the Gaussian with the past smallest entropy 
+        weight_max_two = torch.tensor(count_new_max / x.shape[0]) # []: new weight of the Gaussian with the past biggest entropy 
         self.weights.data[[self.G_min, self.G_max]] = torch.hstack((weight_min_two, weight_max_two)).to(self.dtype).to(self.device) # [2]
         
         # update the mean vectorss of the two new Gaussian distributions
@@ -352,39 +379,41 @@ class GMM(nn.Module):
         mean_max_two = torch.sum(x_max_two, dim=0) / count_new_max # [d]: new mean vector of the Gaussian with the past biggest entropy 
         self.means.data[[self.G_min, self.G_max]] = torch.vstack((mean_min_two, mean_one)) # [2, d]
         
-        cov_min_two = p[:, self.G_min][:, None, None] * ((x - mean_min_two).unsqueeze(-1) * (x - mean_min_two).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
+        cov_min_two = p_two[:, self.G_min][:, None, None] * ((x - mean_min_two).unsqueeze(-1) * (x - mean_min_two).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
         cov_min_two = torch.sum(cov_min_two, dim=0) / count_new_min # [d, d]
-        cov_max_two = p[:, self.G_max][:, None, None] * ((x - mean_max_two).unsqueeze(-1) * (x - mean_max_two).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
+        cov_max_two = p_two[:, self.G_max][:, None, None] * ((x - mean_max_two).unsqueeze(-1) * (x - mean_max_two).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
         cov_max_two = torch.sum(cov_max_two, dim=0) / count_new_max # [d, d]
         self.covs.data[[self.G_min, self.G_max]] = torch.vstack((cov_min_two[None, ...], cov_max_two[None, ...]))
         
-        if not self._is_pos_def(self.covs.data): 
-            self.covs.data = self._to_pos_def(self.covs.data) 
+        if not self._is_pos_def(self.covs.data[[self.G_min, self.G_max]]): 
+            self.covs.data[[self.G_min, self.G_max]] = self._to_pos_def(self.covs.data[[self.G_min, self.G_max]]) 
             
         component_distribution = self._get_mixture_model(means=self.means.data, covs=self.covs.data)
         
         p_min_two = self._posterior(x=x_min_two, weights=self.weights.data, distribution=component_distribution) # [count_G_min, k]
         p_max_two = self._posterior(x=x_max_two, weights=self.weights.data, distribution=component_distribution) # [count_G_max, k]
 
-        p[swap] = p_min_two
-        p[stay] = p_max_two
+        p_one[swap_idxs] = p_min_two
+        p_one[stay_idxs] = p_max_two
         
-        return p, x_min_two, x_max_two
+        return p_one, x_min_two, x_max_two
     
     def _mahalanobis_distance(self, x, mean, cov): 
         distances = (x - mean)[:, None, :] @ torch.inverse(cov)[None, :, :] @ (x - mean)[:, :, None] #  [n, 1, d] * [1, d, d] * [n, d, 1] -> [n, 1, 1]
         distances = torch.sqrt(distances) # [n, 1, 1]
-        return distances[0] # [n]
+        return distances.view(-1) # [n]
     
     def _is_convergence(self, x_min_zero, x_max_zero, x_min_two, x_max_two, means_zero, covs_zero) -> torch.Tensor.bool:  
         one_left = torch.sum(torch.exp(-self._mahalanobis_distance(x_min_two, self.means.data[self.G_min], self.covs.data[self.G_min])))
         one_right = torch.sum(torch.exp(-self._mahalanobis_distance(x_min_zero, means_zero[self.G_min], covs_zero[self.G_min])))
         one = one_left >= one_right # (Equation 21a)
-    
+        print(f"one:{one}")
+        
         two_left = torch.sum(- torch.exp(-self._mahalanobis_distance(x_max_two, self.means.data[self.G_max], self.covs.data[self.G_max])))
         two_right = torch.sum(-torch.exp(-self._mahalanobis_distance(x_max_zero, means_zero[self.G_max], covs_zero[self.G_max])))
         two = two_left >= two_right # (Equation 21b)
-        
+        print(f"two:{two}")
+
         three = torch.det(covs_zero[self.G_min]) >= torch.det(self.covs.data[self.G_min]) # (Equation 21c)
         
         four = torch.det(covs_zero[self.G_max]) >= torch.det(self.covs.data[self.G_max]) # (Equation 21cd)
@@ -395,59 +424,95 @@ class GMM(nn.Module):
         five_right /= torch.det(self.covs.data[self.G_max]) ** 1/2
         five = five_left >= five_right # (Equation 23)
         
-        is_convergence = all([one, two, three, four, five])
-        return is_convergence  
+        return all([one, two, three, four, five])  
+    
+    def _log_likelihood(self, x, p, means, covs):
+        labels = torch.argmax(p, dim=-1) # [n]
+        log_2_pi = torch.log(torch.tensor(2 * np.pi, dtype=self.dtype, device=self.device))
+        constant_term = -0.5 * self.d * log_2_pi
+        
+        log_likelihood = torch.tensor(0.0, dtype=self.dtype, device=self.device)
+        
+        for k in range(self.k): 
+            idxs = torch.nonzero(labels == k).view(-1)
+            if idxs.numel() == 0: 
+                continue 
+            
+            x_k = x[idxs]          
+            L = torch.linalg.cholesky(covs[k])
+            log_det_cov_k = 2.0 * torch.sum(torch.log(torch.diagonal(L)))            
+            
+            d_k = self._mahalanobis_distance(x_k, means[k], covs[k])
+            
+            cluster_ll = torch.sum(-0.5 * d_k - 0.5 * log_det_cov_k + constant_term)
+            log_likelihood += cluster_ll
+        
+        return log_likelihood
 
     def _update_gmm(self, x: TensorType["n", "d"])  -> None: 
+        columns = [f"dim_{i}" for i in range(self.d)] + ["label"]
+        
         # Initial posterior update: hard assignments -> soft assignments 
-        p = self._zeroth_posterior_update(x) # [n, k]: posterior probability of each sample belonging to Gaussian component k 
+        p_zero = self._zeroth_posterior_update(x) # [n, k]: posterior probability of each sample belonging to Gaussian component k 
         
         # General computations         
         r_idxs = torch.arange(x.shape[0], device=x.device) # [n]
-        c_idxs = torch.argmax(p, dim=-1) # [n]: Gaussian component k each sample most likely belongs to 
+        c_idxs = torch.argmax(p_zero, dim=-1) # [n]: Gaussian component k each sample most likely belongs to 
         
         # Initial mixture weights update
         counts = torch.zeros(size=(self.k, ), dtype=self.dtype, device=self.device)
         counts.scatter_add_(0, c_idxs, torch.ones_like(c_idxs, dtype=self.dtype))
         self.weights.data = counts / x.shape[0] # [k]
         
-        # Entropy-related calculation
-        E_min, E_max, G_min, G_max = self._entropy_indices(x, p, r_idxs, c_idxs) # [], [], [], []: smallest/ biggest entropy, indices of the Gaussians with the smallest/ biggest entropies
-        self.G_min = G_min.item() 
-        self.G_max = G_max.item() 
-        
-        self.idxs_min = torch.nonzero(self.G_min == c_idxs) # [count_G_min]: indices of all samples belonging to the Gaussian with the smallest entropy
-        self.idxs_max = torch.nonzero(self.G_max == c_idxs) # [count_G_max]: indices of all samples belonging to the Gaussian with the biggest entropy
-
-        self.count_G_min = self.idxs_min.numel() # []: number of samples in the Gaussian with the smallest entropy 
-        self.count_G_max = self.idxs_max.numel() # []: number of samples in the Gaussian with the biggest entropy 
-        
-        if self.count_G_min == 0: 
-            raise ValueError(f"The Gaussian distribution with the smallest entropy does not hold any elements! {self.idxs_min}") # TODO: Chang so that it does not rash 
-        elif self.count_G_min > 1:  
-            self.idxs_min = self.idxs_min.squeeze()
-        
-        if self.count_G_max == 0:
-            raise ValueError(f"The Gaussian distribution with the biggest entropy does not hold any elements! {self.idxs_max}") 
-        elif self.count_G_max > 1: 
-            self.idxs_max = self.idxs_max.squeeze()
-        
-        x_min_zero = x[self.idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
-        x_max_zero = x[self.idxs_max] # [count_G_max, d]: samples belonging to the Gaussian with the biggest entropy
-        
-        means_zero = self.means.data.clone()
-        covs_zero = self.covs.data.clone()
         # Posterior update loop: 
-        while(True):
+        i = 0
+        while(True):  
+            # Entropy-related calculation
+            E_min, E_max, G_min, G_max = self._entropy_indices(x, p_zero, r_idxs, c_idxs) # [], [], [], []: smallest/ biggest entropy, indices of the Gaussians with the smallest/ biggest entropies
+            self.G_min = G_min.item() 
+            self.G_max = G_max.item() 
+            
+            self.idxs_min = torch.nonzero(self.G_min == c_idxs) # [count_G_min]: indices of all samples belonging to the Gaussian with the smallest entropy
+            self.idxs_max = torch.nonzero(self.G_max == c_idxs) # [count_G_max]: indices of all samples belonging to the Gaussian with the biggest entropy
+
+            self.count_G_min = self.idxs_min.numel() # []: number of samples in the Gaussian with the smallest entropy 
+            self.count_G_max = self.idxs_max.numel() # []: number of samples in the Gaussian with the biggest entropy 
+            
+            x_min_zero = x[self.idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
+            x_max_zero = x[self.idxs_max] # [count_G_max, d]: samples belonging to the Gaussian with the biggest entropy
+            
+            means_zero = self.means.data.clone()
+            covs_zero = self.covs.data.clone()
+        
             if E_min <= E_max: 
                 # 1st posterior update
-                p = self._first_posterior_update(x, p, x_min_zero, x_max_zero)
-                # 2nd posterior update
-                p, x_min_two, x_max_two = self._second_posterior_update(x, p)
-                # Check for convergence
-                is_convergence = self._is_convergence(x_min_zero, x_max_zero, x_min_two, x_max_two, means_zero, covs_zero)
-                if is_convergence: 
-                    break 
+                p_one = self._first_posterior_update(x, p_zero, x_min_zero, x_max_zero)
+            else: 
+                print("Failure")
+                break
+            
+            # 2nd posterior update
+            p_two, x_min_two, x_max_two = self._second_posterior_update(x, p_one)
+            
+            if i == 100: 
+                labels = torch.argmax(p_two, dim=-1).view(-1).tolist()
+                data = [list(vec)+[lbl] for vec, lbl in zip(x, labels)]
+                
+                table = wandb.Table(columns=columns, data=data)
+                wandb.log({"high_dim_emb": table})
+
+                    
+            # Check for convergence
+            is_convergence = self._is_convergence(x_min_zero, x_max_zero, x_min_two, x_max_two, means_zero, covs_zero)
+            log_likelihood = self._log_likelihood(x, p_two, self.means.data, self.covs.data)
+
+            wandb.log({"log_likelihood": log_likelihood})
+
+            if is_convergence or i >= 1000: 
+                break 
+            else: 
+                p_zero = p_two 
+                i += 1
     
     def _update_encoder(self, x, x_plus):
         loss_cl = self._hard_negatives(x, x_plus)
