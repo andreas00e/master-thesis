@@ -140,7 +140,7 @@ class GMM(nn.Module):
     def _to_pos_def(self, A: TensorType["k", "d", "d"]) -> TensorType["k", "d", "d"]:
         A = (A + A.transpose(-1, -2)) / 2  # make all covariance matrices symmetric
 
-        # make all covariance matrices positive definite
+        # Make all covariance matrices positive definite
         eigenvals, _ = eigh(A)
         min_eig = eigenvals.amin(dim=-1)  
 
@@ -316,7 +316,7 @@ class GMM(nn.Module):
         
         return p
 
-    def _second_posterior_update(self, x, p, x_min, x_max) -> None:          
+    def _second_posterior_update(self, x, p) -> Tuple[TensorType["*"], ...]:          
         mean_one = self.means[self.G_max].data.clone()    
         cov_one = self.covs[self.G_max].data.clone()
         dim_max_var = torch.argmax(torch.diagonal(cov_one)).item() # []: dimension with the biggest variance
@@ -337,65 +337,65 @@ class GMM(nn.Module):
         if count_new_max <= 0: 
             raise ValueError(f"There are no samples to swap!! {count_new_max}")
 
-        x_new_min = x[swap]
-        x_new_max = x[stay]
+        x_min_two = x[swap]
+        x_max_two = x[stay]
         
         p[swap][:, [self.G_min, self.G_max]] = p[swap][:, [self.G_max, self.G_min]]
 
         # Update the mixture weights of the two new Gaussian distributions
-        weight_new_min = torch.tensor(count_new_max / x.shape[0]) # []: new weight of the Gaussian with the past smallest entropy 
-        weight_new_max = torch.tensor(count_new_min / x.shape[0]) # []: new weight of the Gaussian with the past biggest entropy 
-        self.weights.data[[self.G_min, self.G_max]] = torch.hstack((weight_new_min, weight_new_max)).to(self.dtype).to(self.device) # [2]
+        weight_min_two = torch.tensor(count_new_max / x.shape[0]) # []: new weight of the Gaussian with the past smallest entropy 
+        weight_max_two = torch.tensor(count_new_min / x.shape[0]) # []: new weight of the Gaussian with the past biggest entropy 
+        self.weights.data[[self.G_min, self.G_max]] = torch.hstack((weight_min_two, weight_max_two)).to(self.dtype).to(self.device) # [2]
         
         # update the mean vectorss of the two new Gaussian distributions
-        mean_new_min = torch.sum(x_new_min, dim=0) / count_new_min # [d]: new mean vector of the Gaussian with the biggest entropy                
-        mean_new_max = torch.sum(x_new_max, dim=0) / count_new_max # [d]: new mean vector of the Gaussian with the past biggest entropy 
-        self.means.data[[self.G_min, self.G_max]] = torch.vstack((mean_new_min, mean_one)) # [2, d]
+        mean_min_two = torch.sum(x_min_two, dim=0) / count_new_min # [d]: new mean vector of the Gaussian with the biggest entropy                
+        mean_max_two = torch.sum(x_max_two, dim=0) / count_new_max # [d]: new mean vector of the Gaussian with the past biggest entropy 
+        self.means.data[[self.G_min, self.G_max]] = torch.vstack((mean_min_two, mean_one)) # [2, d]
         
-        cov_new_min = p[:, self.G_min][:, None, None] * ((x - mean_new_min).unsqueeze(-1) * (x - mean_new_min).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
-        cov_new_min = torch.sum(cov_new_min, dim=0) / count_new_min # [d, d]
-        cov_new_max = p[:, self.G_max][:, None, None] * ((x - mean_new_max).unsqueeze(-1) * (x - mean_new_max).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
-        cov_new_max = torch.sum(cov_new_max, dim=0) / count_new_max # [d, d]
-        self.covs.data[[self.G_min, self.G_max]] = torch.vstack((cov_new_min[None, ...], cov_new_max[None, ...]))
+        cov_min_two = p[:, self.G_min][:, None, None] * ((x - mean_min_two).unsqueeze(-1) * (x - mean_min_two).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
+        cov_min_two = torch.sum(cov_min_two, dim=0) / count_new_min # [d, d]
+        cov_max_two = p[:, self.G_max][:, None, None] * ((x - mean_max_two).unsqueeze(-1) * (x - mean_max_two).unsqueeze(-2)) # [n, d, 1] * [n, 1, d] -> [n, d, d]
+        cov_max_two = torch.sum(cov_max_two, dim=0) / count_new_max # [d, d]
+        self.covs.data[[self.G_min, self.G_max]] = torch.vstack((cov_min_two[None, ...], cov_max_two[None, ...]))
         
         if not self._is_pos_def(self.covs.data): 
             self.covs.data = self._to_pos_def(self.covs.data) 
             
         component_distribution = self._get_mixture_model(means=self.means.data, covs=self.covs.data)
         
-        p_new_min = self._posterior(x=x_new_min, weights=self.weights.data, distribution=component_distribution) # [count_G_min, k]
-        p_new_max = self._posterior(x=x_new_max, weights=self.weights.data, distribution=component_distribution) # [count_G_max, k]
+        p_min_two = self._posterior(x=x_min_two, weights=self.weights.data, distribution=component_distribution) # [count_G_min, k]
+        p_max_two = self._posterior(x=x_max_two, weights=self.weights.data, distribution=component_distribution) # [count_G_max, k]
 
-        p[swap] = p_new_min
-        p[stay] = p_new_max
+        p[swap] = p_min_two
+        p[stay] = p_max_two
         
-        return p
+        return p, x_min_two, x_max_two
     
     def _mahalanobis_distance(self, x, mean, cov): 
-        distances = (x - mean)[:, None, :] * torch.inverse(cov)[None, :, :] * (x - mean)[:, :, None] #  [n, 1, d] * [1, d, d] * [n, d, 1] -> [n, 1, 1]
-        distances = torch.sqrt(distances)
-        return distances 
+        distances = (x - mean)[:, None, :] @ torch.inverse(cov)[None, :, :] @ (x - mean)[:, :, None] #  [n, 1, d] * [1, d, d] * [n, d, 1] -> [n, 1, 1]
+        distances = torch.sqrt(distances) # [n, 1, 1]
+        return distances[0] # [n]
     
-    def _is_convergence(self, x, x_min, x_max, means_two, covs_two) -> torch.Tensor.bool:  
-        one_left = torch.sum(torch.exp(self._mahalanobis_distance(x_min, means_two[self.G_min, :], covs_two[self.G_min, ...])), dim=0)
-        one_right = torch.sum(torch.exp(self._mahalanobis_distance(x[self.idxs_min, :], self.means[self.G_min, :], self.covs[self.G_min, ...])), dim=0)
+    def _is_convergence(self, x_min_zero, x_max_zero, x_min_two, x_max_two, means_zero, covs_zero) -> torch.Tensor.bool:  
+        one_left = torch.sum(torch.exp(-self._mahalanobis_distance(x_min_two, self.means.data[self.G_min], self.covs.data[self.G_min])))
+        one_right = torch.sum(torch.exp(-self._mahalanobis_distance(x_min_zero, means_zero[self.G_min], covs_zero[self.G_min])))
         one = one_left >= one_right # (Equation 21a)
     
-        two_left = torch.sum(torch.exp(self._mahalanobis_distance(x_max, means_two[self.G_max, :], covs_two[self.G_max, ...])), dim=0)
-        two_right = torch.sum(torch.exp(self._mahalanobis_distance(x[self.idxs_max, :], self.means[self.G_max, :], self.covs[self.G_max, ...])), dim=0)
+        two_left = torch.sum(- torch.exp(-self._mahalanobis_distance(x_max_two, self.means.data[self.G_max], self.covs.data[self.G_max])))
+        two_right = torch.sum(-torch.exp(-self._mahalanobis_distance(x_max_zero, means_zero[self.G_max], covs_zero[self.G_max])))
         two = two_left >= two_right # (Equation 21b)
         
-        three = torch.det(self.covs[self.G_min, ...]) >= torch.det(covs_two[self.G_min, ...]) # (Equation 21c)
+        three = torch.det(covs_zero[self.G_min]) >= torch.det(self.covs.data[self.G_min]) # (Equation 21c)
         
-        four = torch.det(self.covs[self.G_max, ...]) >= torch.det(covs_two[self.G_max, ...]) # (Equation 21d)
-              
-        five_left = torch.sum(torch.exp(self._mahalanobis_distance(x_min, means_two[self.G_min, :], covs_two[self.G_min, ...])), dim=0)
-        five_left /= torch.det(covs_two[self.G_min, ...]) ** 1/2
-        five_right = torch.sum(torch.exp(self._mahalanobis_distance(x_max, means_two[self.G_max, :], covs_two[self.G_max, ...])), dim=0)
-        five_right /= torch.det(covs_two[self.G_max, ...]) ** 1/2
+        four = torch.det(covs_zero[self.G_max]) >= torch.det(self.covs.data[self.G_max]) # (Equation 21cd)
+        
+        five_left = torch.sum(torch.exp(self._mahalanobis_distance(x_min_two, self.means.data[self.G_min], self.covs.data[self.G_min])))
+        five_left /= torch.det(self.covs.data[self.G_min]) ** 1/2
+        five_right = torch.sum(torch.exp(self._mahalanobis_distance(x_max_two, self.means.data[self.G_max], self.covs.data[self.G_max])))
+        five_right /= torch.det(self.covs.data[self.G_max]) ** 1/2
         five = five_left >= five_right # (Equation 23)
         
-        is_convergence = one and two and three and four and five
+        is_convergence = all([one, two, three, four, five])
         return is_convergence  
 
     def _update_gmm(self, x: TensorType["n", "d"])  -> None: 
@@ -432,18 +432,20 @@ class GMM(nn.Module):
         elif self.count_G_max > 1: 
             self.idxs_max = self.idxs_max.squeeze()
         
-        x_min = x[self.idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
-        x_max = x[self.idxs_max] # [count_G_max, d]: samples belonging to the Gaussian with the biggest entropy
+        x_min_zero = x[self.idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
+        x_max_zero = x[self.idxs_max] # [count_G_max, d]: samples belonging to the Gaussian with the biggest entropy
         
-        # posterior update loop: 
+        means_zero = self.means.data.clone()
+        covs_zero = self.covs.data.clone()
+        # Posterior update loop: 
         while(True):
             if E_min <= E_max: 
                 # 1st posterior update
-                p = self._first_posterior_update(x, p, x_min, x_max)
+                p = self._first_posterior_update(x, p, x_min_zero, x_max_zero)
                 # 2nd posterior update
-                p = self._second_posterior_update(x, p, x_min, x_max)
-                
-                is_convergence = self._is_convergence(x, x_min, x_max)
+                p, x_min_two, x_max_two = self._second_posterior_update(x, p)
+                # Check for convergence
+                is_convergence = self._is_convergence(x_min_zero, x_max_zero, x_min_two, x_max_two, means_zero, covs_zero)
                 if is_convergence: 
                     break 
     
