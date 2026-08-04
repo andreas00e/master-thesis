@@ -306,8 +306,12 @@ class GMM(nn.Module):
         mean_new = (torch.sum(x_min, dim=0) + torch.sum(x_max, dim=0)) / (self.count_G_min + self.count_G_max) # [d]
         
         # Exchange posterior probabilities
-        p_one = p_zero.clone()      
-        p_one[self.idxs_min][:, [self.G_min, self.G_max]] = p_one[self.idxs_min][:, [self.G_max, self.G_min]]  
+        p_one = p_zero.clone()
+        tmp_min = p_one[self.idxs_min, self.G_min].clone()
+        tmp_max = p_one[self.idxs_max, self.G_max].clone()
+
+        p_one[self.idxs_min, self.G_min] = tmp_min
+        p_one[self.idxs_max, self.G_max] = tmp_max
         
         # Covariance matrix of the merged distribution 
         num_cov = p_one[:, self.G_max][:, None, None] * ((x - mean_new)[:, :, None] * (x - mean_new)[:, None, :]) # [n, 1, 1] * ([n, d, 1] * .[n, 1, d]) -> [n, d, d]
@@ -363,11 +367,16 @@ class GMM(nn.Module):
         if count_new_max <= 0: 
             raise ValueError(f"There are no samples to swap!! {count_new_max}")
         
+        # Exchange posterior probabilities
+        p_two = p_one.clone()
+        tmp_min = p_two[stay_idxs, self.G_min].clone()
+        tmp_max = p_two[stay_idxs, self.G_max].clone()
+
+        p_two[stay_idxs, self.G_min] = tmp_max
+        p_two[stay_idxs, self.G_max] = tmp_min
+
         x_min_two = x[swap_idxs]
         x_max_two = x[stay_idxs]
-        
-        p_two = p_one.clone()
-        p_two[stay_idxs][:, [self.G_min, self.G_max]] = p_two[stay_idxs][:, [self.G_max, self.G_min]]
 
         # Update the mixture weights of the two new Gaussian distributions
         weight_min_two = torch.tensor(count_new_min / x.shape[0]) # []: new weight of the Gaussian with the past smallest entropy 
@@ -472,8 +481,8 @@ class GMM(nn.Module):
             self.G_min = G_min.item() 
             self.G_max = G_max.item() 
             
-            self.idxs_min = torch.nonzero(self.G_min == c_idxs) # [count_G_min]: indices of all samples belonging to the Gaussian with the smallest entropy
-            self.idxs_max = torch.nonzero(self.G_max == c_idxs) # [count_G_max]: indices of all samples belonging to the Gaussian with the biggest entropy
+            self.idxs_min = torch.nonzero(self.G_min == c_idxs, as_tuple=False).view(-1) # [count_G_min]: indices of all samples belonging to the Gaussian with the smallest entropy
+            self.idxs_max = torch.nonzero(self.G_max == c_idxs, as_tuple=False).view(-1) # [count_G_max]: indices of all samples belonging to the Gaussian with the biggest entropy
 
             self.count_G_min = self.idxs_min.numel() # []: number of samples in the Gaussian with the smallest entropy 
             self.count_G_max = self.idxs_max.numel() # []: number of samples in the Gaussian with the biggest entropy 
