@@ -18,6 +18,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         robots: Optional[List[str]], 
         tasks: Optional[List[str]], 
         expand_depth: Optional[str], # grayscale, colormap 
+        n_samples: int, # number of 
         batch_size: int,
         shuffle: bool,  
         num_workers: int, 
@@ -36,6 +37,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.robots = robots 
         self.tasks = tasks 
         self.expand_depth = expand_depth 
+        self.n_samples = n_samples # number of samples returned by __getitem__() 
         
         # dataloading kwargs
         self.batch_size = batch_size
@@ -101,16 +103,26 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     
     def _get_demomap(self): # -> List[List[os.PathLike, int, int, None]]: 
         H = np.inf # H: min episode duration -> max possible window size
-        demo_map = []
+        demo_tmp, demo_map = [], []
 
         for file in self.files:
             with h5py.File(file, "r") as hf:
                 for demo in hf["data"].keys():
                     n_steps = hf["data"][demo]["actions"][()].shape[0]
-                    if n_steps < H:
-                        H = n_steps
-                    demo_map.append([file, demo, n_steps])
+                    
+                    if n_steps < H: # number of steps in the demo is smaller than the horizon 
+                        H = n_steps # horizon is now equal to the number of steps 
+
+                    demo_tmp.append([file, demo, n_steps]) 
+                    if len(demo_tmp) == self.n_samples: 
+                        demo_map.append(demo_tmp)
+                        demo_tmp.clear()
+                        
+                demo_tmp = demo_tmp.copy()
         
+        if len(demo_tmp) != 0: 
+            demo_map.append(demo_tmp)   
+                                         
         if H < self.window: 
             print(f"The chosen size of the window is bigger than the smallest episode length! \n \
                   Therefore, the size of the window gets changed from {self.window} to {H}.")
