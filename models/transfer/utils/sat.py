@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F 
 from torchtyping import TensorType
 
-from models.utils import PE
+from models.utils.utils import PE
 # from models.discover.tse import TSE
 
 
