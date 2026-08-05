@@ -16,7 +16,6 @@ def main(cfg):
     logger = instantiate(cfg.logger)
 
     trainer = pl.Trainer(logger=logger, **cfg.trainer)
-    
     if cfg.stage == "fit": 
         _ = trainer.fit(model=model, datamodule=datamodule)
         

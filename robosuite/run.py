@@ -11,9 +11,6 @@ import torch
 from torchvision.transforms import v2
 from torchvision.transforms.functional import rotate
 
-from models.autoencoder.autoencoder import DownsampleCVAE
-from models.diffusion.diffuser import DownsampleObsLDM
-
 
 controller_config = load_controller_config(default_controller="OSC_POSE")
 

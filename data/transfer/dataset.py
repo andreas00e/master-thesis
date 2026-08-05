@@ -43,7 +43,7 @@ class TransferDataset(Dataset):
         file, demo, n_steps = self.demo_map[idx] 
         
         robot = file.split(".")[0].split("_")[-2] if self.depth else file.split(".")[0].split("_")[-1]
-        joint_dsc = self.joint_dsc[robot].to(self.dtype).to(self.device) # [features, joints]
+        joint_dsc = self.joint_dsc[robot] # [features, joints]
 
         if file not in self._file_cache: # open file once per worker and cache it
             self._file_cache[file] = h5py.File(file, "r")
@@ -51,7 +51,7 @@ class TransferDataset(Dataset):
         hf = self._file_cache[file]
     
         actions = hf["data"][demo]["actions"][()]
-        actions = torch.tensor(actions, dtype=self.dtype, device=self.device)
+        actions = torch.tensor(actions)
         
         obs = hf["data"][demo]["obs"] 
         rgb_obs = obs["robot0_eye_in_hand_image"][()]

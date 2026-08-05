@@ -20,7 +20,7 @@ datamodule:
   cfgs_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/cfgs/dh_cfgs/
   batch_size: 8 
   shuffle: True
-  num_workers: 1 
+  num_workers: 31
   pin_memory: True 
   drop_last: True 
   persistent_workers: True 
