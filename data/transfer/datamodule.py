@@ -45,7 +45,7 @@ class TransferDataModule(pl.LightningDataModule):
         self.persistent_workers = persistent_workers
         self.dataset_lengths = dataset_lengths
 
-        all_files = [file for file in os.listdir(self.data_dir) if "depth" in file]
+        all_files = [file for file in os.listdir(self.data_dir) if ("depth" in file) == self.depth]
         all_robots = list(set(f.split(".")[-2].split("_")[-1] for f in all_files)) # no given robot -> all robots
         all_tasks = list(set(f.split(".")[-2].split("_")[0] for f in all_files)) # no given task -> all tasks
         
@@ -55,7 +55,6 @@ class TransferDataModule(pl.LightningDataModule):
             os.path.join(data_dir, file) for file in all_files
             if any(robot in file for robot in self.robots)
             and any(task in file for task in self.tasks)
-            and ("depth" in file == self.depth)
             ]
         
         self.demo_map, self.joint_dsc = self.prepare_data()
