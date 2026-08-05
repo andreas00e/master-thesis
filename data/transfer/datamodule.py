@@ -121,7 +121,6 @@ class TransferDataModule(pl.LightningDataModule):
     def train_dataloader(self):
         train_dataloader = DataLoader(
             dataset=self.train_dataset, 
-            depth=self.depth, 
             batch_size=self.batch_size, 
             shuffle=self.shuffle,    
             num_workers=self.num_workers,  
@@ -133,7 +132,6 @@ class TransferDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         val_dataloader = DataLoader(
             dataset=self.val_dataset, 
-            depth=self.depth, 
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
             pin_memory=self.pin_memory, 
@@ -143,8 +141,7 @@ class TransferDataModule(pl.LightningDataModule):
     
     def test_dataloader(self):
         test_dataloader = DataLoader(
-            dataset=self.val_dataset,             
-            depth=self.depth, 
+            dataset=self.test_dataset,             
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
             pin_memory=self.pin_memory, 

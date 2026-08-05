@@ -1,4 +1,6 @@
-from typing import Dict, Any
+# Robot Conditioned Encoder (RCE)
+
+from omegaconf import DictConfig 
 
 import torch 
 import torch.nn as nn 
@@ -8,68 +10,60 @@ from torchtyping import TensorType
 class RCE(nn.Module):
     def __init__(
         self,
-        dsc_kwargs: Dict[str, Any],
-        obs_kwargs: Dict[str, Any],
-        h_kwargs: Dict[str, Any],
-    ) -> None:
+        dsc_kwargs: DictConfig,
+        obs_kwargs: DictConfig,
+        h_kwargs: DictConfig
+        ) -> None:
         super().__init__()
 
-        # retain original kwargs for flexibility
         self.dsc_kwargs = dsc_kwargs
         self.obs_kwargs = obs_kwargs
         self.h_kwargs = h_kwargs
+        
+        self.dsc_encoder = self._build_dsc_encoder() # joint description encoder 
+        self.obs_encoder = self._build_obs_encoder() # joint observation encoder
 
-        # learnable temperature offset (originally: tau - tau_min)
-        init_tau = getattr(self.h_kwargs, "tau", None)
-        init_tau_min = getattr(self.h_kwargs, "tau_min", 0.0)
-        if init_tau is None:
-            # fall back to dict-style access if attributes not present
-            init_tau = self.h_kwargs.get("tau", 1.0)
-            init_tau_min = self.h_kwargs.get("tau_min", 0.0)
+        self.init_tau = getattr(self.h_kwargs, "tau", 1.0)
+        self.init_tau_min = getattr(self.h_kwargs, "tau_min", 0.0)
+        self.epsilon = getattr(self.h_kwargs, "epsilon", 1e-6)
 
-        self.tau = nn.Parameter(torch.tensor(init_tau - init_tau_min), requires_grad=True)
-
-        # encoders
-        self.dsc_encoder = self._build_dsc_encoder()
-        self.obs_encoder = self._build_obs_encoder()
+        self.tau = nn.Parameter(torch.tensor(self.init_tau - self.init_tau_min), requires_grad=True)
 
     def _build_dsc_encoder(self) -> nn.Sequential:
-        in_dim = getattr(self.dsc_kwargs, "input_dim", None) or self.dsc_kwargs.get("input_dim")
-        hidden = getattr(self.dsc_kwargs, "hidden_dim", None) or self.dsc_kwargs.get("hidden_dim")
-        out = getattr(self.dsc_kwargs, "output_dim", None) or self.dsc_kwargs.get("output_dim")
-
-        return nn.Sequential(
-            nn.Linear(in_dim, hidden),
-            nn.LayerNorm(hidden),
-            nn.ELU(),
-            nn.Linear(hidden, out),
-        )
+        input_dim = getattr(self.dsc_kwargs, "input_dim", None) 
+        hidden_dim = getattr(self.dsc_kwargs, "hidden_dim", None)
+        output_dim = getattr(self.dsc_kwargs, "output_dim", None)
+        
+        if any([isinstance(dim, type(None)) for dim in [input_dim, hidden_dim, output_dim]]): 
+            raise ValueError("Linear layer dimensions of the description encoder cannot be zero!")
+        else:   
+            return nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim),
+                nn.ELU(),
+                nn.Linear(hidden_dim, output_dim)
+                )
 
     def _build_obs_encoder(self) -> nn.Sequential:
-        in_dim = getattr(self.obs_kwargs, "input_dim", None) or self.obs_kwargs.get("input_dim")
-        out = getattr(self.obs_kwargs, "output_dim", None) or self.obs_kwargs.get("output_dim")
-
-        return nn.Sequential(nn.Linear(in_dim, out), nn.ELU())
+        input_dim = getattr(self.obs_kwargs, "input_dim", None) 
+        output_dim = getattr(self.obs_kwargs, "output_dim", None)
+        
+        if any([isinstance(dim, type(None)) for dim in [input_dim, output_dim]]): 
+            raise ValueError("Linear layer dimensions of the observation encoder cannot be zero!")
+        else:  
+            return nn.Sequential(
+                nn.Linear(input_dim, output_dim), 
+                nn.ELU()
+                )
 
     def forward(self, joint_dsc: TensorType["*"], joint_obs: TensorType["*"]):
-        # description embedding: [batch, n_joints, hidden]
-        description_emb = self.dsc_encoder(joint_dsc)
-        eps = getattr(self.h_kwargs, "epsilon", None)
-        if eps is None:
-            eps = self.h_kwargs.get("epsilon", 1e-6)
+        dsc_emb = self.dsc_encoder(joint_dsc)
+        dsc_emb = torch.clamp(torch.tanh(dsc_emb), -1.0 + self.eps, 1.0 - self.eps)
 
-        description_emb = torch.clamp(torch.tanh(description_emb), -1.0 + eps, 1.0 - eps)
+        obs_emb = self.obs_encoder(joint_obs)  # [batch, n_joints, emb]
+        obs_emb = torch.exp(obs_emb / (self.tau.data + self.epsilon))
+        obs_emb = obs_emb / torch.sum(obs_emb, dim=-1, keepdim=True)
 
-        # observation embedding and normalization
-        tau_val = getattr(self.h_kwargs, "tau", None)
-        if tau_val is None:
-            tau_val = self.h_kwargs.get("tau", 1.0)
-
-        observation_emb = self.obs_encoder(joint_obs)  # [batch, n_joints, emb]
-        observation_emb = torch.exp(observation_emb / (tau_val + eps))
-        observation_emb = observation_emb / torch.sum(observation_emb, dim=-1, keepdim=True)
-
-        # combine and pool over joints
-        emb = observation_emb * description_emb * observation_emb
+        emb = obs_emb * dsc_emb * obs_emb
         emb = torch.sum(emb, dim=1)
         return emb

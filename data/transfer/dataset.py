@@ -10,16 +10,16 @@ from torch.utils.data import Dataset
 class TransferDataset(Dataset): 
     def __init__(self, 
         demo_map: List[Tuple[os.PathLike, int, int]],
-        window: int,
-        joint_dsc: Dict[str, TensorType["*"]],
+        horizon: int,
+        depth: bool, 
+        joint_dsc: Dict[str, TensorType["*"]] 
         ) -> None:
         super().__init__()
         
         self.demo_map = demo_map
-        self.window = window
+        self.horizon = horizon
+        self.depth = depth
         self.joint_dsc = joint_dsc
-        
-        self.depth = True
         
         self._file_cache = {}
                        
@@ -41,22 +41,30 @@ class TransferDataset(Dataset):
     def __getitem__(self, idx) -> Dict[str, TensorType["*"]]: 
         item = {}
         file, demo, n_steps = self.demo_map[idx] 
-        idx_start = np.random.randint(0, n_steps - self.window + 1)
         
         robot = file.split(".")[0].split("_")[-2] if self.depth else file.split(".")[0].split("_")[-1]
-        joint_dsc = self.joint_dsc[robot]
+        joint_dsc = self.joint_dsc[robot].to(self.dtype).to(self.device) # [features, joints]
 
         if file not in self._file_cache: # open file once per worker and cache it
             self._file_cache[file] = h5py.File(file, "r")
             
         hf = self._file_cache[file]
-        obs = hf["data"][demo]["obs"]
+    
+        actions = hf["data"][demo]["actions"][()]
+        actions = torch.tensor(actions, dtype=self.dtype, device=self.device)
         
-        joint_pos = torch.tensor(obs["robot0_joint_pos"][idx_start:idx_start+self.window, :], dtype=torch.float32) # [window, 3]
-        joint_vel = torch.tensor(obs["robot0_joint_vel"][idx_start:idx_start+self.window, :], dtype=torch.float32) # [window, 3]
-        joint_obs = torch.hstack((joint_pos, joint_vel)) # [window, 6]
-        
+        obs = hf["data"][demo]["obs"] 
+        rgb_obs = obs["robot0_eye_in_hand_image"][()]
+        rgb_obs = torch.tensor(rgb_obs)
+        joint_pos = obs["robot0_joint_pos"][()]
+        joint_pos = torch.tensor(joint_pos)
+        joint_vel = obs["robot0_joint_qpos"][()]
+        joint_vel = torch.tensor(joint_vel)
+        joint_obs = torch.vstack((joint_pos, joint_vel))
+       
+        item["actions"] = actions
+        item["rgb_obs"] = rgb_obs
         item["joint_dsc"] = joint_dsc
-        item["joint_obs"] = joint_obs 
+        item["joint_obs"] = joint_obs
         
         return item

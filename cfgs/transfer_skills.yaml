@@ -1,29 +1,47 @@
 seed: 42 
-data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
+data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot/
 
 stage: fit # test, predict
 
-data: 
-  datamodule: 
-    _target_: data.transfer.datamodule.TransferDataModule 
-    data_dir: ${data_dir}
-    window: 8 
-    robots: panda 
-    tasks: threading 
-    config_file_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/cfgs/dh_cfgs
-    batch_size: 8 
-    shuffle: True
-    num_workers: 1 
-    pin_memory: True 
-    drop_last: True 
-    persistent_workers: True 
-    dataset_lengths: 
-    - 0.8 
-    - 0.1 
-    - 0.1
+datamodule: 
+  _target_: data.transfer.datamodule.TransferDataModule 
+  
+  data_dir: ${data_dir}
+  horizon: 8 
+  robots: 
+    # - iiwa
+    - panda 
+    # - sawyer 
+    # - ur5e
+  tasks: 
+    # - square
+    - threading 
+  depth: False
+  cfgs_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/cfgs/dh_cfgs/
+  batch_size: 8 
+  shuffle: True
+  num_workers: 1 
+  pin_memory: True 
+  drop_last: True 
+  persistent_workers: True 
+  dataset_lengths: 
+  - 0.8 
+  - 0.1 
+  - 0.1
   
 model: 
   _target_: models.transfer.transfer.SkillTransfer
+ 
+  ditbc_kwargs: 
+    action_dim: 512
+    obs_dim: 512 
+    horizon: 16 
+    hidden_dim: 2048 
+    num_heads: 4 
+    num_layers: 4 
+    num_timesteps: 100 
+    deivce: ~
+
   rce_kwargs:
     dsc_kwargs: 
       input_dim: 512
@@ -35,6 +53,12 @@ model:
     h_kwargs: 
       tau: 0.1
       tau_min: 0.01
+      epsilon: 1e-6
+
+  sat_kwargs: 
+    d_model: 5 
+    n_head: 4 
+    dim_feedforward: 512 
 
   optimizer_kwargs: 
     optimizer: 
@@ -42,12 +66,15 @@ model:
     lr_scheduler: 
       start_factor: 0.5 
       total_iters: 40 
+  
+  tse_ckpt: "hello"
 
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
+
   name: debugging
   version: ${now:%Y_%m_%d_%H_%M}
-  project: skill_discovery
+  project: skill_transfer
 
 trainer: 
   accelerator: gpu   
@@ -58,4 +85,4 @@ trainer:
   num_sanity_val_steps: 2
   enable_progress_bar: True
   profiler: simple 
-  default_root_dir: logs/skill_discovery/
+  default_root_dir: logs/skill_transfer/

@@ -11,7 +11,7 @@ def main(cfg):
     multiprocessing.set_start_method("spawn", force=True)
     pl.seed_everything(cfg.seed) 
 
-    datamodule = instantiate(cfg.data.datamodule)
+    datamodule = instantiate(cfg.datamodule)
     model = instantiate(cfg.model)
     logger = instantiate(cfg.logger)
 
@@ -20,14 +20,8 @@ def main(cfg):
     if cfg.stage == "fit": 
         _ = trainer.fit(model=model, datamodule=datamodule)
         
-        
-        
     elif cfg.stage == "predict": 
         _  = trainer.predict(model=model, datamodule=datamodule)
-        
-        
-        
-        
         
 if __name__ == "__main__": 
     main() 

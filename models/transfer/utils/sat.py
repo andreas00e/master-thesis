@@ -8,8 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F 
 from torchtyping import TensorType
 
-from models.utils import PositionalEncoding
-from models.discover.tse import TSE
+from models.utils import PE
+# from models.discover.tse import TSE
 
 
 class SAT(nn.Module): 
@@ -29,12 +29,8 @@ class SAT(nn.Module):
         self.SAT = nn.TransformerEncoder(self.SAT_layer, **self.sat_kwargs)
         
         self.skill_encoder_weights = torch.load(self.skill_encoder_weights, weights_only=True) 
-        self.SkillEncoder = TSE(self.skill_encoder_weights).eval()
         
-        for param in self.SkillEncoder.parameters():
-            param.requires_grad = False 
-        
-        self.positionalEncoding = PositionalEncoding(d_model=self.sat_layer_kwargs.d_model).eval() 
+        self.pe = PE(d_model=self.sat_layer_kwargs.d_model).eval() 
         
             
         self.loss = F.mse_loss()
@@ -42,8 +38,7 @@ class SAT(nn.Module):
     def forward(self, x: TensorType["*"]) -> TensorType["*"]:
         z_hat = self.SkillEncoder(x)
         
-        z = self.positionalEncoding(x)
-        z = self.SAT(z)
+        z = self.pe(x)
         
         loss = self.loss(z, z_hat)
         return loss

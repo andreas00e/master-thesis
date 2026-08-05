@@ -9,39 +9,36 @@ import lightning.pytorch as pl
 from models.discover.tse import TSE
 from models.transfer.utils.sat import SAT
 from models.transfer.utils.rce import RCE
+from models.transfer.utils.ditbc import DiTBC
 
 
 class SkillTransfer(pl.LightningModule): 
     def __init__(
         self, 
-        sat_kwargs: DictConfig, 
+        ditbc_kwargs: DictConfig, 
         rce_kwargs: DictConfig,
+        sat_kwargs: DictConfig, 
         optimizer_kwargs: DictConfig,
         tse_ckpt: os.PathLike, 
-        sat_ckpt: Optional[os.PathLike]=None, 
-        rce_ckpt: Optional[os.PathLike]=None,  
-        
         ) -> None:
-        
         super().__init__()
         self.save_hyperparameters()
        
-        self.sat_kwargs = sat_kwargs
+        self.ditbc_kwargs = ditbc_kwargs
         self.rce_kwargs = rce_kwargs
+        self.sat_kwargs = sat_kwargs
         self.optimizer_kwargs = optimizer_kwargs
 
         self.tse_ckpt = tse_ckpt
-        self.sat_ckpt = sat_ckpt 
-        self.rce_ckpt = rce_ckpt
-        
-        if os.path.exists(self.tse_ckpt) and self.tse_ckpt.endswith(".ckpt"): 
-            self.TSE = TSE.load_from_checkpoint(self.tse_ckpt)
-               
-        self.SAT = SAT(**self.sat_kwargs)
+         
+        # self.TSE = TSE.load_from_checkpoint(self.tse_ckpt)
+        # self.ditbc_kwargs["device"] = self.device      
+        # self.DiTBC = DiTBC(**self.ditbc_kwargs)
         self.RCE = RCE(**self.rce_kwargs)
-        
-        self.loss = F.mse_loss()
+        ## self.SAT = SAT(**self.sat_kwargs)
 
+        # self.loss = F.mse_loss()
+    
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
         scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, **self.optimizer_kwargs.lr_scheduler)
@@ -54,33 +51,37 @@ class SkillTransfer(pl.LightningModule):
             }
         }   
     
-    def _shared_step(self, x): 
-        x_hat = self.TSE(x)
-        x_hat = self.SAT(x_hat)
-        x_hat = self.RCE(x_hat)
+    def _shared_step(self, rgb_obs, actions, joint_dsc, joint_obs): 
+        # T = rgb_obs.shape[0]
+        # t = torch.randint(low=0, high=T).item()
+
+        # z_tilde = self.TSE(rgb_obs)
+        # z_t_hat = self.SAT(rgb_obs)
+        # sat_loss = self.loss(z_t_hat, z_tilde[t])
         
-        loss = self.loss(x, x_hat)
+        # prop_t = self.RCE(joint_dsc, joint_obs)
+        # actions_hat = self.DiTBC(rgb_obs[t], prop_t, z_t_hat)
+        # bc_loss = self.loss(actions_hat, actions)
         
+        # loss = sat_loss + bc_loss 
+        loss = 0 
         self.log_dict({f"loss_{self.trainer.state.stage}": loss})
-        
-        return x 
     
-    def forward(self, x):
-        x = self._shared_step(x)
-        return None
+        return loss
+    
+    def forward(self, batch):
+        actions, rgb_obs, joint_dsc, joint_obs = batch.values() 
+        loss = self._shared_step(actions, rgb_obs, joint_dsc, joint_obs)
+        return loss
     
     def training_step(self, batch, batch_idx):
-        x = self._shared_step(x)
+        x = self._shared_step(batch)
         return None
     
     def validation_step(self, batch, batch_idx):
-        x = self._shared_step(x)
+        x = self._shared_step(batch)
         return None
     
     def test_step(self, batch, batch_idx):
-        x = self._shared_step(x)
+        x = self._shared_step(batch)
         return None
-    
-    def predict_step(self):
-        x = self._shared_step(x)
-        return None 
