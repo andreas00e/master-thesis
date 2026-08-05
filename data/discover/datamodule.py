@@ -119,9 +119,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                         demo_tmp.clear()
                         
                 demo_tmp = demo_tmp.copy()
-        
-        if len(demo_tmp) != 0: 
-            demo_map.append(demo_tmp)   
                                          
         if H < self.window: 
             print(f"The chosen size of the window is bigger than the smallest episode length! \n \

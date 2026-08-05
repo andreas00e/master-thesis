@@ -17,12 +17,17 @@ def main(cfg):
 
     trainer = pl.Trainer(logger=logger, **cfg.trainer)
     
-    if cfg.stage == "train": 
+    if cfg.stage == "fit": 
         _ = trainer.fit(model=model, datamodule=datamodule)
-    elif cfg.stage == "test": 
-        _ = trainer.test(model=model, datamodule=datamodule)
+        
+        
+        
     elif cfg.stage == "predict": 
         _  = trainer.predict(model=model, datamodule=datamodule)
+        
+        
+        
+        
         
 if __name__ == "__main__": 
     main() 

@@ -11,6 +11,7 @@ data:
     robots: panda
     tasks: threading
     expand_depth: colormap 
+    n_samples: 15 
 
     batch_size: 8
     shuffle: True

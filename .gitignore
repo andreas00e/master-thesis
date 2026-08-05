@@ -1,4 +1,5 @@
 .vscode/
+.VSCodeCounter/
 data/images/
 logs/
 notebooks/

@@ -1,7 +1,7 @@
 seed: 42 
 data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
 
-stage: train # test, predict
+stage: fit # test, predict
 
 data: 
   datamodule: 

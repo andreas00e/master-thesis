@@ -1,3 +1,5 @@
+# Temporal Skill Encoder (TSE)
+
 import wandb
 import numpy as np 
 from typing import Dict
@@ -6,13 +8,14 @@ import torch
 from torchtyping import TensorType
 import lightning.pytorch as pl 
 
-from .clustering.kmeans import KMeans
-from .clustering.rgmm import GMM 
+from models.discover.cluster import KMeans
+from models.discover.cluster import GMM
+
 from .visionBackbone import VisionBackbone
 from .visionEncoder import VisionEncoder
 
 
-class SkillDiscovery(pl.LightningModule): 
+class TSE(pl.LightningModule): 
     def __init__(
         self, 
         vision_backbone_kwargs: Dict, 
