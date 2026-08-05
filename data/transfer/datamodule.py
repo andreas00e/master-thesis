@@ -2,7 +2,7 @@ import os
 import h5py 
 import numpy as np 
 from omegaconf import OmegaConf
-from typing import  Dict, List, Optional, Tuple
+from typing import  List, Optional, Tuple
 
 import torch
 from torchtyping import TensorType
@@ -15,10 +15,11 @@ from data.transfer.dataset import TransferDataset
 class TransferDataModule(pl.LightningDataModule): 
     def __init__(self, 
         data_dir: os.PathLike, # directory containing the hdf5 trajectory files 
-        window: int,
+        horizon: int,
         robots: Optional[List[str]], 
         tasks: Optional[List[str]], 
-        config_file_dir: os.PathLike, 
+        depth: bool, 
+        cfgs_path: os.PathLike, 
         batch_size: int,
         shuffle: bool,  
         num_workers: int, 
@@ -30,10 +31,11 @@ class TransferDataModule(pl.LightningDataModule):
         
         # data kwargs
         self.data_dir = data_dir
-        self.window = window
+        self.horizon = horizon
         self.robots = robots 
         self.tasks = tasks 
-        self.config_file_dir = config_file_dir
+        self.depth = depth
+        self.cfgs_path = cfgs_path
         
         # dataloading kwargs
         self.batch_size = batch_size
@@ -49,15 +51,34 @@ class TransferDataModule(pl.LightningDataModule):
         
         self.robots = self._filtered_or_all(self.robots, all_robots)
         self.tasks  = self._filtered_or_all(self.tasks, all_tasks)
-        self.files = [os.path.join(data_dir, file) for file in all_files
+        self.files = [
+            os.path.join(data_dir, file) for file in all_files
             if any(robot in file for robot in self.robots)
-            and any(task in file for task in self.tasks)]
+            and any(task in file for task in self.tasks)
+            and ("depth" in file == self.depth)
+            ]
         
-        self.demo_map = None
-        self.joint_dsc = None 
+        self.demo_map, self.joint_dsc = self.prepare_data()
+        self.n_samples_per_epoch = len(self.demo_map)
+        
         self.train_dataset, self.val_dataset, self.test_dataset = self.setup()
         
-        self.n_samples_per_epoch = len(self.demo_map)
+    def prepare_data(self) -> Tuple[List, TensorType["*"]]: 
+        demo_map = self._get_demomap()
+        joint_dsc = self._get_joint_dsc()
+        
+        return demo_map, joint_dsc
+        
+    def setup(self, stage=None) -> Tuple[Dataset, ...]:
+        dataset = TransferDataset(
+            horizon=self.horizon,
+            depth=self.depth,
+            demo_map=self.demo_map,
+            joint_dsc=self.joint_dsc
+            )
+        
+        train_dataset, val_dataset, test_dataset = random_split(dataset, lengths=self.dataset_lengths)
+        return train_dataset, val_dataset, test_dataset
     
     def _filtered_or_all(self, selected, available):
         if selected is None:
@@ -77,41 +98,31 @@ class TransferDataModule(pl.LightningDataModule):
                         H = n_steps
                     demo_map.append([file, demo, n_steps])
         
-        if H < self.window: 
+        if H < self.horizon: 
             print(f"The chosen size of the window is bigger than the smallest episode length! \n \
-                  Therefore, the size of the window gets changed from {self.window} to {H}.")
-            self.window = H
+                  Therefore, the size of the window gets changed from {self.horizon} to {H}.")
+            self.horizon = H
         
         return demo_map
     
-    def _get_joint_dsc(self) -> Dict[str, TensorType["*"]]: 
-        files = [os.path.join(self.config_file_dir, file) for file in os.listdir(self.config_file_dir)]
-        cfgs = [OmegaConf.to_container(OmegaConf.load(file), resolve=True) for file in files]
+    def _get_joint_dsc(self): 
+        cfgs = [os.path.join(self.cfgs_path, cfg) for cfg in os.listdir(self.cfgs_path)] 
         
         joint_dsc = {}
-        for cfg in cfgs:
+        for cfg in cfgs: 
+            cfg = OmegaConf.load(cfg)
             robot = next(iter(cfg.keys()))
-            cfg = cfg[robot]
-            joint_dsc[robot] = torch.stack([torch.tensor(value) for value in cfg.values()], dim=0)
+            values = list(cfg[robot].values())
+            values = torch.tensor(values)
             
-        return joint_dsc
+            joint_dsc[robot] = values
         
-    def setup(self, stage=None) -> Tuple[Dataset, Dataset, Dataset]:
-        self.demo_map = self._get_demomap()
-        self.joint_dsc = self._get_joint_dsc()
-        
-        dataset = TransferDataset(
-            demo_map=self.demo_map,
-            window=self.window,
-            joint_dsc=self.joint_dsc
-            )
-        
-        train_dataset, val_dataset, test_dataset = random_split(dataset, lengths=self.dataset_lengths)
-        return train_dataset, val_dataset, test_dataset
+        return joint_dsc     
     
     def train_dataloader(self):
         train_dataloader = DataLoader(
             dataset=self.train_dataset, 
+            depth=self.depth, 
             batch_size=self.batch_size, 
             shuffle=self.shuffle,    
             num_workers=self.num_workers,  
@@ -123,6 +134,7 @@ class TransferDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         val_dataloader = DataLoader(
             dataset=self.val_dataset, 
+            depth=self.depth, 
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
             pin_memory=self.pin_memory, 
@@ -132,7 +144,8 @@ class TransferDataModule(pl.LightningDataModule):
     
     def test_dataloader(self):
         test_dataloader = DataLoader(
-            dataset=self.val_dataset, 
+            dataset=self.val_dataset,             
+            depth=self.depth, 
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
             pin_memory=self.pin_memory, 
