@@ -2,7 +2,7 @@ import os
 import h5py 
 import pandas as pd
 import numpy as np 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional,  Tuple
 
 import torch
 from torchtyping import TensorType 
@@ -17,6 +17,8 @@ class MimicGenRobotDataset(Dataset):
         demo_map: List[Tuple[os.PathLike, int, int]],
         depths: pd.DataFrame,
         window: int,
+        chunks: int, 
+        depth: Optional[bool], 
         expand_depth: str, # grayscale, colormap 
         transforms: List[str]
         ) -> None:
@@ -25,6 +27,8 @@ class MimicGenRobotDataset(Dataset):
         self.demo_map = demo_map
         self.depths = depths
         self.window = window
+        self.chunks = chunks 
+        self.depth = depth 
         self.expand_depth = expand_depth 
         self.transforms = get_transforms(transforms)
         self.transforms_plus = get_transforms(transforms)
@@ -47,23 +51,35 @@ class MimicGenRobotDataset(Dataset):
               pass
     
     def __getitem__(self, idx):
-        rgb_obs_lst = []
-        rgb_obs_plus_lst = []
+        item = {}
+        file, demo, n_steps =  self.demo_map[idx]
+        
+        ofs = torch.randint(low=0, high=n_steps-self.window, shape=(self.chunks, ))
+        idxs = torch.arange(start=0, end=self.window) + ofs
 
-        for file, demo, n_steps in self.demo_map[idx]:
-            start = np.random.randint(0, n_steps - self.window + 1)
+        hf = self._file_cache.get(file)
+        if hf is None:
+            hf = h5py.File(file, "r")
+            self._file_cache[file] = hf
 
-            hf = self._file_cache.get(file)
-            if hf is None:
-                hf = h5py.File(file, "r")
-                self._file_cache[file] = hf
-
-            obs = hf["data"][demo]["obs"]["robot0_eye_in_hand_image"][start:start + self.window] # [window, height=84, width=84, channels=3]
-            rgb = torch.from_numpy(obs).permute(0, 3, 1, 2).contiguous()  
-            rgb_plus = self.transforms_plus(rgb)
-            rgb = self.transforms(rgb)
-
-            rgb_obs_lst.append(rgb)
-            rgb_obs_plus_lst.append(rgb_plus)
-
-        return torch.stack(rgb_obs_lst), torch.stack(rgb_obs_plus_lst)
+        rgb_obs = hf["data"][demo]["obs"]["robot0_eye_in_hand_image"][idxs]
+        rgb_obs = torch.from_numpy(rgb_obs).permute(0, 3, 1, 2) # [n, c, h, w]
+                
+        rgb = self.transforms(rgb_obs) 
+        rgb_plus = self.transforms(rgb_obs)
+        
+        item["rgb"] = rgb
+        item["rgb_plus"] = rgb_plus 
+        
+        if self.depth: 
+            depth_obs = hf["data"][demo]["obs"]["robot0_eye_in_hand_depth"][idxs]
+            depth_obs = torch.from_numpy(depth_obs).permute(0, 3, 1, 2) # [n, 1, h, w]
+            
+            depth_anchor = self.transforms(depth_obs) 
+            depth_plus = self.transforms(depth_obs)
+             
+            item["rgb"] = rgb
+            item["rgb_plus"] = rgb_plus 
+            
+        
+        return item 

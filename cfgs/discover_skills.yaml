@@ -2,35 +2,34 @@ seed: 42
 data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
 meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
 
-data: 
-  datamodule: 
-    _target_: data.discover.datamodule.MimicGenRobotDataModule
-    data_dir: ${data_dir}
-    meta_dir: ${meta_dir}
-    window: 8 
-    robots: panda
-    tasks: threading
-    expand_depth: colormap 
-    n_samples: 15 
+datamodule: 
+  _target_: data.discover.datamodule.MimicGenRobotDataModule
+  data_dir: ${data_dir}
+  meta_dir: ${meta_dir}
+  window: 8 
+  robots: panda
+  tasks: threading
+  expand_depth: colormap 
+  n_samples: 15 
 
-    batch_size: 8
-    shuffle: True
-    num_workers: 1 
-    pin_memory: True
-    drop_last: True
-    persistent_workers: True 
-    # multiprocessing_context: "forkserver" # prevents fork deadlocks in CUDA DDP
-    dataset_lengths: 
-    - 0.8
-    - 0.1  
-    - 0.1 
+  batch_size: 8
+  shuffle: True
+  num_workers: 1 
+  pin_memory: True
+  drop_last: True
+  persistent_workers: True 
+  # multiprocessing_context: "forkserver" # prevents fork deadlocks in CUDA DDP
+  dataset_lengths: 
+  - 0.8
+  - 0.1  
+  - 0.1 
 
-    transforms: 
-      - grayscale
-      - gaussian_blur
-      - color_jitter 
-      - solarize
-      - rotate 
+  transforms: 
+    - grayscale
+    - gaussian_blur
+    - color_jitter 
+    - solarize
+    - rotate 
 
 model: 
   _target_: models.discover.discover.SkillDiscovery
@@ -45,10 +44,16 @@ model:
       dim_feedforward: 1024
     transformer_encoder_kwargs:
       num_layers: 1
-    
-  gmm_kwargs: 
+  
+  k_means: 
     k: 20 
+    max_iter: 200 
+    tol: 1e-4
+
+  rgmm_kwargs: 
+    k: ${model.k_means.k}
     d: ${model.vision_encoder_kwargs.encoder_layer_kwargs.d_model}
+    max_iter: 200
     alpha: 0.1
     beta: 0.2
     sim: 

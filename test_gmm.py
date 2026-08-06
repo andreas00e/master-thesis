@@ -1,6 +1,7 @@
 import torch
 
-from models.discover.cluster import KMeans, GMM 
+
+from models.discover.cluster import KMeans, RGMM
 
 import wandb
         
@@ -44,7 +45,7 @@ def main():
     # wandb.log({"embeddings": table})
     
     
-    gmm = GMM(weights=weights, means=means, covs=covs, **gmm_kwargs).to(device)
+    gmm = RGMM(weights=weights, means=means, covs=covs, **gmm_kwargs).to(device)
     _ = gmm(mode="update_gmm", x=x)
     # out = gmm(mode="update_encoder", x=x, x_plus=x_plus)
     print("Hello")

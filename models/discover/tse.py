@@ -8,8 +8,7 @@ import torch
 from torchtyping import TensorType
 import lightning.pytorch as pl 
 
-from models.discover.cluster import KMeans
-from models.discover.cluster import GMM
+from models.discover.cluster import KMeans, RGMM
 
 from .visionBackbone import VisionBackbone
 from .visionEncoder import VisionEncoder
@@ -20,7 +19,8 @@ class TSE(pl.LightningModule):
         self, 
         vision_backbone_kwargs: Dict, 
         vision_encoder_kwargs: Dict, 
-        gmm_kwargs: Dict,
+        kmeans_kwargs: Dict, 
+        rgmm_kwargs: Dict,
         optimizer_kwargs: Dict, 
         ) -> None:
         
@@ -29,13 +29,16 @@ class TSE(pl.LightningModule):
         
         self.vision_backbone_kwargs = vision_backbone_kwargs 
         self.vision_encoder_kwargs = vision_encoder_kwargs 
-        self.gmm_kwargs = gmm_kwargs 
+        self.kmeans_kwargs = kmeans_kwargs
+        self.rgmm_kwargs = rgmm_kwargs 
         self.optimizer_kwargs = optimizer_kwargs
                 
         self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
-        self.kmeans = KMeans().eval()
-        self.gmm = GMM(**self.gmm_kwargs)   
+        self.kmeans = KMeans(**self.kmeans_kwargs)
+        self.rgmm = None   
+        
+        self.kmeans.eval()
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
@@ -57,31 +60,14 @@ class TSE(pl.LightningModule):
  
     def _shared_step(self, batch: TensorType["batch"], stage: str) -> None: 
         x, x_plus = batch.values() 
-        x_emb = self(x)  # [b, d_emb]
-        # x_plus_emb = self(x_plus) # [b, d_emb]
-        # loss = self.gmm(x_emb, x_plus_emb)
+        x_emb = self(x)  
+        x_plus_emb = self(x_plus)
         
-        stage = self.trainer.state.stage
-        # self.log_dict({
-        #     stage: loss
-        #     }, 
-        #     prog_bar=True,
-        #     batch_size=x.shape
-        # )
+        weights, means, covs, _ = self.kmeans(x).values()
+        self.rgmm = RGMM(weights=weights, means=means, covs=covs, **self.gmm_kwargs).to(self.device)
         
-        if stage == "train":  
-            with torch.no_grad(): 
-                labels = self.kmeans(x_emb)
-            
-            labels = labels.detach().cpu().numpy()
-            features = x_emb.detach().cpu().numpy()
-            data = np.hstack((features, labels))
-            columns = [f"feature_{i}" for i in range(x_emb.shape[0])] + ["label"]        
-            
-            table = wandb.Table(columns=columns, data=data)
-            self.logger.experiment.log({"assignments": table})
-
-        return None 
+        loss = self.rgmm(x_emb, x_plus_emb)
+        return loss 
         
     def training_step(self, batch, batch_idx) -> TensorType["batch"]:  
         return self._shared_step(batch, "train")

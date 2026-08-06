@@ -92,11 +92,12 @@ class KMeans(nn.Module):
             "labels": labels # [n]
         } 
 
-class GMM(nn.Module): 
+class RGMM(nn.Module): 
     def __init__(
         self, 
         k: int, # number of Gaussian distributions  
         d: int, # dimension of data and parameters of Gaussian distributions 
+        max_iter: int,
         alpha: float, 
         beta: float, 
         sim: Dict, # parameters of cosine similarity
@@ -108,6 +109,7 @@ class GMM(nn.Module):
         
         self.k = k 
         self.d = d
+        self.max_iter = max_iter
         self.alpha = alpha 
         self.beta = beta 
         self.sim = sim
@@ -351,7 +353,7 @@ class GMM(nn.Module):
         idxs = torch.hstack((self.idxs_min, self.idxs_max)) # [count_G_min+count_G_max, d]: all data points belonging to the merged distribution 
         idxs = idxs.flatten()
         
-        swap_mask = x[idxs, dim_max_var] > mean_one[dim_max_var] 
+        swap_mask = x[idxs, dim_max_var] <= mean_one[dim_max_var] 
         stay_mask = ~swap_mask
         swap_idxs = torch.sort(idxs[swap_mask]).values # [count_G_min_two]: indices of all samples belonging to the new smallest distribution 
         stay_idxs = torch.sort(idxs[stay_mask]).values # [count_G_max_two]: indices of all samples belonging to the new biggest distribution 
@@ -416,24 +418,28 @@ class GMM(nn.Module):
         one_left = torch.sum(torch.exp(-self._mahalanobis_distance(x_min_two, self.means.data[self.G_min], self.covs.data[self.G_min])))
         one_right = torch.sum(torch.exp(-self._mahalanobis_distance(x_min_zero, means_zero[self.G_min], covs_zero[self.G_min])))
         one = one_left >= one_right # (Equation 21a)
-        print(f"one:{one}")
+        # print(f"one:{one}")
         
-        two_left = torch.sum(- torch.exp(-self._mahalanobis_distance(x_max_two, self.means.data[self.G_max], self.covs.data[self.G_max])))
+        two_left = torch.sum(-torch.exp(-self._mahalanobis_distance(x_max_two, self.means.data[self.G_max], self.covs.data[self.G_max])))
         two_right = torch.sum(-torch.exp(-self._mahalanobis_distance(x_max_zero, means_zero[self.G_max], covs_zero[self.G_max])))
         two = two_left >= two_right # (Equation 21b)
-        print(f"two:{two}")
+        # print(f"two:{two}")
 
         three = torch.det(covs_zero[self.G_min]) >= torch.det(self.covs.data[self.G_min]) # (Equation 21c)
-        
+        # print(f"three:{three}")
+
         four = torch.det(covs_zero[self.G_max]) >= torch.det(self.covs.data[self.G_max]) # (Equation 21cd)
-        
-        five_left = torch.sum(torch.exp(self._mahalanobis_distance(x_min_two, self.means.data[self.G_min], self.covs.data[self.G_min])))
-        five_left /= torch.det(self.covs.data[self.G_min]) ** 1/2
-        five_right = torch.sum(torch.exp(self._mahalanobis_distance(x_max_two, self.means.data[self.G_max], self.covs.data[self.G_max])))
-        five_right /= torch.det(self.covs.data[self.G_max]) ** 1/2
+        # print(f"four:{four}")
+
+        five_left = torch.sum(torch.exp(-self._mahalanobis_distance(x_min_two, self.means.data[self.G_min], self.covs.data[self.G_min])))
+        five_left /= torch.sqrt(torch.det(self.covs.data[self.G_min]))
+        five_right = torch.sum(torch.exp(-self._mahalanobis_distance(x_max_two, self.means.data[self.G_max], self.covs.data[self.G_max])))
+        five_right /= torch.sqrt(torch.det(self.covs.data[self.G_max]))
         five = five_left >= five_right # (Equation 23)
-        
-        return all([one, two, three, four, five])  
+        # print(f"five:{five}")
+
+        _is_convergence = torch.stack([one, two, three, four, five])
+        return torch.all(_is_convergence).item()
     
     def _log_likelihood(self, x, p, means, covs):
         labels = torch.argmax(p, dim=-1) # [n]
@@ -456,7 +462,7 @@ class GMM(nn.Module):
             cluster_ll = torch.sum(-0.5 * d_k - 0.5 * log_det_cov_k + constant_term)
             log_likelihood += cluster_ll
         
-        return log_likelihood
+        return log_likelihood / x.shape[0]
 
     def _update_gmm(self, x: TensorType["n", "d"])  -> None: 
         columns = [f"dim_{i}" for i in range(self.d)] + ["label"]
@@ -517,8 +523,10 @@ class GMM(nn.Module):
 
             wandb.log({"log_likelihood": log_likelihood})
 
-            if is_convergence or i >= 1000: 
-                break 
+            if is_convergence: 
+                return True 
+            elif i >= self.max_iter: 
+                return False
             else: 
                 p_zero = p_two 
                 i += 1
@@ -529,16 +537,17 @@ class GMM(nn.Module):
         return loss_cl + loss_bml
         
     def forward(self,  mode: str, x: TensorType["b", "n", "d"], x_plus: Optional[TensorType["b", "n", "d"]]=None) -> TensorType["*"]:
-        assert x.numel() != 0, "Input tensor cannot be empty!"
+        assert x.numel() != 0, "Inputs cannot be empty!"
+        assert x_plus.numel() != 0, "Positive pairs cannot be empty!"
 
         self.dtype = x.dtype
         self.device = x.device
         self.component_distribution = self._get_mixture_model(means=self.means, covs=self.covs)
         
-        if mode == "update_gmm": 
-            return self._update_gmm(x) 
-        elif mode == "update_encoder": 
-            assert x_plus.numel() != 0, "Positive input tensor cannot be empty!"
-            return self._update_encoder(x, x_plus) 
-        else: 
-            raise ValueError(mode)
+        _gmm_update = self.update_gmm(x)
+        
+        if not _gmm_update: 
+            raise ValueError 
+        
+        _update_encoder = self._update_encoder(x, x_plus) 
+        return _update_encoder

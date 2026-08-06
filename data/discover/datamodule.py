@@ -2,12 +2,13 @@ import os
 import h5py 
 import numpy as np 
 import pandas as pd 
-from typing import  List, Optional, Tuple
+from typing import  List, Optional, Tuple, Union
 
 import lightning as pl 
 from torch.utils.data import Dataset, DataLoader, random_split
 
-from .utils.collate import collate_fn
+from data.utils.load_files import get_files, get_depths, get_metadata, get_demomap
+from data.discover.utils.collate import collate_fn
 from data.discover.dataset import MimicGenRobotDataset
 
 class MimicGenRobotDataModule(pl.LightningDataModule): 
@@ -15,8 +16,10 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         data_dir: os.PathLike, # directory containing the hdf5 trajectory files 
         meta_dir: os.PathLike, # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
         window: int,
-        robots: Optional[List[str]], 
-        tasks: Optional[List[str]], 
+        chunks: int, 
+        depth: bool, 
+        robots: Optional[Union[str, List]], 
+        tasks: Optional[Union[str, List]], 
         expand_depth: Optional[str], # grayscale, colormap 
         n_samples: int, # number of 
         batch_size: int,
@@ -30,16 +33,18 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         *args, **kwargs) -> None:
         super().__init__()
         
-        # data kwargs
+        # Data kwargs
         self.data_dir = data_dir
         self.meta_dir = meta_dir
         self.window = window
-        self.robots = robots 
-        self.tasks = tasks 
+        self.chunks = chunks 
+        self.depth = depth 
+        self.robots = list(robots) if isinstance(robots, str) else robots
+        self.tasks = list(tasks)  if isinstance(robots, str) else tasks
         self.expand_depth = expand_depth 
         self.n_samples = n_samples # number of samples returned by __getitem__() 
         
-        # dataloading kwargs
+        # Dataloading kwargs
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.num_workers = num_workers
@@ -48,90 +53,26 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.persistent_workers = persistent_workers
         self.dataset_lengths = dataset_lengths
         
-        # image augmenations 
+        # Image augmenations 
         self.transforms = transforms
 
-        all_files = [file for file in os.listdir(self.data_dir) if "depth" in file]
-        all_robots = list(set(f.split(".")[-2].split("_")[-1] for f in all_files)) # no given robot -> all robots
-        all_tasks = list(set(f.split(".")[-2].split("_")[0] for f in all_files)) # no given task -> all tasks
+        # File handling 
+        self.files = get_files(self.data_dir, self.depth, self.robots, self.tasks)
+        self.depths = get_depths(self.meta_dir)
+        self.metadata = get_metadata(self.meta_dir, self.files)
+        self.demo_map = get_demomap(self.files, self.window)
         
-        self.robots = self._filtered_or_all(self.robots, all_robots)
-        self.tasks  = self._filtered_or_all(self.tasks, all_tasks)
-        self.files = [os.path.join(data_dir, file) for file in all_files
-            if any(robot in file for robot in self.robots)
-            and any(task in file for task in self.tasks)]
-        
-        self.depths = self._get_depths()
-        self.metadata = self._get_metadata()
-        self.demo_map = self._get_demomap()
         self.train_dataset, self.val_dataset, self.test_dataset = self.setup()
         
         self.n_samples_per_epoch = len(self.demo_map)
-    
-        
-    def _filtered_or_all(self, selected, available):
-        if selected is None:
-            return available
-        filtered = [x for x in selected if x in available]
-        return filtered if filtered else available
-    
-    def _get_depths(self) -> pd.DataFrame: 
-        depth_path = os.path.join(self.meta_dir, "depths.csv")
-        if os.path.isfile(depth_path):
-            df = pd.read_csv(depth_path)
-        else: 
-            df = pd.DataFrame()
-        return df
-
-    def _get_metadata(self) -> pd.DataFrame: 
-        meta_path = os.path.join(self.meta_dir, "meta.csv")
-        if os.path.isfile(meta_path):
-            df = pd.read_csv(meta_path)
-        else:
-            df = pd.DataFrame()
-
-        for file in self.files:
-            if file in df.columns:
-                continue
-
-            with h5py.File(file, "r") as hf:
-                data = hf["data"]
-                demos = [data[demo]["actions"][()].shape[0] for demo in data.keys()]
-            df[file] = demos
-        df.to_csv(meta_path, index=False)
-        return df 
-    
-    def _get_demomap(self): # -> List[List[os.PathLike, int, int, None]]: 
-        H = np.inf # H: min episode duration -> max possible window size
-        demo_tmp, demo_map = [], []
-
-        for file in self.files:
-            with h5py.File(file, "r") as hf:
-                for demo in hf["data"].keys():
-                    n_steps = hf["data"][demo]["actions"][()].shape[0]
-                    
-                    if n_steps < H: # number of steps in the demo is smaller than the horizon 
-                        H = n_steps # horizon is now equal to the number of steps 
-
-                    demo_tmp.append([file, demo, n_steps]) 
-                    if len(demo_tmp) == self.n_samples: 
-                        demo_map.append(demo_tmp)
-                        demo_tmp.clear()
-                        
-                demo_tmp = demo_tmp.copy()
-                                         
-        if H < self.window: 
-            print(f"The chosen size of the window is bigger than the smallest episode length! \n \
-                  Therefore, the size of the window gets changed from {self.window} to {H}.")
-            self.window = H
-        
-        return demo_map
         
     def setup(self, stage=None) -> Tuple[Dataset, Dataset, Dataset]:
         dataset = MimicGenRobotDataset(
             demo_map=self.demo_map,
             depths=self.depths,
             window=self.window,
+            chunks=self.chunks, 
+            depth=self.depth, 
             expand_depth=self.expand_depth,
             transforms= self.transforms
             )
