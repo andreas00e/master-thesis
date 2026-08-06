@@ -1,6 +1,7 @@
 .vscode/
 .VSCodeCounter/
 data/images/
+models/weights/*.pth
 logs/
 notebooks/
 outputs/

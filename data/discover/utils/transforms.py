@@ -1,33 +1,31 @@
-import random
-from typing import Callable, List, Sequence
-
-import torch 
-from torchvision.transforms import v2 
+import torch
+from typing import List
+from torchvision.transforms import v2
 
 
 TRANSFORMS = {  
     "grayscale": 
-        lambda: v2.RandomGrayscale(p = random.uniform(0, 0.5)), 
+        lambda: v2.RandomGrayscale(p=0.5), 
     
     "gaussian_blur": 
         lambda: v2.GaussianBlur(
-            kernel_size = random.choice([3, 5]),
-            sigma = random.uniform(0.1, 2.0)
-            ), 
+            kernel_size=5,
+            sigma=(0.1, 2.0)
+        ), 
         
     "color_jitter": 
         lambda: v2.ColorJitter(
-            brightness = random.uniform(0.2, 0.4), 
-            contrast = random.uniform(0.2, 0.4), 
-            saturation = random.uniform(0.2, 0.4), 
-            hue = random.uniform(0.1, 0.2)
-            ), 
+            brightness=(0.2, 0.4), 
+            contrast=(0.2, 0.4), 
+            saturation=(0.2, 0.4), 
+            hue=(0.1, 0.2)
+        ), 
     
     "solarize": 
         lambda: v2.RandomSolarize(
-            threshold = 0.5, 
-            p = random.choice([0.2, 0.5]), 
-            ),     
+            threshold=0.5,             
+            p=0.5 
+        ),     
         
     "rotate": 
         lambda: v2.RandomRotation((-45, 45)), 
@@ -36,10 +34,14 @@ TRANSFORMS = {
         lambda: v2.ToImage(),
     
     "to_dtype": 
-        lambda: v2.ToDtype(torch.float32, scale=True)
+        lambda: v2.ToDtype(torch.float32, scale=True),
+        
+    "normalize":
+        lambda: v2.Normalize(
+            mean=[0.485, 0.456, 0.406], #  ImageNet means
+            std=[0.229, 0.224, 0.225] # ImageNet standard deviations
+        )
 }
 
-def get_transforms(transforms: List[str]) -> Sequence[Callable]: 
-    transforms = v2.Compose([TRANSFORMS[k]() for k in transforms])
-    
-    return transforms
+def get_transforms(transforms: List[str]) -> v2.Compose: 
+    return v2.Compose([TRANSFORMS[k]() for k in transforms])

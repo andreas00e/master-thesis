@@ -16,15 +16,15 @@ datamodule:
 
   batch_size: 8
   shuffle: True
-  num_workers: 1 
+  num_workers: 31 
   pin_memory: True
   drop_last: True
   persistent_workers: True 
   # multiprocessing_context: "forkserver" # prevents fork deadlocks in CUDA DDP
   dataset_lengths: 
-  - 0.8
-  - 0.1  
-  - 0.1 
+  - 0.01
+  - 0.01  
+  - 0.98 
 
   transforms: 
     - grayscale
@@ -34,7 +34,7 @@ datamodule:
     - rotate 
 
 model: 
-  _target_: models.discover.discover.SkillDiscovery
+  _target_: models.discover.discover.TSE
 
   vision_backbone_kwargs: 
     weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/resNet18_Weights_DEFAULT.pth
