@@ -12,7 +12,7 @@ def main(cfg):
     
     pl.seed_everything(cfg.seed)
 
-    datamodule = instantiate(cfg.data.datamodule)
+    datamodule = instantiate(cfg.datamodule)
     model = instantiate(cfg.model)
     logger = instantiate(cfg.logger)
 

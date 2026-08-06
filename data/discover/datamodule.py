@@ -8,8 +8,10 @@ import lightning as pl
 from torch.utils.data import Dataset, DataLoader, random_split
 
 from data.utils.load_files import get_files, get_depths, get_metadata, get_demomap
-from data.discover.utils.collate import collate_fn
 from data.discover.dataset import MimicGenRobotDataset
+
+from data.discover.utils.collate import collate_fn
+
 
 class MimicGenRobotDataModule(pl.LightningDataModule): 
     def __init__(self, 

@@ -8,9 +8,10 @@ from typing import  List, Optional, Tuple, Union
   
 def get_files(
     data_dir: os.PathLike, 
-    depth: str, 
-    robots: Optional[Union[str, List]] , 
-    tasks: Optional[Union[str, List]]) -> List[os.PathLike]:
+    robots: Optional[Union[str, List]], 
+    tasks: Optional[Union[str, List]], 
+    depth: Optional[bool]=False, 
+    ) -> List[os.PathLike]:
     
     all_files = [file for file in os.listdir(data_dir) if ("depth" in file) == depth]
     all_robots = list(set(f.split(".")[-2].split("_")[-1] for f in all_files)) # no given robot -> all robots

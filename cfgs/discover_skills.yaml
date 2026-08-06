@@ -7,6 +7,8 @@ datamodule:
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
   window: 8 
+  chunks: 10 
+  depth: False
   robots: panda
   tasks: threading
   expand_depth: colormap 

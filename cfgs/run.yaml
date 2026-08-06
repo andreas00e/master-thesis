@@ -1,0 +1,21 @@
+data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
+robots: panda
+tasks: threading_d0
+camera: robot0_eye_in_hand
+
+env_kwargs: 
+  env_name: NutAssemblySquare
+  robots: ${robots}
+  has_offscreen_renderer: True
+  use_camera_obs: True 
+  camera_names: 
+    - agentview
+    - robot0_eye_in_hand
+    - robot0_robotview
+  camera_heights: 
+    - 1080 
+    - 64 
+  camera_widths: 
+    - 1000 
+    - 64 
+  camera_depths: False 
