@@ -1,9 +1,10 @@
 import os
 import h5py
+from tqdm import tqdm 
 import numpy as np 
 import pandas as pd
 
-from typing import  List, Optional, Tuple, Union
+from typing import  Iterable, List, Optional, Tuple, Union
 
   
 def get_files(
@@ -39,41 +40,53 @@ def get_depths(meta_dir: os.PathLike) -> pd.DataFrame:
         df = pd.DataFrame()
     return df
 
-def get_metadata(meta_dir: os.PathLike, files: List[os.PathLike]) -> pd.DataFrame: 
-    meta_path = os.path.join(meta_dir, "meta.csv")
-    if os.path.isfile(meta_path):
-        df = pd.read_csv(meta_path)
-    else:
-        df = pd.DataFrame()
+def get_metadata(meta_dir: os.PathLike, files: List[os.PathLike]) -> pd.DataFrame:
+    if not os.path.isdir(meta_dir):
+        os.mkdir(meta_dir)
+        
+    meta_file = os.path.join(meta_dir, "meta.csv")
+    df = pd.read_csv(meta_file) if os.path.isfile(meta_file) else pd.DataFrame()
 
-    for file in files:
-        if file in df.columns:
-            continue
+    new_cols = {}
+    for file in tqdm(files):
+        if file not in df.columns:
+            with h5py.File(file, "r") as hf:
+                data = hf["data"]
+                new_cols[file] = [demo_group["actions"].shape[0] for _, demo_group in data.items()]
 
-        with h5py.File(file, "r") as hf:
-            data = hf["data"]
-            demos = [data[demo]["actions"][()].shape[0] for demo in data.keys()]
-        df[file] = demos
-    df.to_csv(meta_path, index=False)
-    return df 
+    if new_cols:
+        df = pd.concat([df, pd.DataFrame(new_cols)], axis=1)
+        df.to_csv(meta_file, index=False)
 
-def get_demomap(files, window): # -> List[List[os.PathLike, int, int, None]]: 
-    H = np.inf # H: min episode duration -> max possible window size
-    demo_map = []
+    return df
 
-    for file in files:
-        with h5py.File(file, "r") as hf:
-            for demo in hf["data"].keys():
-                n_steps = hf["data"][demo]["actions"][()].shape[0]
-                
-                if n_steps < H: # number of steps in the demo is smaller than the horizon 
-                    H = n_steps # horizon is now equal to the number of steps 
-
-                demo_map.append([file, demo, n_steps]) 
-                         
-    if H < window: 
-        print(f"The chosen size of the window is bigger than the smallest episode length! \n \
-                Therefore, the size of the window gets changed from {window} to {H}.")
-        window = H
+def get_demomap(meta_data: pd.DataFrame, files: List[os.PathLike], window: int): 
+    df = meta_data
     
-    return demo_map
+    demo_map = []
+    min_horizon = np.inf
+    
+    for file in tqdm(files): 
+        if file in df.columns:  
+            f = [file] * len(df)
+            idx = [f"demo_{idx}" for idx in df.index]
+            n_steps = list(df[file].values)
+            
+            demos = list(zip(f, idx, n_steps))
+            demo_map.extend(demos)
+
+        else: 
+            with h5py.File(file, "r") as hf:
+                data = hf["data"]
+                
+            for demo, demo_group in data.items():
+                n_steps = demo_group["actions"].shape[0]
+                demo_map.append([file, demo, n_steps]) 
+                min_horizon = min(min_horizon, n_steps)
+                        
+    if min_horizon < window: 
+        print(f"The chosen size of the window is bigger than the smallest episode length! \n \
+                Therefore, the size of the window gets changed from {window} to {min_horizon}.")
+        window = int(min_horizon)
+    
+    return demo_map, window
