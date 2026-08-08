@@ -8,6 +8,7 @@ datamodule:
   meta_dir: ${meta_dir}
   window: 8 
   chunks: 10 
+  crop_factor: 0.75
   depth: False
   robots: panda
   tasks: threading
@@ -34,11 +35,11 @@ datamodule:
     - rotate 
 
 model: 
-  _target_: models.discover.discover.TSE
+  _target_: models.discover.tse.TSE
 
   vision_backbone_kwargs: 
-    weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/resNet18_Weights_DEFAULT.pth
-  
+    weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
+    
   vision_encoder_kwargs: 
     encoder_layer_kwargs: 
       d_model: 500 
@@ -47,13 +48,13 @@ model:
     transformer_encoder_kwargs:
       num_layers: 1
   
-  k_means: 
+  kmeans_kwargs: 
     k: 20 
     max_iter: 200 
     tol: 1e-4
 
   rgmm_kwargs: 
-    k: ${model.k_means.k}
+    k: ${model.kmeans_kwargs.k}
     d: ${model.vision_encoder_kwargs.encoder_layer_kwargs.d_model}
     max_iter: 200
     alpha: 0.1

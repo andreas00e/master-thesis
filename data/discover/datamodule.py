@@ -1,4 +1,5 @@
 import os 
+import pandas as pd
 from typing import  List, Optional, Tuple, Union
 
 import lightning as pl 
@@ -15,7 +16,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         data_dir: os.PathLike, # directory containing the hdf5 trajectory files 
         meta_dir: os.PathLike, # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
         window: int,
-        chunks: int, 
+        chunks: int,
+        crop_factor: float,  
         depth: bool, 
         robots: Optional[Union[str, List]], 
         tasks: Optional[Union[str, List]], 
@@ -36,7 +38,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.data_dir = data_dir
         self.meta_dir = meta_dir
         self.window = window
-        self.chunks = chunks 
+        self.chunks = chunks
+        self.crop_factor = crop_factor 
         self.depth = depth 
         self.robots = list(robots) if isinstance(robots, str) else robots
         self.tasks = list(tasks)  if isinstance(robots, str) else tasks
@@ -57,20 +60,23 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
 
         # File handling 
         self.files = get_files(self.data_dir, self.depth, self.robots, self.tasks)
-        self.depths = get_depths(self.meta_dir)
-        self.metadata = get_metadata(self.meta_dir, self.files)
-        self.demo_map = get_demomap(self.files, self.window)
-        
+        self.depths = None
+        # self.depths = get_depths(self.meta_dir)
+        self.meta_data = get_metadata(self.meta_dir, self.files)
+        self.df_gripper = pd.read_csv(os.path.join(self.meta_dir, "gripper_state.csv"))
+        self.demo_map, self.window = get_demomap(self.meta_data, self.files, self.window)
+    
         self.train_dataset, self.val_dataset, self.test_dataset = self.setup()
-        
-        self.n_samples_per_epoch = len(self.demo_map)
+        self.n_samples_per_epoch = len(self.demo_map) // self.chunks
         
     def setup(self, stage=None) -> Tuple[Dataset, Dataset, Dataset]:
         dataset = MimicGenRobotDataset(
             demo_map=self.demo_map,
+            df_gripper=self.df_gripper, 
             depths=self.depths,
             window=self.window,
             chunks=self.chunks, 
+            crop_factor=self.crop_factor,
             depth=self.depth, 
             expand_depth=self.expand_depth,
             transforms= self.transforms

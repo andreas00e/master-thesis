@@ -1,7 +1,5 @@
 # Temporal Skill Encoder (TSE)
 
-import wandb
-import numpy as np 
 from typing import Dict
 
 import torch
@@ -9,9 +7,8 @@ from torchtyping import TensorType
 import lightning.pytorch as pl 
 
 from models.discover.cluster import KMeans, RGMM
-
-from .visionBackbone import VisionBackbone
-from .visionEncoder import VisionEncoder
+from models.discover.visionBackbone import VisionBackbone
+from models.discover.visionEncoder import VisionEncoder
 
 
 class TSE(pl.LightningModule): 
@@ -23,7 +20,6 @@ class TSE(pl.LightningModule):
         rgmm_kwargs: Dict,
         optimizer_kwargs: Dict, 
         ) -> None:
-        
         super().__init__()
         self.save_hyperparameters() 
         
@@ -36,7 +32,7 @@ class TSE(pl.LightningModule):
         self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
         self.kmeans = KMeans(**self.kmeans_kwargs)
-        self.rgmm = None   
+        self.rgmm = RGMM(**self.rgmm_kwargs)   
         
         self.kmeans.eval()
 

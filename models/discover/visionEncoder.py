@@ -59,11 +59,7 @@ class TransformerEncoder(nn.TransformerEncoder):
         return super().forward(src, mask, src_key_padding_mask, is_causal)
 
 class VisionEncoder(nn.Module): 
-    def __init__(
-        self, 
-        encoder_layer_kwargs, 
-        transformer_encoder_kwargs
-        ) -> None:
+    def __init__(self, encoder_layer_kwargs, transformer_encoder_kwargs) -> None:
         super().__init__()
         
         self.encoder_layer_kwargs = encoder_layer_kwargs 

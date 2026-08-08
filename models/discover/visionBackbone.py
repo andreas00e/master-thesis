@@ -1,29 +1,28 @@
 import os 
-
 import torch 
 import torch.nn as nn 
 from torchvision.models import resnet18
 from torchtyping import TensorType
-
 import loralib as lora 
 
-from r3m import load_r3m
-
-
 class VisionBackbone(nn.Module): 
-    def __init__(
-        self,
-        weights_path: os.PathLike     
-        ) -> None:
+    def __init__(self, weights_path: os.PathLike) -> None:
         super().__init__()
-
         self.weights_path = weights_path
+        self.model = resnet18(pretrained=False)
+
+        ckpt = torch.load(self.weights_path, map_location="cpu")
+        r3m_state_dict = ckpt.get("state_dict", ckpt)
         
-        if "r3m" in self.weights_path: 
-            self.model = load_r3m
-        else: 
-            self.model = resnet18(weights=torch.load(f=self.weights_path, weights_only=True))
-        
+        clean_state_dict = {}
+        for key, value in r3m_state_dict.items():
+            new_key = key.replace("module.convnav.", "").replace("model.", "")
+            if new_key in self.model.state_dict():
+                clean_state_dict[new_key] = value
+
+        self.model.load_state_dict(clean_state_dict, strict=False)
+        self.model.fc = nn.Identity()
+            
         self._lora()
   
     def _lora(self) -> None: 
@@ -54,10 +53,11 @@ class VisionBackbone(nn.Module):
 
         lora.mark_only_lora_as_trainable(self.model) 
     
-    def forward(self, x) -> TensorType["*"]:
+    def forward(self, x: torch.Tensor) -> TensorType["*"]:
         batch, window = x.shape[:2] 
-        x = x.reshape(-1, *x.shape[2:]).permute(0, 3, 1, 2) # [batch*window, channels=3, height, width]
-        x = self.model(x) # [batch*window, hidden_dim]
-        x = x.reshape(batch, window, -1) # [batch, window, hidden_dim]
+        x = x.reshape(-1, *x.shape[2:]).permute(0, 3, 1, 2) 
+        
+        x = self.model(x)                  
+        x = x.reshape(batch, window, -1) 
         
         return x

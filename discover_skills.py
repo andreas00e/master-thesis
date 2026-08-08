@@ -1,6 +1,5 @@
 import hydra
 from hydra.utils import instantiate
-
 import multiprocessing
 
 import lightning.pytorch as pl
