@@ -63,7 +63,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.depths = None
         # self.depths = get_depths(self.meta_dir)
         self.meta_data = get_metadata(self.meta_dir, self.files)
-        self.df_gripper = pd.read_csv(os.path.join(self.meta_dir, "gripper_state.csv"))
+        self.df_gripper = pd.read_csv(os.path.join(self.meta_dir, "gripper_state_robot.csv"))
         self.demo_map, self.window = get_demomap(self.meta_data, self.files, self.window)
     
         self.train_dataset, self.val_dataset, self.test_dataset = self.setup()

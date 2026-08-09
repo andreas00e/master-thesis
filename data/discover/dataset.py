@@ -1,5 +1,6 @@
 import os 
 import h5py 
+import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
 
@@ -55,12 +56,12 @@ class MimicGenRobotDataset(Dataset):
         item = {}
         file, demo, n_steps =  self.demo_map[idx]
         
-        robot = file.split(".")[-1]
-        task = file.split(".")[-1]
+        robot = file.split(".")[0].split("_")[-1]
+        task = file.split(".")[0].split("/")[-1].split("_")[0]
         
-        offset = torch.randint(low=0, high=n_steps-self.window, shape=(self.chunks, ))
-        idxs = torch.arange(start=0, end=self.window) + offset
-
+        offsets = torch.randint(low=0, high=n_steps-self.window, size=(self.chunks, ))
+        idxs = offsets[:, None] + torch.arange(self.window) # [chunks, window]
+        
         hf = self._file_cache.get(file)
         if hf is None:
             hf = h5py.File(file, "r")
@@ -76,7 +77,6 @@ class MimicGenRobotDataset(Dataset):
         item["rgb"] = rgb[idxs]
         item["rgb_plus"] = rgb_plus[idxs] 
         
-        
         if self.depth: 
             depth_obs = hf["data"][demo]["obs"]["robot0_eye_in_hand_depth"]
             depth_obs = depth_obs[:, :int(depth_obs.shape[1]*self.crop_factor), ...]
@@ -87,12 +87,13 @@ class MimicGenRobotDataset(Dataset):
             item["depth"] = depth[idxs]
             item["depth_plus"] = depth_plus[idxs]
             
-        gripper_qpos = hf["data"][demo]["obs"]["robot0_gripper_qpos"] # [n, d]: d in {2, 6}
-        gripper_min = self.df_gripper[robot][task]["min"] # [d, ]
-        gripper_max = self.df_gripper[robot][task]["max"] # [d, ]
+        gripper_qpos = hf["data"][demo]["obs"]["robot0_gripper_qpos"][()] # [n, d]: d in {2, 6}
+        gripper_min = self.df_gripper[f"{robot}_min"].values[None, :] # [1, d]
+        gripper_max = self.df_gripper[f"{robot}_max"].values[None, :] # [1, d]
         
-        gripper_qpos[:, 0] = (gripper_qpos[:, 0] - gripper_min[0]) / (gripper_max[0] - gripper_min[0]) 
-        gripper_qpos[:, 1] = (gripper_qpos[:, 1] - gripper_min[1]) / (gripper_max[1] - gripper_min[1]) 
+        gripper_qpos = np.clip((gripper_qpos - gripper_min) / (gripper_max - gripper_min), 0, 1) # [n, d]
+        gripper_qpos = np.mean(gripper_qpos, axis=-1)
+        gripper_qpos = torch.from_numpy(gripper_qpos)
         
         item["gripper_qpos"] = gripper_qpos[idxs]
         

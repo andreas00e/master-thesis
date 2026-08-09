@@ -17,15 +17,15 @@ datamodule:
 
   batch_size: 8
   shuffle: True
-  num_workers: 31 
+  num_workers: 1
   pin_memory: True
   drop_last: True
   persistent_workers: True 
   # multiprocessing_context: "forkserver" # prevents fork deadlocks in CUDA DDP
   dataset_lengths: 
-  - 0.01
-  - 0.01  
-  - 0.98 
+  - 0.1
+  - 0.1 
+  - 0.8
 
   transforms: 
     - grayscale

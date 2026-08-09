@@ -17,7 +17,7 @@ def main(cfg):
 
     trainer = pl.Trainer(logger=logger, **cfg.trainer)
     _ = trainer.fit(model=model, datamodule=datamodule)
-
+    
 
 if __name__ == "__main__": 
     main()
