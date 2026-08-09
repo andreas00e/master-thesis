@@ -88,8 +88,8 @@ class MimicGenRobotDataset(Dataset):
             item["depth_plus"] = depth_plus[idxs]
             
         gripper_qpos = hf["data"][demo]["obs"]["robot0_gripper_qpos"][()] # [n, d]: d in {2, 6}
-        gripper_min = self.df_gripper[f"{robot}_min"].values[None, :] # [1, d]
-        gripper_max = self.df_gripper[f"{robot}_max"].values[None, :] # [1, d]
+        gripper_min = self.df_gripper[f"{robot}_min"].values[:gripper_qpos.shape[1]][None, :] # [1, d]
+        gripper_max = self.df_gripper[f"{robot}_max"].values[:gripper_qpos.shape[1]][None, :] # [1, d]
         
         gripper_qpos = np.clip((gripper_qpos - gripper_min) / (gripper_max - gripper_min), 0, 1) # [n, d]
         gripper_qpos = np.mean(gripper_qpos, axis=-1)
