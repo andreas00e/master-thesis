@@ -1,14 +1,14 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import torch
 from torchtyping import TensorType
   
-def collate_fn(batch: List[Tuple[TensorType["window", "..."], ...]]) -> Dict[str, TensorType["window", "batch", "..."]]:
+def collate_fn(batch: List[TensorType]) -> Dict[str, TensorType]:
+    assert len(batch) > 0, "Batch has to contain at least one element!"
+    keys = batch[0].keys()
     
-    rgb_obs = torch.stack([x[0] for x in batch], dim=1) 
-    rgb_obs_plus = torch.stack([x[1] for x in batch], dim=1) 
-    
-    return {
-        "rgb_obs": rgb_obs, 
-        "rgb_obs_plus": rgb_obs_plus
-    }
+    out = {}
+    for key in keys: 
+        out[key] = torch.stack([b[key] for b in batch], dim=0) # [batch, chunk, window, ...]
+     
+    return out

@@ -54,14 +54,11 @@ class MimicGenRobotDataset(Dataset):
     
     def __getitem__(self, idx):
         item = {}
-        file, demo, n_steps =  self.demo_map[idx]
+        file, demo, _ =  self.demo_map[idx]
         
         robot = file.split(".")[0].split("_")[-1]
-        task = file.split(".")[0].split("/")[-1].split("_")[0]
-        
-        offsets = torch.randint(low=0, high=n_steps-self.window, size=(self.chunks, ))
-        idxs = offsets[:, None] + torch.arange(self.window) # [chunks, window]
-        
+        # task = file.split(".")[0].split("/")[-1].split("_")[0]
+
         hf = self._file_cache.get(file)
         if hf is None:
             hf = h5py.File(file, "r")
@@ -74,18 +71,16 @@ class MimicGenRobotDataset(Dataset):
         rgb = self.transforms(rgb_obs) 
         rgb_plus = self.transforms(rgb_obs)
         
-        item["rgb"] = rgb[idxs]
-        item["rgb_plus"] = rgb_plus[idxs] 
         
-        if self.depth: 
-            depth_obs = hf["data"][demo]["obs"]["robot0_eye_in_hand_depth"]
-            depth_obs = depth_obs[:, :int(depth_obs.shape[1]*self.crop_factor), ...]
-            depth_obs = torch.from_numpy(depth_obs).permute(0, 3, 1, 2) # [n, 1, h, w]
+        # if self.depth: 
+        #     depth_obs = hf["data"][demo]["obs"]["robot0_eye_in_hand_depth"]
+        #     depth_obs = depth_obs[:, :int(depth_obs.shape[1]*self.crop_factor), ...]
+        #     depth_obs = torch.from_numpy(depth_obs).permute(0, 3, 1, 2) # [n, 1, h, w]
             
-            depth = self.transforms(depth_obs) 
-            depth_plus = self.transforms(depth_obs)
-            item["depth"] = depth[idxs]
-            item["depth_plus"] = depth_plus[idxs]
+        #     depth = self.transforms(depth_obs) 
+        #     depth_plus = self.transforms(depth_obs)
+        #     item["depth"] = depth[idxs]
+        #     item["depth_plus"] = depth_plus[idxs]
             
         gripper_qpos = hf["data"][demo]["obs"]["robot0_gripper_qpos"][()] # [n, d]: d in {2, 6}
         gripper_min = self.df_gripper[f"{robot}_min"].values[:gripper_qpos.shape[1]][None, :] # [1, d]
@@ -94,7 +89,12 @@ class MimicGenRobotDataset(Dataset):
         gripper_qpos = np.clip((gripper_qpos - gripper_min) / (gripper_max - gripper_min), 0, 1) # [n, d]
         gripper_qpos = np.mean(gripper_qpos, axis=-1)
         gripper_qpos = torch.from_numpy(gripper_qpos)
-        
+    
+        offsets = torch.randint(low=0, high=rgb_obs.shape[0]-self.window-1, size=(self.chunks, )) # indexing, not slicing
+        idxs = offsets[:, None] + torch.arange(self.window) # [chunks, window]
+
+        item["rgb"] = rgb[idxs, ...]
+        item["rgb_plus"] = rgb_plus[idxs, ...] 
         item["gripper_qpos"] = gripper_qpos[idxs]
         
         return item 

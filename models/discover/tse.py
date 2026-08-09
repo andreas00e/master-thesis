@@ -55,7 +55,7 @@ class TSE(pl.LightningModule):
         return x 
  
     def _shared_step(self, batch: TensorType["batch"], stage: str) -> None: 
-        x, x_plus = batch.values() 
+        x, x_plus, gripper_qpos = batch.values() 
         x_emb = self(x)  
         x_plus_emb = self(x_plus)
         

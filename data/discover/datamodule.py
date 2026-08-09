@@ -55,7 +55,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.persistent_workers = persistent_workers
         self.dataset_lengths = dataset_lengths
         
-        # Image augmenations 
+        # Image augmenation pipeline
         self.transforms = transforms
 
         # File handling 
@@ -67,7 +67,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.demo_map, self.window = get_demomap(self.meta_data, self.files, self.window)
     
         self.train_dataset, self.val_dataset, self.test_dataset = self.setup()
-        self.n_samples_per_epoch = len(self.demo_map) // self.chunks
         
     def setup(self, stage=None) -> Tuple[Dataset, Dataset, Dataset]:
         dataset = MimicGenRobotDataset(
