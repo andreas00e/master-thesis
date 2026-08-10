@@ -35,6 +35,7 @@ datamodule:
 
   transforms: 
     - to_image
+    - resize
     - gaussian_blur
     - color_jitter 
     - rotate 

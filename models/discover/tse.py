@@ -56,8 +56,13 @@ class TSE(pl.LightningModule):
  
     def _shared_step(self, batch: TensorType["batch"], stage: str) -> None: 
         x, x_plus, gripper_qpos = batch.values() 
-        x_emb = self(x)  
-        x_plus_emb = self(x_plus)
+        
+        x = x.view(-1, *x.shape[3:]) # [batch*chunk*window, channels, height, width]
+        x_plus = x_plus.view(-1, *x_plus.shape[3:]) # [batch*chunk*window, channels, height, width]
+        gripper_qpos = gripper_qpos.view(-1)[:, None] # [batch*chunk*window, 1]
+        
+        x_emb = self(x) # [batch*chunk*window, hidden_dim]
+        x_plus_emb = self(x_plus) # # [batch*chunk*window, hidden_dim]
         
         weights, means, covs, _ = self.kmeans(x).values()
         self.rgmm = RGMM(weights=weights, means=means, covs=covs, **self.gmm_kwargs).to(self.device)
