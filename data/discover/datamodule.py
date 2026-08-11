@@ -10,7 +10,6 @@ from data.utils.load_files import get_files, get_depths, get_metadata, get_demom
 from data.discover.dataset import MimicGenRobotDataset
 
 from data.discover.utils.collate import collate_fn
-from models.utils.utils import pe
 
 
 class MimicGenRobotDataModule(pl.LightningDataModule): 
@@ -24,7 +23,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         robots: Optional[Union[str, List]], 
         tasks: Optional[Union[str, List]], 
         expand_depth: Optional[str], # grayscale, colormap 
-        pe_kwargs: DictConfig, 
         batch_size: int,
         shuffle: bool,  
         num_workers: int, 
@@ -46,7 +44,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.robots = list(robots) if isinstance(robots, str) else robots
         self.tasks = list(tasks)  if isinstance(robots, str) else tasks
         self.expand_depth = expand_depth         
-        self.pe_kwargs = pe_kwargs
         
         # Dataloading kwargs
         self.batch_size = batch_size
@@ -68,7 +65,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.df_gripper = pd.read_csv(os.path.join(self.meta_dir, "gripper_state_robot.csv"))
         self.demo_map, self.window = get_demomap(self.meta_data, self.files, self.window)
     
-        self.pe = pe(**pe_kwargs)
         self.train_dataset, self.val_dataset, self.test_dataset = self.setup()
         
     def setup(self, stage=None) -> Tuple[Dataset, Dataset, Dataset]:
@@ -81,7 +77,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             crop_factor=self.crop_factor,
             depth=self.depth, 
             expand_depth=self.expand_depth,
-            pe=self.pe, 
             transforms= self.transforms
             )
         

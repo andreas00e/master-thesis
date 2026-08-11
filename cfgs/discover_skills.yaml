@@ -1,4 +1,5 @@
 seed: 42
+
 data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
 meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
 
@@ -7,8 +8,8 @@ datamodule:
 
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
-  window: 8 
-  chunks: 10 
+  window: 2 
+  chunks: 2 
   crop_factor: 0.75
   depth: False
   robots: # has to be a list or None!
@@ -20,14 +21,14 @@ datamodule:
     # - square
     - threading 
   expand_depth: colormap 
-
-  batch_size: 16
+  batch_size: 2 # 16
   shuffle: True
   num_workers: 1
   pin_memory: True
   drop_last: True
   persistent_workers: True 
   # multiprocessing_context: "forkserver" # prevents fork deadlocks in CUDA DDP
+  
   dataset_lengths: 
   - 0.1
   - 0.1 
@@ -51,20 +52,20 @@ model:
     
   vision_encoder_kwargs: 
     encoder_layer_kwargs: 
-      d_model: 512 
+      d_model: 256
       nhead: 1 
-      dim_feedforward: 1024
+      dim_feedforward: 256
 
     transformer_encoder_kwargs:
       num_layers: 2
-      norm: None
+      norm: null
       enable_nested_tensor: False 
       mask_check: False
 
     out_kwargs: 
-      hidden_features: 64
-      out_features: 8
-      
+      hidden_features: 32
+      out_features: 4
+
     pe_kwargs: 
       d_model: ${model.vision_encoder_kwargs.encoder_layer_kwargs.d_model}
       max_len: 300
@@ -97,7 +98,7 @@ model:
 
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: debugging
+  name: train
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
@@ -111,9 +112,3 @@ trainer:
   enable_progress_bar: True
   profiler: simple 
   default_root_dir: logs/skill_discovery/
-
-TSNE: 
-  n_components: 2 
-  perplexity: 25
-  learning_rate: auto
-  init: pca

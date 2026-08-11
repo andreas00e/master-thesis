@@ -1,6 +1,6 @@
 # Temporal Skill Encoder (TSE)
 
-from typing import Dict
+from omegaconf import DictConfig
 
 import torch
 import torch.nn as nn 
@@ -15,12 +15,13 @@ from models.discover.utils.visionEncoder import VisionEncoder
 class TSE(pl.LightningModule): 
     def __init__(
         self, 
-        vision_backbone_kwargs: Dict, 
-        vision_encoder_kwargs: Dict, 
-        kmeans_kwargs: Dict, 
-        rgmm_kwargs: Dict,
-        optimizer_kwargs: Dict, 
+        vision_backbone_kwargs: DictConfig, 
+        vision_encoder_kwargs: DictConfig, 
+        kmeans_kwargs: DictConfig, 
+        rgmm_kwargs: DictConfig,
+        optimizer_kwargs: DictConfig, 
         ) -> None:
+        
         super().__init__()
         self.save_hyperparameters() 
         
@@ -30,11 +31,11 @@ class TSE(pl.LightningModule):
         self.rgmm_kwargs = rgmm_kwargs 
         self.optimizer_kwargs = optimizer_kwargs
         
-        self.gripper = nn.Linear(1, 128)
+        self.gripper = nn.Linear(1, 128) # TODO: Move to cfgs
         self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
         self.kmeans = KMeans(**self.kmeans_kwargs)
-        self.rgmm = RGMM(**self.rgmm_kwargs)   
+        self.rgmm = RGMM(**self.rgmm_kwargs)
         
         self.kmeans.eval()
 
@@ -50,24 +51,30 @@ class TSE(pl.LightningModule):
             }
         }
     
-    def forward(self, x: TensorType["batch"], x_shape: TensorType["*"], idxs: TensorType["*"]) -> TensorType["batch"]:
-        x = self.visionBackbone(x) # [batch*chunk*window, hidden_dim]
-        x = x.view(-1, x_shape[2:]) # [batch*chunk, window, hidden_dim]
-        x = self.visionEncoder(x, idxs)
+    def forward(
+        self, 
+        x: TensorType["batch*chunks*window", "channels", "height", "width"],
+        x_shape: TensorType["batch*chunks*window", "channels", "height", "width"], 
+        idxs: TensorType["batch", "chunks", "window"]
+        ) -> TensorType["batch*chunks", "hidden_dim"]:
+        
+        x = self.visionBackbone(x) # [batch*chunks*window, hidden_dim]
+        x = x.view(-1, x_shape[2], x.shape[-1]) # [batch*chunk, window, hidden_dim]
+        x = self.visionEncoder(x, idxs).squeeze() # [batch*chunk, hidden_dim]
 
         return x 
  
     def _shared_step(self, batch: TensorType["batch"], stage: str) -> None: 
         x, x_plus, gripper_qpos, idxs = batch.values() 
-        x_shape = x.shape # [batch, chunk, window, channels, height, width]
+        x_shape = x.shape # [batch, chunks, window, channels, height, width]
         
-        x = x.view(-1, *x.shape[3:]) # [batch*chunk*window, channels, height, width]
-        x_plus = x_plus.view(-1, *x_plus.shape[3:]) # [batch*chunk*window, channels, height, width]
-        gripper_qpos = gripper_qpos.view(-1)[:, None] # [batch*chunk*window, 1]
+        x = x.view(-1, *x.shape[3:]) # [batch*chunks*window, channels, height, width]
+        x_plus = x_plus.view(-1, *x_plus.shape[3:]) # [batch*chunks*window, channels, height, width]
+        gripper_qpos = gripper_qpos.view(-1)[:, None] # [batch*chunks*window, 1]
         
-        x_emb = self(x, x_shape, idxs) # [batch*chunk*window, hidden_dim]
-        x_plus_emb = self(x_plus, x_shape, idxs) # # [batch*chunk*window, hidden_dim]
-        gripper_emb = self.gripper(gripper_qpos) # [batch*chunk, window, 256]
+        x_emb = self(x, x_shape, idxs) # [batch*chunks*window, hidden_dim]
+        x_plus_emb = self(x_plus, x_shape, idxs) # # [batch*chunks*window, hidden_dim]
+        # gripper_emb = self.gripper(gripper_qpos) # [batch*chunks, window, 256]
         
         weights, means, covs, _ = self.kmeans(x_emb).values()
         self.rgmm = RGMM(weights=weights, means=means, covs=covs, **self.gmm_kwargs).to(self.device)
@@ -84,10 +91,10 @@ class TSE(pl.LightningModule):
         return loss_cl + self.gmm_kwargs.bml_weight * loss_bml
         
     def training_step(self, batch, batch_idx) -> TensorType["batch"]:  
-        return self._shared_step(batch, "train")
+        return self._shared_step(batch=batch, stage="train")
         
     def validation_step(self, batch, batch_idx) -> TensorType["batch"]:  
-        return self._shared_step(batch, "val")
+        return self._shared_step(batch=batch, stage="val")
 
     def test_step(self, batch, batch_idx) -> TensorType["batch"]:        
-        return self._shared_step(batch, "test")
+        return self._shared_step(batch=batch, stage="test")

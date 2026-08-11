@@ -87,7 +87,7 @@ class MimicGenRobotDataset(Dataset):
         
         gripper_qpos = np.clip((gripper_qpos - gripper_min) / (gripper_max - gripper_min), 0, 1) # [n, d]
         gripper_qpos = np.mean(gripper_qpos, axis=-1)
-        gripper_qpos = torch.from_numpy(gripper_qpos)
+        gripper_qpos = torch.from_numpy(gripper_qpos, dtype=torch.float32)
     
         offsets = torch.randint(low=0, high=rgb_obs.shape[0]-self.window-1, size=(self.chunks, )) # indexing, not slicing
         idxs = offsets[:, None] + torch.arange(self.window) # [chunks, window]

@@ -23,20 +23,21 @@ class PE(nn.Module):
         div_term = torch.exp(torch.arange(0, self.d_model, 2).float() * (-math.log(10000.0) / self.d_model)) # [d_model / 2]
         pe[:, 0::2] = torch.sin(position * div_term)  
         pe[:, 1::2] = torch.cos(position * div_term) 
-         
+        
         return pe # [max_len, d_model]
     
     def forward(
         self, 
-        x: TensorType["batch, chunks, window, d_model"], 
+        x: TensorType["batch*chunks", "window+1", "d_model"], 
         seq_idxs: TensorType["batch", "chunks", "window"]
-        ) -> TensorType["*"]:
+        ) -> TensorType["batch*chunk", "1+window", "d_model"]:
         
-        idxs_pe = seq_idxs[:, :, :0] # [batch, chunks, 1] 
+        idxs_pe = seq_idxs[..., :1] # [batch, chunks, 1] 
         idxs_pe = torch.concat(tensors=(idxs_pe, seq_idxs+1), dim=-1) # [batch, chunks, 1+window]
         
-        pe = self.pe[idxs_pe.flatten()] # [batch*chunk*(1+window), d_model]
-        pe = pe.view(*idxs_pe.shape, -1) # [batch, chunk, 1+window, d_model]
+        pe = self.pe.to(x.device)
+        pe = pe[idxs_pe] # [batch, chunk, 1+window, d_model]
+        pe = pe.view(*x.shape) # [batch*chunk, 1+window, d_model]
         
         return x + pe
 
