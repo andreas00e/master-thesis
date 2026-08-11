@@ -3,12 +3,13 @@
 from typing import Dict
 
 import torch
+import torch.nn as nn 
 from torchtyping import TensorType
 import lightning.pytorch as pl 
 
-from models.discover.cluster import KMeans, RGMM
-from models.discover.visionBackbone import VisionBackbone
-from models.discover.visionEncoder import VisionEncoder
+from models.discover.utils.cluster import KMeans, RGMM
+from models.discover.utils.visionBackbone import VisionBackbone
+from models.discover.utils.visionEncoder import VisionEncoder
 
 
 class TSE(pl.LightningModule): 
@@ -28,7 +29,8 @@ class TSE(pl.LightningModule):
         self.kmeans_kwargs = kmeans_kwargs
         self.rgmm_kwargs = rgmm_kwargs 
         self.optimizer_kwargs = optimizer_kwargs
-                
+        
+        self.gripper = nn.Linear(1, 128)
         self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
         self.kmeans = KMeans(**self.kmeans_kwargs)
@@ -48,27 +50,38 @@ class TSE(pl.LightningModule):
             }
         }
     
-    def forward(self, x: TensorType["batch"]) -> TensorType["batch"]:
-        x = self.visionBackbone(x)
-        x = self.visionEncoder(x)
+    def forward(self, x: TensorType["batch"], x_shape: TensorType["*"], idxs: TensorType["*"]) -> TensorType["batch"]:
+        x = self.visionBackbone(x) # [batch*chunk*window, hidden_dim]
+        x = x.view(-1, x_shape[2:]) # [batch*chunk, window, hidden_dim]
+        x = self.visionEncoder(x, idxs)
 
         return x 
  
     def _shared_step(self, batch: TensorType["batch"], stage: str) -> None: 
-        x, x_plus, gripper_qpos = batch.values() 
+        x, x_plus, gripper_qpos, idxs = batch.values() 
+        x_shape = x.shape # [batch, chunk, window, channels, height, width]
         
         x = x.view(-1, *x.shape[3:]) # [batch*chunk*window, channels, height, width]
         x_plus = x_plus.view(-1, *x_plus.shape[3:]) # [batch*chunk*window, channels, height, width]
         gripper_qpos = gripper_qpos.view(-1)[:, None] # [batch*chunk*window, 1]
         
-        x_emb = self(x) # [batch*chunk*window, hidden_dim]
-        x_plus_emb = self(x_plus) # # [batch*chunk*window, hidden_dim]
+        x_emb = self(x, x_shape, idxs) # [batch*chunk*window, hidden_dim]
+        x_plus_emb = self(x_plus, x_shape, idxs) # # [batch*chunk*window, hidden_dim]
+        gripper_emb = self.gripper(gripper_qpos) # [batch*chunk, window, 256]
         
-        weights, means, covs, _ = self.kmeans(x).values()
+        weights, means, covs, _ = self.kmeans(x_emb).values()
         self.rgmm = RGMM(weights=weights, means=means, covs=covs, **self.gmm_kwargs).to(self.device)
         
-        loss = self.rgmm(x_emb, x_plus_emb)
-        return loss 
+        loss_cl, loss_bml = self.rgmm(x_emb, x_plus_emb)
+        
+        self.log_dict({
+            f"{stage}_loss_cl": 
+                loss_cl, 
+            f"{stage}_loss_bml": 
+                loss_bml
+        })
+        
+        return loss_cl + self.gmm_kwargs.bml_weight * loss_bml
         
     def training_step(self, batch, batch_idx) -> TensorType["batch"]:  
         return self._shared_step(batch, "train")
@@ -77,4 +90,4 @@ class TSE(pl.LightningModule):
         return self._shared_step(batch, "val")
 
     def test_step(self, batch, batch_idx) -> TensorType["batch"]:        
-        return self._shared_step(batch, "train")
+        return self._shared_step(batch, "test")

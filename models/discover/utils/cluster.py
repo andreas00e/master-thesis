@@ -98,8 +98,9 @@ class RGMM(nn.Module):
         k: int, # number of Gaussian distributions  
         d: int, # dimension of data and parameters of Gaussian distributions 
         max_iter: int,
-        alpha: float, 
-        beta: float, 
+        bml_weight: float, 
+        bml_alpha: float, 
+        bml_beta: float, 
         sim: Dict, # parameters of cosine similarity
         weights: Optional[TensorType["k", "d"]] = None, # mixture weights of GMM's individual distributions 
         means: Optional[TensorType["k", "d"]] = None, # mean vectors of Gaussian distributions 
@@ -110,8 +111,9 @@ class RGMM(nn.Module):
         self.k = k 
         self.d = d
         self.max_iter = max_iter
-        self.alpha = alpha 
-        self.beta = beta 
+        self.bml_weight = bml_weight
+        self.bml_alpha = bml_alpha 
+        self.bml_beta = bml_beta 
         self.sim = sim
         
         self.weights = weights if isinstance(weights, nn.Parameter) else nn.Parameter(weights) if weights is not None else nn.Parameter(data=torch.ones(size=(self.k, )) / self.k) # [k]
@@ -251,7 +253,7 @@ class RGMM(nn.Module):
         x_positive = x_positive[rows_idxs, ...]
         delta = self.sim(x, x_j) - self.sim(x, x_positive) 
         
-        loss_bml = weight / weight_avg * (self.relu(delta + self.alpha) + (self.relu(-delta - self.beta)))
+        loss_bml = weight / weight_avg * (self.relu(delta + self.bml_alpha) + (self.relu(-delta - self.bml_beta)))
         loss_bml = torch.scatter_add(output_tensor, 0, inverse_indices, loss_bml)
         
         if unique_elements.shape != n: 
@@ -534,9 +536,9 @@ class RGMM(nn.Module):
     def _update_encoder(self, x, x_plus):
         loss_cl = self._hard_negatives(x, x_plus)
         loss_bml = self._false_negatives(x, x_plus)
-        return loss_cl + loss_bml
+        return loss_cl, loss_bml
         
-    def forward(self,  mode: str, x: TensorType["b", "n", "d"], x_plus: Optional[TensorType["b", "n", "d"]]=None) -> TensorType["*"]:
+    def forward(self, x: TensorType["b", "n", "d"], x_plus: Optional[TensorType["b", "n", "d"]]=None) -> TensorType["*"]:
         assert x.numel() != 0, "Inputs cannot be empty!"
         assert x_plus.numel() != 0, "Positive pairs cannot be empty!"
 
@@ -549,5 +551,5 @@ class RGMM(nn.Module):
         if not _gmm_update: 
             raise ValueError 
         
-        _update_encoder = self._update_encoder(x, x_plus) 
-        return _update_encoder
+        loss_cl, loss_bml = self._update_encoder(x, x_plus) 
+        return loss_cl, loss_bml

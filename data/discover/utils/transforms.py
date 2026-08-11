@@ -9,8 +9,7 @@ TRANSFORMS = {
 
     "resize": 
         lambda: v2.Resize(
-            size=(224, 224), 
-            antialisas=True
+            size=(224, 224)
         ),
     
     "gaussian_blur": 
@@ -28,10 +27,15 @@ TRANSFORMS = {
         ), 
 
     "rotate": 
-        lambda: v2.RandomRotation((-45, 45)), 
+        lambda: v2.RandomRotation(
+            degrees=(-45, 45)
+        ), 
 
     "to_dtype": 
-        lambda: v2.ToDtype(torch.float32, scale=True),
+        lambda: v2.ToDtype(
+            dtype=torch.float32, 
+            scale=True
+        ),
     
     "solarize": 
         lambda: v2.RandomSolarize(

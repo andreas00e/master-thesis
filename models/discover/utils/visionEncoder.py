@@ -1,8 +1,12 @@
+from omegaconf import DictConfig 
+
 import torch 
 import torch.nn as nn 
 import torch.nn.functional as F
 
 from torchtyping import TensorType
+
+from models.utils.utils import PE
 
 class EncoderLayer(nn.TransformerEncoderLayer):
     def __init__(
@@ -41,10 +45,10 @@ class TransformerEncoder(nn.TransformerEncoder):
     def __init__(
         self, 
         encoder_layer, 
-        num_layers, 
-        norm = None, 
-        enable_nested_tensor = True,
-        mask_check = True
+        num_layers,
+        norm, 
+        enable_nested_tensor,
+        mask_check,
         ) -> None:
         
         super().__init__(
@@ -59,11 +63,20 @@ class TransformerEncoder(nn.TransformerEncoder):
         return super().forward(src, mask, src_key_padding_mask, is_causal)
 
 class VisionEncoder(nn.Module): 
-    def __init__(self, encoder_layer_kwargs, transformer_encoder_kwargs) -> None:
+    def __init__(
+        self, 
+        encoder_layer_kwargs: DictConfig, 
+        transformer_encoder_kwargs: DictConfig, 
+        out_kwargs: DictConfig, 
+        pe_kwargs: DictConfig
+        ) -> None:
+        
         super().__init__()
         
         self.encoder_layer_kwargs = encoder_layer_kwargs 
         self.transformer_encoder_kwargs = transformer_encoder_kwargs 
+        self.out_kwargs = out_kwargs
+        self.pe_kwargs = pe_kwargs
         
         self.encoder_layer = EncoderLayer(**self.encoder_layer_kwargs)
         self.encoder_transformer = TransformerEncoder(
@@ -72,24 +85,28 @@ class VisionEncoder(nn.Module):
             )
         
         self.linear_in = nn.Linear(
-            in_features = self.encoder_layer_kwargs.d_model * 2, 
+            in_features = self.encoder_layer_kwargs.d_model, 
             out_features = self.encoder_layer_kwargs.d_model 
             )
         
         self.linear_out = nn.Sequential(
-            nn.Linear(in_features=self.encoder_layer_kwargs.d_model, out_features=64), 
+            nn.Linear(in_features=self.encoder_layer_kwargs.d_model, out_features=self.out_kwargs.hidden_features), 
             nn.ReLU(), 
-            nn.Linear(in_features=64, out_features=16) # TODO: Move the size of the layers to the config file
+            nn.Linear(in_features=self.out_kwargs.hidden_features, out_features=self.out_kwargs.out_features)
         )
+        
+        self.pe = PE(**self.pe_kwargs)
 
         self.cls = nn.Parameter(data=torch.ones(size=(1, 1, self.encoder_layer_kwargs.d_model)))
     
-    def forward(self, x: TensorType["*"]) -> TensorType["*"]: 
-        x = self.linear_in(x) # [batch, window, d_model]
-        cls = self.cls.repeat(x.shape[0], 1, 1) # [batch, 1, d_model]
-        x = torch.concat(tensors=(cls, x), dim=1) # [batch, 1 + window, d_model]
-        x = self.encoder_transformer(x) # [batch, 1 + window, d_model]
-        x = x[:, 0, :] # [batch, d_model]
-        x = self.linear_out(x)
+    def forward(self, x: TensorType["*"], idxs: TensorType["*"]) -> TensorType["*"]: 
+        x = self.linear_in(x) # [batch*chunk, window, d_model] 
+        x = torch.zeros_like(x) # [batch, chunk, window, d_model]
+        
+        cls = self.cls.repeat(x.shape[0], 1, 1) # [batch*chunk, 1, d_model]
+        x = torch.concat(tensors=(cls, x), dim=1) # [batch*chunk, 1+window, d_model]
+        x = self.PE(x, idxs)
+        x = self.encoder_transformer(x) # [batch*chunk, 1+window, d_model]
+        x = self.linear_out(x[:, 0, :]) # [batch*chunk, 8]
         
         return x 

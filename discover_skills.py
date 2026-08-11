@@ -1,8 +1,12 @@
-import hydra
-from hydra.utils import instantiate
+import os 
 import multiprocessing
 
+import hydra
+from hydra.utils import instantiate
+
 import lightning.pytorch as pl
+
+os.environ["OMPI_MCA_btl"] = "^openib" # suppress Open MPI warnings
 
 
 @hydra.main(config_path="cfgs/", config_name="discover_skills", version_base=None)

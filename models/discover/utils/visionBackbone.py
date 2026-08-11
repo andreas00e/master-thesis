@@ -54,10 +54,5 @@ class VisionBackbone(nn.Module):
         lora.mark_only_lora_as_trainable(self.model) 
     
     def forward(self, x: torch.Tensor) -> TensorType["*"]:
-        batch, window = x.shape[:2] 
-        x = x.reshape(-1, *x.shape[2:]).permute(0, 3, 1, 2) 
-        
         x = self.model(x)                  
-        x = x.reshape(batch, window, -1) 
-        
         return x

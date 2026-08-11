@@ -1,7 +1,7 @@
 import torch
 
 
-from models.discover.cluster import KMeans, RGMM
+from models.discover.utils.cluster import KMeans, RGMM
 
 import wandb
         

@@ -4,6 +4,7 @@ meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
 
 datamodule: 
   _target_: data.discover.datamodule.MimicGenRobotDataModule
+
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
   window: 8 
@@ -19,7 +20,6 @@ datamodule:
     # - square
     - threading 
   expand_depth: colormap 
-  n_samples: 15 
 
   batch_size: 16
   shuffle: True
@@ -51,11 +51,23 @@ model:
     
   vision_encoder_kwargs: 
     encoder_layer_kwargs: 
-      d_model: 500 
+      d_model: 512 
       nhead: 1 
       dim_feedforward: 1024
+
     transformer_encoder_kwargs:
-      num_layers: 1
+      num_layers: 2
+      norm: None
+      enable_nested_tensor: False 
+      mask_check: False
+
+    out_kwargs: 
+      hidden_features: 64
+      out_features: 8
+      
+    pe_kwargs: 
+      d_model: ${model.vision_encoder_kwargs.encoder_layer_kwargs.d_model}
+      max_len: 300
   
   kmeans_kwargs: 
     k: 20 
@@ -64,10 +76,11 @@ model:
 
   rgmm_kwargs: 
     k: ${model.kmeans_kwargs.k}
-    d: ${model.vision_encoder_kwargs.encoder_layer_kwargs.d_model}
+    d: ${model.vision_encoder_kwargs.out_kwargs.out_features}
     max_iter: 200
-    alpha: 0.1
-    beta: 0.2
+    bml_weight: 1e-4
+    bml_alpha: 0.2
+    bml_beta: 0.5
     sim: 
       dim: 1.0
       eps: 1.0e-6
