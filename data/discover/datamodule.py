@@ -6,7 +6,7 @@ from typing import  List, Optional, Tuple, Union
 import lightning as pl 
 from torch.utils.data import Dataset, DataLoader, random_split
 
-from data.utils.load_files import get_files, get_depths, get_metadata, get_demomap
+from data.utils.load_files import get_files, get_metadata, get_demomap
 from data.discover.dataset import MimicGenRobotDataset
 
 from data.discover.utils.collate import collate_fn

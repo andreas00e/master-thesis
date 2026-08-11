@@ -1,4 +1,3 @@
-from typing import List 
 from omegaconf import DictConfig
 
 import torch
@@ -8,7 +7,8 @@ from torchtyping import TensorType
 
 from diffusers import DDPMScheduler
 
-from models.utils import PE 
+from models.utils.utils import PE
+
 
 class Transformer(nn.Module): 
     def __init__(

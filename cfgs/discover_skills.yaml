@@ -8,22 +8,22 @@ datamodule:
 
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
-  window: 2 
-  chunks: 2 
+  window: 8 
+  chunks: 2
   crop_factor: 0.75
   depth: False
-  robots: # has to be a list or None!
+  robots: # has to be a list or null!
     - iiwa
     # - panda 
     # - sawyer 
     # - ur5e
-  tasks: # has to be a list or None!
+  tasks: # has to be a list or null!
     # - square
     - threading 
   expand_depth: colormap 
-  batch_size: 2 # 16
+  batch_size: 2
   shuffle: True
-  num_workers: 1
+  num_workers: 31
   pin_memory: True
   drop_last: True
   persistent_workers: True 

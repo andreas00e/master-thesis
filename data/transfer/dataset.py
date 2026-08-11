@@ -1,16 +1,17 @@
 import os 
 import h5py 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch 
 from torchtyping import TensorType 
 from torch.utils.data import Dataset 
 
+
 class TransferDataset(Dataset): 
     def __init__(self, 
-        demo_map: List[Tuple[os.PathLike, int, int]],
+        demo_map: List[Tuple[os.PathLike, int, int]], 
         horizon: int,
-        depth: bool, 
+        depth: Optional[bool], 
         joint_dsc: Dict[str, TensorType["*"]] 
         ) -> None:
         super().__init__()
@@ -37,9 +38,9 @@ class TransferDataset(Dataset):
           except Exception:
               pass
     
-    def __getitem__(self, idx) -> Dict[str, TensorType["*"]]: 
+    def __getitem__(self, idx: int) -> Dict[str, TensorType["*"]]: 
         item = {}
-        file, demo, n_steps = self.demo_map[idx] 
+        file, demo, _ = self.demo_map[idx] 
         
         robot = file.split(".")[0].split("_")[-2] if self.depth else file.split(".")[0].split("_")[-1]
         joint_dsc = self.joint_dsc[robot] # [features, joints]
@@ -50,15 +51,17 @@ class TransferDataset(Dataset):
         hf = self._file_cache[file]
     
         actions = hf["data"][demo]["actions"][()]
-        actions = torch.tensor(actions)
+        actions = torch.from_numpy(actions)
         
         obs = hf["data"][demo]["obs"] 
+        
         rgb_obs = obs["robot0_eye_in_hand_image"][()]
-        rgb_obs = torch.tensor(rgb_obs)
+        rgb_obs = torch.from_numpy(rgb_obs)
+        
         joint_pos = obs["robot0_joint_pos"][()]
-        joint_pos = torch.tensor(joint_pos)
+        joint_pos = torch.from_numpy(joint_pos)
         joint_vel = obs["robot0_joint_qpos"][()]
-        joint_vel = torch.tensor(joint_vel)
+        joint_vel = torch.from_numpy(joint_vel)
         joint_obs = torch.vstack((joint_pos, joint_vel))
        
         item["actions"] = actions

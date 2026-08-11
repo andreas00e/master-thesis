@@ -5,9 +5,11 @@ import pandas as pd
 from typing import Dict, List, Optional, Tuple
 
 import torch
+from torchtyping import TensorType 
 from torch.utils.data import Dataset 
 
 from data.discover.utils.transforms import get_transforms
+
 
 class MimicGenRobotDataset(Dataset): 
     def __init__(self, 
@@ -52,7 +54,7 @@ class MimicGenRobotDataset(Dataset):
     #       except Exception:
     #           pass
     
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict[str, TensorType["*"]]: 
         item = {}
         file, demo, _ =  self.demo_map[idx]
         
@@ -87,7 +89,7 @@ class MimicGenRobotDataset(Dataset):
         
         gripper_qpos = np.clip((gripper_qpos - gripper_min) / (gripper_max - gripper_min), 0, 1) # [n, d]
         gripper_qpos = np.mean(gripper_qpos, axis=-1)
-        gripper_qpos = torch.from_numpy(gripper_qpos, dtype=torch.float32)
+        gripper_qpos = torch.from_numpy(gripper_qpos).to(torch.float32)
     
         offsets = torch.randint(low=0, high=rgb_obs.shape[0]-self.window-1, size=(self.chunks, )) # indexing, not slicing
         idxs = offsets[:, None] + torch.arange(self.window) # [chunks, window]

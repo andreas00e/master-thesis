@@ -77,18 +77,21 @@ class TSE(pl.LightningModule):
         # gripper_emb = self.gripper(gripper_qpos) # [batch*chunks, window, 256]
         
         weights, means, covs, _ = self.kmeans(x_emb).values()
-        self.rgmm = RGMM(weights=weights, means=means, covs=covs, **self.gmm_kwargs).to(self.device)
+        self.rgmm = RGMM(weights=weights, means=means, covs=covs, **self.rgmm_kwargs).to(self.device) # TODO: FIX THIS, wtf...
         
         loss_cl, loss_bml = self.rgmm(x_emb, x_plus_emb)
+        loss = loss_cl + self.gmm_kwargs.bml_weight * loss_bml
         
         self.log_dict({
             f"{stage}_loss_cl": 
                 loss_cl, 
             f"{stage}_loss_bml": 
-                loss_bml
+                loss_bml, 
+            f"{stage}_loss": 
+                loss
         })
         
-        return loss_cl + self.gmm_kwargs.bml_weight * loss_bml
+        return loss
         
     def training_step(self, batch, batch_idx) -> TensorType["batch"]:  
         return self._shared_step(batch=batch, stage="train")

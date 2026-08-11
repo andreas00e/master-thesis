@@ -4,7 +4,7 @@ from tqdm import tqdm
 import numpy as np 
 import pandas as pd
 
-from typing import  Iterable, List, Optional, Tuple, Union
+from typing import List, Optional, Union
 
   
 def get_files(
