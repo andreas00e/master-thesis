@@ -7,6 +7,7 @@ import lightning as pl
 from torch.utils.data import Dataset, DataLoader, random_split
 
 from data.utils.load_files import get_files, get_metadata, get_demomap
+from data.utils.collate import collate_transfer
 from data.transfer.dataset import TransferDataset
 
 
@@ -93,6 +94,7 @@ class TransferDataModule(pl.LightningDataModule):
             batch_size=self.batch_size, 
             shuffle=self.shuffle,    
             num_workers=self.num_workers,  
+            collate_fn=collate_transfer, 
             pin_memory=self.pin_memory, 
             persistent_workers=self.persistent_workers, 
             )
@@ -103,6 +105,7 @@ class TransferDataModule(pl.LightningDataModule):
             dataset=self.val_dataset, 
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
+            collate_fn=collate_transfer, 
             pin_memory=self.pin_memory, 
             persistent_workers=self.persistent_workers, 
             )
@@ -113,6 +116,7 @@ class TransferDataModule(pl.LightningDataModule):
             dataset=self.test_dataset,             
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
+            collate_fn=collate_transfer, 
             pin_memory=self.pin_memory, 
             persistent_workers=self.persistent_workers, 
             )

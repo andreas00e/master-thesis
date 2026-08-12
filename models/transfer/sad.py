@@ -23,8 +23,8 @@ class SAD(pl.LightningModule):
         optimizer_kwargs: DictConfig,
         tse_ckpt: os.PathLike, 
         ) -> None:
-        
         super().__init__()
+
         self.save_hyperparameters()
        
         self.ditbc_kwargs = ditbc_kwargs
@@ -33,15 +33,10 @@ class SAD(pl.LightningModule):
         self.optimizer_kwargs = optimizer_kwargs
         self.tse_ckpt = tse_ckpt # checkpoint of trained 
         
-        # self.tse = TSE.load_from_checkpoint(self.tse_ckpt)
         self.tse = None
-        
-        
-        # self.SAT = SAT(**self.sat_kwargs)
+        self.SAT = SAT(**self.sat_kwargs)
         # self.DiTBC = DiTBC(**self.ditbc_kwargs)
         self.RCE = RCE(**self.rce_kwargs)
-
-        # self.loss = F.mse_loss()
     
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
@@ -57,14 +52,19 @@ class SAD(pl.LightningModule):
     
     def forward(self, batch):
         actions, rgb_obs, joint_dsc, joint_obs = batch.values() 
-        
         rce_emb = self.RCE(joint_dsc, joint_obs) # [batch, steps, d_model]
-        
 
-        sat_loss = 0 
-        ditbc_loss = 0
+        loss_sat = self.SAT(rgb_obs)
+        loss_bc = 0 
         
-        loss = sat_loss + ditbc_loss
+        loss = loss_sat + loss_bc
+
+        stage = self.trainer.state.stage
+        self.log_dict({
+            f"{stage}_loss_sat": loss_sat, 
+            f"{stage}_loss_bc": loss_bc, 
+            f"{stage}_loss": loss
+        })
         
         return loss 
     

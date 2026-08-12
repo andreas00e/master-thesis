@@ -22,7 +22,7 @@ datamodule:
     # - square
     - threading 
   depth: False
-  batch_size: 1
+  batch_size: 2
   shuffle: True
   num_workers: 1
   pin_memory: True 
@@ -67,10 +67,20 @@ model:
       epsilon: 1e-6
 
   sat_kwargs: 
-    d_model: 5 
-    n_head: 4 
-    dim_feedforward: 512 
+    weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
 
+    encoder_layer_kwargs: 
+      d_model: 256 
+      nhead: 4 
+      dim_feedforward: 512 
+
+    transformer_encoder_kwargs: 
+      num_layers: 1
+  
+    pe_kwargs: 
+      d_model: ${model.sat_kwargs.encoder_layer_kwargs.d_model}
+      max_len: 300
+    
   optimizer_kwargs: 
     optimizer: 
       lr: 1e-3

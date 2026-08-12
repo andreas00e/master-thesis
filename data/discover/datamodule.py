@@ -9,7 +9,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 from data.utils.load_files import get_files, get_metadata, get_demomap
 from data.discover.dataset import MimicGenRobotDataset
 
-from data.discover.utils.collate import collate_fn
+from data.utils.collate import collate_discover
 
 
 class MimicGenRobotDataModule(pl.LightningDataModule): 
@@ -85,7 +85,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     
     def train_dataloader(self):
         train_dataloader = DataLoader(
-            collate_fn=collate_fn,    
+            collate_fn=collate_discover,    
             dataset=self.train_dataset, 
             batch_size=self.batch_size, 
             shuffle=self.shuffle,    
@@ -98,7 +98,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     
     def val_dataloader(self):
         val_dataloader = DataLoader(
-            collate_fn=collate_fn,    
+            collate_fn=collate_discover,    
             dataset=self.val_dataset, 
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
@@ -110,7 +110,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     
     def test_dataloader(self):
         test_dataloader = DataLoader(
-            collate_fn=collate_fn,    
+            collate_fn=collate_discover,    
             dataset=self.val_dataset, 
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
