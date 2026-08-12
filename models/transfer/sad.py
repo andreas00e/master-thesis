@@ -34,6 +34,9 @@ class SAD(pl.LightningModule):
         self.tse_ckpt = tse_ckpt # checkpoint of trained 
         
         # self.tse = TSE.load_from_checkpoint(self.tse_ckpt)
+        self.tse = None
+        
+        
         # self.SAT = SAT(**self.sat_kwargs)
         # self.DiTBC = DiTBC(**self.ditbc_kwargs)
         self.RCE = RCE(**self.rce_kwargs)
@@ -54,15 +57,21 @@ class SAD(pl.LightningModule):
     
     def forward(self, batch):
         actions, rgb_obs, joint_dsc, joint_obs = batch.values() 
-        loss = self._shared_step(actions, rgb_obs, joint_dsc, joint_obs)
-        return loss
+        
+        rce_emb = self.RCE(joint_dsc, joint_obs) # [batch, steps, d_model]
+        
+
+        sat_loss = 0 
+        ditbc_loss = 0
+        
+        loss = sat_loss + ditbc_loss
+        
+        return loss 
     
     def _shared_step(self, batch: TensorType["batch"]) -> None: 
-        actions, rgb_obs, joint_dsc, joint_obs = batch.values()
-        loss = 0 
-        self.log_dict({f"loss_{self.trainer.state.stage}": loss})
-
-        return loss
+        loss = self(batch)
+    
+        return None
     
     def training_step(self, batch, batch_idx):
         return self._shared_step(batch)

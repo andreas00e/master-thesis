@@ -33,9 +33,10 @@ class MimicGenRobotDataset(Dataset):
         self.crop_factor = crop_factor
         self.depth = depth 
         self.expand_depth = expand_depth 
+        self.transforms = transforms
         
-        self.transforms = get_transforms(transforms)
-        self.transforms_plus = get_transforms(transforms)
+        self.transforms = get_transforms(self.transforms)
+        self.transforms_plus = get_transforms(self.transforms)
         
         self._file_cache = {}
                        
@@ -70,8 +71,8 @@ class MimicGenRobotDataset(Dataset):
         rgb_obs = rgb_obs[:, :int(rgb_obs.shape[1]*self.crop_factor), ...]
         rgb_obs = torch.from_numpy(rgb_obs).permute(0, 3, 1, 2) # [n, c, h, w]
                         
-        rgb = self.transforms(rgb_obs) 
-        rgb_plus = self.transforms(rgb_obs)
+        rgb_obs_plus = self.transforms(rgb_obs)
+        rgb_obs = self.transforms(rgb_obs) 
         
         # if self.depth: 
         #     depth_obs = hf["data"][demo]["obs"]["robot0_eye_in_hand_depth"]
@@ -94,8 +95,8 @@ class MimicGenRobotDataset(Dataset):
         offsets = torch.randint(low=0, high=rgb_obs.shape[0]-self.window-1, size=(self.chunks, )) # indexing, not slicing
         idxs = offsets[:, None] + torch.arange(self.window) # [chunks, window]
         
-        item["rgb"] = rgb[idxs, ...]
-        item["rgb_plus"] = rgb_plus[idxs, ...] 
+        item["rgb_obs"] = rgb_obs[idxs, ...]
+        item["rgb_obs_plus"] = rgb_obs_plus[idxs, ...] 
         item["gripper_qpos"] = gripper_qpos[idxs]
         item["idxs"] = idxs
         return item 

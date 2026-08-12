@@ -41,7 +41,8 @@ class RCE(nn.Module):
                 nn.Linear(input_dim, hidden_dim),
                 nn.LayerNorm(hidden_dim),
                 nn.ELU(),
-                nn.Linear(hidden_dim, output_dim)
+                nn.Linear(hidden_dim, output_dim), 
+                nn.Tanh()
                 )
 
     def _build_obs_encoder(self) -> nn.Sequential:
@@ -56,14 +57,20 @@ class RCE(nn.Module):
                 nn.ELU()
                 )
 
-    def forward(self, joint_dsc: TensorType["*"], joint_obs: TensorType["*"]):
-        dsc_emb = self.dsc_encoder(joint_dsc)
-        dsc_emb = torch.clamp(torch.tanh(dsc_emb), -1.0 + self.eps, 1.0 - self.eps)
+    def forward(
+        self, 
+        joint_dsc: TensorType["batch", "joints", "dsc_features"], 
+        joint_obs: TensorType["batch", "steps", "joints", "obs_features"]
+        ) -> TensorType["batch", "steps", "d_model"]:
+        
+        dsc_emb = self.dsc_encoder(joint_dsc) # [batch, joints, d_model]
+        dsc_emb = torch.exp(dsc_emb / (self.tau + self.epsilon))  # [batch, jonts, d_model]
+        dsc_emb /= torch.sum(dsc_emb, dim=-1, keepdim=True) # [batch, joints, d_model]
+        dsc_emb = dsc_emb.unsqueeze(1).repeat(1, joint_obs.shape[1], 1, 1) # [batch, steps, joints, d_model]
 
-        obs_emb = self.obs_encoder(joint_obs)  # [batch, n_joints, emb]
-        obs_emb = torch.exp(obs_emb / (self.tau.data + self.epsilon))
-        obs_emb = obs_emb / torch.sum(obs_emb, dim=-1, keepdim=True)
+        obs_emb = self.obs_encoder(joint_obs) # [batch, steps, joints, d_model]
 
-        emb = obs_emb * dsc_emb * obs_emb
-        emb = torch.sum(emb, dim=1)
+        emb = dsc_emb * obs_emb # [batch, steps, joints, d_model]
+        emb = torch.sum(emb, dim=-2) # [batch, steps, d_model]
+        
         return emb

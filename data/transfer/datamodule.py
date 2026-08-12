@@ -16,6 +16,7 @@ class TransferDataModule(pl.LightningDataModule):
         meta_dir: os.PathLike, # directory containing the hdf5 files metadata (e.g. min & max of depth maps)        cfgs_dir: os.PathLike, 
         cfgs_dir: os.PathLike, 
         horizon: int,
+        crop_factor: float, 
         robots: Optional[List[str]], 
         tasks: Optional[List[str]], 
         depth: bool, 
@@ -26,6 +27,7 @@ class TransferDataModule(pl.LightningDataModule):
         drop_last: bool,  
         persistent_workers: bool,
         dataset_lengths: List[int], 
+        transforms: List[str],
         *args, **kwargs) -> None:
         super().__init__()
         
@@ -34,6 +36,7 @@ class TransferDataModule(pl.LightningDataModule):
         self.meta_dir = meta_dir
         self.cfgs_dir = cfgs_dir
         self.horizon = horizon
+        self.crop_factor = crop_factor
         self.robots = robots 
         self.tasks = tasks 
         self.depth = depth
@@ -46,6 +49,7 @@ class TransferDataModule(pl.LightningDataModule):
         self.drop_last = drop_last
         self.persistent_workers = persistent_workers
         self.dataset_lengths = dataset_lengths
+        self.transforms = transforms 
 
         # File handling 
         self.files = get_files(self.data_dir, self.depth, self.robots, self.tasks)
@@ -60,8 +64,10 @@ class TransferDataModule(pl.LightningDataModule):
         dataset = TransferDataset(
             demo_map=self.demo_map,
             horizon=self.horizon,
+            crop_factor=self.crop_factor,
             depth=self.depth,
-            joint_dsc=self.joint_dsc
+            joint_dsc=self.joint_dsc,
+            transforms=self.transforms
             )
         
         train_dataset, val_dataset, test_dataset = random_split(dataset, lengths=self.dataset_lengths)

@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn 
 from torchtyping import TensorType
 
+# TODO: register buffer 
 
 class PE(nn.Module): 
     def __init__(self, d_model: int, max_len: int) -> None:
