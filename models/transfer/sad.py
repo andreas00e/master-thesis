@@ -11,33 +11,32 @@ import lightning.pytorch as pl
 from models.discover.tse import TSE
 from models.transfer.utils.sat import SAT
 from models.transfer.utils.rce import RCE
-from models.transfer.utils.ditbc import DiTBC
+from models.transfer.utils.dit import DIT
 
 
 class SAD(pl.LightningModule): 
     def __init__(
         self, 
-        ditbc_kwargs: DictConfig, 
         rce_kwargs: DictConfig,
+        dit_kwargs: DictConfig, 
         sat_kwargs: DictConfig, 
         optimizer_kwargs: DictConfig,
-        tse_ckpt: os.PathLike, 
+        tse_ckpt: os.PathLike=None, 
         ) -> None:
         super().__init__()
-
         self.save_hyperparameters()
        
-        self.ditbc_kwargs = ditbc_kwargs
+        self.dit_kwargs = dit_kwargs
         self.rce_kwargs = rce_kwargs
         self.sat_kwargs = sat_kwargs
         self.optimizer_kwargs = optimizer_kwargs
-        self.tse_ckpt = tse_ckpt # checkpoint of trained 
+        self.tse_ckpt = tse_ckpt 
         
         self.tse = None
-        self.SAT = SAT(**self.sat_kwargs)
-        # self.DiTBC = DiTBC(**self.ditbc_kwargs)
-        self.RCE = RCE(**self.rce_kwargs)
-    
+        self.rce = RCE(**self.rce_kwargs)
+        self.dit = DIT(**self.dit_kwargs)
+        self.sat = SAT(**self.sat_kwargs)
+ 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
         scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, **self.optimizer_kwargs.lr_scheduler)
@@ -52,11 +51,15 @@ class SAD(pl.LightningModule):
     
     def forward(self, batch):
         actions, rgb_obs, joint_dsc, joint_obs = batch.values() 
-        rce_emb = self.RCE(joint_dsc, joint_obs) # [batch, steps, d_model]
-
-        loss_sat = self.SAT(rgb_obs)
-        loss_bc = 0 
+        # rce_emb = self.rce(joint_dsc, joint_obs) # [batch, steps, d_model]
+        # loss_sat = self.sat(rgb_obs)
         
+        loss_bc = self.dit(actions, rgb_obs)
+        
+        # loss_bc = self.DiTBC(actions, rgb_obs)
+        
+        loss_bc = 0 
+        loss_sat = 0
         loss = loss_sat + loss_bc
 
         stage = self.trainer.state.stage

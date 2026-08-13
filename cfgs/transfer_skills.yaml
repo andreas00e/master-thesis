@@ -42,29 +42,41 @@ datamodule:
   
 model: 
   _target_: models.transfer.sad.SAD
- 
-  ditbc_kwargs: 
-    action_dim: 512
-    obs_dim: 512 
-    horizon: 16 
-    hidden_dim: 2048 
-    num_heads: 4 
-    num_layers: 4 
-    num_timesteps: 100 
-    deivce: ~
 
   rce_kwargs:
     dsc_kwargs: 
       input_dim: 3
       hidden_dim: 64
       output_dim: 32
+
     obs_kwargs: 
       input_dim: 2
       output_dim: 32
+
     h_kwargs: 
       tau: 0.1
       tau_min: 0.01
       epsilon: 1e-6
+
+  dit_kwargs: 
+    action_dim: 7  
+    obs_emb_dim: 256 
+    action_horizon: 16 
+
+    noise_scheduler_kwargs: 
+      num_train_timesteps:  100 
+
+    decoder_layer_kwargs: 
+      d_model: 512 
+      nhead: 2 
+      dim_feedforward: 1024
+
+    transformer_decoder_kwargs: 
+      num_layers: 2 
+
+    pe_kwargs: 
+      d_model: ${model.sat_kwargs.encoder_layer_kwargs.d_model}
+      max_len: 300
 
   sat_kwargs: 
     weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
