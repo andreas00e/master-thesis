@@ -8,7 +8,7 @@ from hydra.utils import instantiate
 import lightning.pytorch as pl
 
 os.environ["OMPI_MCA_btl"] = "^openib" # suppress Open MPI warnings
-os.environ["PYOPENGL_PLATFORM"] = "egl"  # for headless OpenGL rendering
+os.environ["PYOPENGL_PLATFORM"] = "egl" # for headless OpenGL rendering
 warnings.filterwarnings("ignore", category=UserWarning, module="lightning")
 
 

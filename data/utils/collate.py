@@ -20,6 +20,6 @@ def collate_transfer(batch: List[Dict[str, TensorType["steps", "*"]]]) -> Dict[s
 
     for key in batch[0].keys(): # actions, rgb_obs, joint_dsc, joint_obs 
         element: List[TensorType["steps", "*"]] = [b[key] for b in batch] # List[]        
-        out[key] = pad_sequence(element, batch_first=True)
+        out[key] = pad_sequence(element, batch_first=True, padding_value=float("nan"))
 
     return out 
