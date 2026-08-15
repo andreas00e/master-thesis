@@ -22,7 +22,7 @@ datamodule:
     # - square
     - threading 
   depth: False
-  batch_size: 2
+  batch_size: 4
   shuffle: True
   num_workers: 1
   pin_memory: True 

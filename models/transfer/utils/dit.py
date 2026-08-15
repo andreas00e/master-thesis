@@ -46,14 +46,19 @@ class DIT(nn.Module):
         self.scheduler = DDPMScheduler(**self.noise_scheduler_kwargs)
         self.pe = PE(**self.pe_kwargs)
 
+        self.register_buffer("bos", torch.rand(1, 1, self.d_model)) # [1, 1, d_model]: Beginning of Sequence Token         
+        self.register_buffer("eos", torch.rand(1, 1, self.d_model)) # [1, 1, d_model]: End of Sequence Token 
+
         self.decoder_layer = nn.TransformerDecoderLayer(**self.decoder_layer_kwargs)
         self.decoder = nn.TransformerDecoder(self.decoder_layer, **self.transformer_decoder_kwargs)
         
         self.loss = nn.MSELoss()
         
     def forward(self, actions, rgb_emb, rce_emb):
-        padding_mask = torch.isnan(actions) # [batch, steps, action_dim]
-        padding_mask = torch.all(padding_mask, dim=-1) # [batch, steps]
+        batch_size, n_steps, action_dim = actions.shape       
+
+        padding_mask = torch.isnan(actions) # [batch, steps+2, action_dim]
+        padding_mask = torch.all(padding_mask, dim=-1) # [batch, steps+2]
         
         timesteps = torch.randint(
             low=0, 
@@ -64,9 +69,10 @@ class DIT(nn.Module):
             ) # [batch]
         
         noise = torch.randn_like(actions) # [batch, steps, action_dim]
+        
         # Forward Process
-        # actions = torch.where(torch.isnan(actions), torch.zeros_like(actions), actions)
-        noisy_actions = self.scheduler.add_noise(original_samples=actions, noise=noise, timesteps=timesteps) #  [batch, steps, action_dim]
+        noisy_actions = self.scheduler.add_noise(original_samples=actions, noise=noise, timesteps=timesteps) # [batch, steps, action_dim]
+         
         # Backward Process
         predicted_noise = self._backward_process(noisy_actions, rgb_emb, timesteps, padding_mask)
         
@@ -81,15 +87,27 @@ class DIT(nn.Module):
         timestep: TensorType["batch"], 
         padding_mask: TensorType["batch", "steps"], 
         ): 
-        
+                
         tgt_mask = nn.Transformer.generate_square_subsequent_mask(
             sz=noisy_actions.shape[1], 
             device=noisy_actions.device, 
             dtype=noisy_actions.dtype
             )
         
-        noisy_actions_emb = self.action_down(noisy_actions) # [batch, n_steps, d_model]
-        # noisy_actions_emb = self.pe(noisy_actions_emb) # TODO:: Include Positional Encoding !
+        noisy_actions_emb = self.action_down(noisy_actions) # [batch, steps, d_model]
+        batch_size, n_steps, d_model = noisy_actions.shape
+
+        a_idxs = torch.isnan(noisy_actions_emb).all(-1)
+        a_idxs = torch.nonzero(noisy_actions_emb) # [n_steps, 2]
+        
+        first_pad_idxs = torch.full(size=(batch_size,), fill_value=n_steps+1, dtype=noisy_actions_emb.dtype, device=noisy_actions_emb.device)        
+        
+        if a_idxs.numel() > 0: 
+            first_pad_idxs = first_pad_idxs.scatter_reduce(dim=0, index=a_idxs[:, 0], src=a_idxs[:, 1], reduce="amin", include_self=True)
+        
+        self.bos = self.bos.repeat(batch_size, 1, 1)
+        noisy_actions_emb = torch.concat(tensors=(self.bos, noisy_actions_emb), dim=1)  # [batch, 1+steps+1, d_model
+        noisy_actions_emb = self.pe(noisy_actions_emb) # TODO:: Include Positional Encoding !
         
         timestep = timestep.to(torch.float32)[:, None].repeat(1, self.d_model) # [batch, d_model]
         t_emb = self.time_mlp(timestep) # [batch, d_model]
