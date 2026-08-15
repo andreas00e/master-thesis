@@ -56,9 +56,6 @@ class DIT(nn.Module):
         
     def forward(self, actions, rgb_emb, rce_emb):
         batch_size, n_steps, action_dim = actions.shape       
-
-        padding_mask = torch.isnan(actions) # [batch, steps+2, action_dim]
-        padding_mask = torch.all(padding_mask, dim=-1) # [batch, steps+2]
         
         timesteps = torch.randint(
             low=0, 
@@ -74,8 +71,8 @@ class DIT(nn.Module):
         noisy_actions = self.scheduler.add_noise(original_samples=actions, noise=noise, timesteps=timesteps) # [batch, steps, action_dim]
          
         # Backward Process
-        predicted_noise = self._backward_process(noisy_actions, rgb_emb, timesteps, padding_mask)
-        
+        predicted_noise = self._backward_process(noisy_actions, rgb_emb, timesteps)
+        predicted_noise = predicted_noise[:, 1:-1, :]
         loss = self.loss(noise, predicted_noise)
         
         return loss
@@ -85,13 +82,12 @@ class DIT(nn.Module):
         noisy_actions: TensorType["batch", "steps", "action_dim"], 
         condition: TensorType["batch", "steps", "*"], 
         timestep: TensorType["batch"], 
-        padding_mask: TensorType["batch", "steps"], 
         ): 
         
         batch_size, n_steps, _ = noisy_actions.shape
                 
         tgt_mask = nn.Transformer.generate_square_subsequent_mask(
-            sz=n_steps,  
+            sz=n_steps+2,  
             device=noisy_actions.device, 
             dtype=noisy_actions.dtype
             )
@@ -107,16 +103,21 @@ class DIT(nn.Module):
         if a_idxs.numel() > 0: 
             first_pad_idxs = first_pad_idxs.scatter_reduce(dim=0, index=a_idxs[:, 0], src=a_idxs[:, 1], reduce="amin", include_self=True)
         
-        bos = self.bos.expand(batch_size, -1, -1) # [batch, 1, d_model]
-        eos = torch.full((batch_size, 1, self.d_model), fill_value=float("nan"), device=noisy_actions_emb.device) # [batch, 1, d_model]
-        noisy_actions_emb = torch.concat(tensors=(bos, noisy_actions_emb, eos), dim=1) # [batch, 1+steps+1, d_model]
+        self.bos = self.bos.expand(batch_size, -1, -1) # [batch, 1, d_model]
+        self.eos = self.eos.expand(batch_size, -1, -1) # [batch, 1, d_model]
         
-        batch_idxs = torch.arange(batch_size, device=noisy_actions_emb.device)
-        first_pad_idxs += 1  
-
-        noisy_actions_emb[batch_idxs, first_pad_idxs] = eos.squeeze(1)
-
-         #noisy_actions_emb = self.pe(noisy_actions_emb) # TODO:: Include Positional Encoding !
+        pad = torch.full((batch_size, 1, self.d_model), fill_value=float("nan"), device=noisy_actions_emb.device) # [batch, 1, d_model]
+        noisy_actions_emb = torch.concat(tensors=(self.bos, noisy_actions_emb, pad), dim=1) # [batch, 1+steps+1, d_model]
+        condition = torch.concat(tensors=(self.bos, condition, pad), dim=1) # [batch, 1+steps+1, d_model]
+        
+        batch_idxs = torch.arange(0, batch_size, dtype=torch.int, device=noisy_actions_emb.device)              
+        first_pad_idxs = first_pad_idxs.to(torch.int)
+        
+        noisy_actions_emb[batch_idxs, first_pad_idxs] = self.eos.squeeze() # [batch, d_model]
+        condition[batch_idxs, first_pad_idxs] = self.eos.squeeze() # [batch, d_model]
+        
+        padding_mask = torch.isnan(noisy_actions_emb).all(dim=-1) # [batch, steps, d_model]
+        noisy_actions_emb = self.pe(noisy_actions_emb) # TODO:: Include Positional Encoding !
         
         timestep = timestep.to(torch.float32)[:, None].repeat(1, self.d_model) # [batch, d_model]
         t_emb = self.time_mlp(timestep) # [batch, d_model]
