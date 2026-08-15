@@ -87,27 +87,36 @@ class DIT(nn.Module):
         timestep: TensorType["batch"], 
         padding_mask: TensorType["batch", "steps"], 
         ): 
+        
+        batch_size, n_steps, _ = noisy_actions.shape
                 
         tgt_mask = nn.Transformer.generate_square_subsequent_mask(
-            sz=noisy_actions.shape[1], 
+            sz=n_steps,  
             device=noisy_actions.device, 
             dtype=noisy_actions.dtype
             )
         
         noisy_actions_emb = self.action_down(noisy_actions) # [batch, steps, d_model]
-        batch_size, n_steps, d_model = noisy_actions.shape
 
-        a_idxs = torch.isnan(noisy_actions_emb).all(-1)
-        a_idxs = torch.nonzero(noisy_actions_emb) # [n_steps, 2]
+        # Finding first padding value to insert <eos> at that point
+        a_idxs = torch.isnan(noisy_actions_emb).all(dim=-1) # 
+        a_idxs = torch.nonzero(a_idxs) # [n_steps, 2]
         
-        first_pad_idxs = torch.full(size=(batch_size,), fill_value=n_steps+1, dtype=noisy_actions_emb.dtype, device=noisy_actions_emb.device)        
+        first_pad_idxs = torch.full(size=(batch_size,), fill_value=n_steps+1, dtype=torch.long, device=noisy_actions_emb.device)        
         
         if a_idxs.numel() > 0: 
             first_pad_idxs = first_pad_idxs.scatter_reduce(dim=0, index=a_idxs[:, 0], src=a_idxs[:, 1], reduce="amin", include_self=True)
         
-        self.bos = self.bos.repeat(batch_size, 1, 1)
-        noisy_actions_emb = torch.concat(tensors=(self.bos, noisy_actions_emb), dim=1)  # [batch, 1+steps+1, d_model
-        noisy_actions_emb = self.pe(noisy_actions_emb) # TODO:: Include Positional Encoding !
+        bos = self.bos.expand(batch_size, -1, -1) # [batch, 1, d_model]
+        eos = torch.full((batch_size, 1, self.d_model), fill_value=float("nan"), device=noisy_actions_emb.device) # [batch, 1, d_model]
+        noisy_actions_emb = torch.concat(tensors=(bos, noisy_actions_emb, eos), dim=1) # [batch, 1+steps+1, d_model]
+        
+        batch_idxs = torch.arange(batch_size, device=noisy_actions_emb.device)
+        first_pad_idxs += 1  
+
+        noisy_actions_emb[batch_idxs, first_pad_idxs] = eos.squeeze(1)
+
+         #noisy_actions_emb = self.pe(noisy_actions_emb) # TODO:: Include Positional Encoding !
         
         timestep = timestep.to(torch.float32)[:, None].repeat(1, self.d_model) # [batch, d_model]
         t_emb = self.time_mlp(timestep) # [batch, d_model]
