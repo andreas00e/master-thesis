@@ -85,6 +85,10 @@ model:
       d_model: ${model.sat_kwargs.encoder_layer_kwargs.d_model}
       max_len: 300
 
+  pool_kwargs: 
+    k: 5 
+    d_model: ${model.sat_kwargs.encoder_layer_kwargs.d_model}
+
   sat_kwargs: 
     weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
 

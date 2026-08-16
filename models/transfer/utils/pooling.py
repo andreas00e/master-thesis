@@ -27,7 +27,7 @@ class CrossAttentionQueryPooling(nn.Module):
         self.dropout = nn.Dropout(p=0.1)
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, x: List[TensorType["batch", "n_steps", "d_model"]]): 
+    def forward(self, x: List[TensorType["batch", "n_steps", "d_model"]]) -> TensorType["batch", "n_steps", "k", "d_model"]: 
         assert len(x) > 0, "At least one condition has to be present!"
         batch_size, n_steps, d_model = x[0].shape
         

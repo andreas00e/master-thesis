@@ -39,40 +39,6 @@ class PE(nn.Module):
             pe = self.pe[:, :x.shape[1], :]
 
         return x + pe
-        
-# class PE(nn.Module): 
-#     def __init__(self, d_model: int, max_len: int) -> None:
-#         super().__init__()
-        
-#         self.d_model = d_model 
-#         self.max_len = max_len 
-        
-#         self.pe = self._init_pe()
-    
-#     def _init_pe(self): 
-#         pe = torch.zeros(self.max_len, self.d_model) # [max_length, d_model]
-#         position = torch.arange(0, self.max_len, dtype=torch.float).unsqueeze(1) # [max_len, 1]
-#         div_term = torch.exp(torch.arange(0, self.d_model, 2).float() * (-math.log(10000.0) / self.d_model)) # [d_model / 2]
-#         pe[:, 0::2] = torch.sin(position * div_term)  
-#         pe[:, 1::2] = torch.cos(position * div_term) 
-        
-#         return pe # [max_len, d_model]
-    
-#     def forward(
-#         self, 
-#         x: TensorType["batch*chunks", "window+1", "d_model"], 
-#         seq_idxs: TensorType["batch", "chunks", "window"]
-#         ) -> TensorType["batch*chunk", "1+window", "d_model"]:
-        
-#         idxs_pe = seq_idxs[..., :1] # [batch, chunks, 1] 
-#         idxs_pe = torch.concat(tensors=(idxs_pe, seq_idxs+1), dim=-1) # [batch, chunks, 1+window]
-        
-#         pe = self.pe.to(x.device)
-#         pe = pe[idxs_pe] # [batch, chunk, 1+window, d_model]
-#         pe = pe.view(*x.shape) # [batch*chunk, 1+window, d_model]
-        
-#         return x + pe
-
 
 class NormPE(nn.Module):
     """ Normlized Positional Encoding"""

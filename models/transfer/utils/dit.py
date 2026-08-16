@@ -34,6 +34,7 @@ class DIT(nn.Module):
         self.transformer_decoder_kwargs = transformer_decoder_kwargs
         self.pe_kwargs = pe_kwargs
         
+        # Action projection 
         self.action_down = nn.Linear(self.action_dim, self.d_model)
         self.action_up = nn.Linear(self.d_model, self.action_dim)
         
@@ -45,36 +46,35 @@ class DIT(nn.Module):
         
         self.scheduler = DDPMScheduler(**self.noise_scheduler_kwargs)
         self.pe = PE(**self.pe_kwargs)
-
-        self.register_buffer("bos", torch.rand(1, 1, self.d_model)) # [1, 1, d_model]: Beginning of Sequence Token         
-        self.register_buffer("eos", torch.rand(1, 1, self.d_model)) # [1, 1, d_model]: End of Sequence Token 
+        
+        self.bos = nn.Parameter(torch.empty(1, 1, self.d_model)) # Beginning of Sequence Token      
+        self.eos = nn.Parameter(torch.empty(1, 1, self.d_model)) # End of Sequence Token
+        nn.init.xavier_uniform_(self.bos)
+        nn.init.xavier_uniform_(self.eos)
 
         self.decoder_layer = nn.TransformerDecoderLayer(**self.decoder_layer_kwargs)
         self.decoder = nn.TransformerDecoder(self.decoder_layer, **self.transformer_decoder_kwargs)
         
-        self.loss = nn.MSELoss()
+        self.loss = nn.MSELoss() # XXX: Do I really need this? 
+        self.softmax = nn.Softmax()
         
-    def forward(
-        self, 
-        actions,
-        rgb_emb, 
-        rce_emb, 
-        ):        
+    def forward(self, actions: TensorType["batch", "steps", "d_model"], conditions: TensorType["batch", "steps", "k", "d_model"]) -> TensorType["1"]:        
+        batch_size, n_steps, _ = actions.shape
         timesteps = torch.randint(
             low=0, 
             high=self.noise_scheduler_kwargs.num_train_timesteps, 
-            size=(actions.shape[0], ), 
-            dtype=torch.int, 
+            size=(batch_size, ),
+            dtype=torch.long, 
             device=actions.device
             ) # [batch]
         
         noise = torch.randn_like(actions) # [batch, steps, action_dim]
         
-        # Forward Process
+        # Forward process: Add noise to input sample 
         noisy_actions = self._forward_process(actions, noise, timesteps) # [batch, steps, action_dim]
          
-        # Backward Process
-        predicted_noise = self._backward_process(noisy_actions, rgb_emb, timesteps)
+        # Backward process
+        predicted_noise = self._backward_process(noisy_actions, conditions, timesteps)
         predicted_noise = predicted_noise[:, 1:-1, :]
         
         loss = self.loss(noise, predicted_noise)
@@ -83,65 +83,66 @@ class DIT(nn.Module):
     
     def _forward_process(
         self, 
-        original_samples, 
-        noise, 
-        timesteps
-        ): 
-        
-        noisy_sample = self.scheduler.add_noise(original_samples=original_samples, noise=noise, timesteps=timesteps)
+        actions: TensorType["batch", "steps", "action_dim"],
+        noise: TensorType["batch", "steps", "action_dim"], 
+        timesteps: TensorType["batch"]
+        ) -> TensorType["batch", "steps", "actions_dim"]: 
+
+        noisy_sample = self.scheduler.add_noise(original_samples=actions, noise=noise, timesteps=timesteps) # [batch, steps, d_model] 
         
         return noisy_sample 
     
     def _backward_process(
         self, 
         noisy_actions: TensorType["batch", "steps", "action_dim"], 
-        condition: TensorType["batch", "steps", "*"], 
+        conditions: TensorType["batch", "steps", "k", "d_model"], 
         timesteps: TensorType["batch"], 
-        ): 
+        ) -> TensorType["batch", "n_steps", "action_dim"]: 
         
         batch_size, n_steps, _ = noisy_actions.shape
+        conditions = torch.sum(conditions, dim=-2) # [batch, steps, d_model]
                 
         tgt_mask = nn.Transformer.generate_square_subsequent_mask(
             sz=n_steps+2,  
             device=noisy_actions.device, 
             dtype=noisy_actions.dtype
-            )
+            ) # [steps, steps]
         
         noisy_actions_emb = self.action_down(noisy_actions) # [batch, steps, d_model]
 
         # Finding first padding value to insert <eos> at that point
-        a_idxs = torch.isnan(noisy_actions_emb).all(dim=-1) # 
-        a_idxs = torch.nonzero(a_idxs) # [n_steps, 2]
+        a_idxs = torch.isnan(noisy_actions_emb).all(dim=-1) # [batch, steps]
+        a_idxs = torch.nonzero(a_idxs) # [batch, steps]
         
         first_pad_idxs = torch.full(size=(batch_size,), fill_value=n_steps+1, dtype=torch.long, device=noisy_actions_emb.device)        
         
         if a_idxs.numel() > 0: 
             first_pad_idxs = first_pad_idxs.scatter_reduce(dim=0, index=a_idxs[:, 0], src=a_idxs[:, 1], reduce="amin", include_self=True)
         
-        self.bos = self.bos.expand(batch_size, -1, -1) # [batch, 1, d_model]
-        self.eos = self.eos.expand(batch_size, -1, -1) # [batch, 1, d_model]
+        bos = self.bos.clone().expand(batch_size, -1, -1) # [batch, 1, d_model]
+        eos = self.eos.clone().expand(batch_size, -1, -1) # [batch, 1, d_model]
         
         pad = torch.full((batch_size, 1, self.d_model), fill_value=float("nan"), device=noisy_actions_emb.device) # [batch, 1, d_model]
-        noisy_actions_emb = torch.concat(tensors=(self.bos, noisy_actions_emb, pad), dim=1) # [batch, 1+steps+1, d_model]
-        condition = torch.concat(tensors=(self.bos, condition, pad), dim=1) # [batch, 1+steps+1, d_model]
+        noisy_actions_emb = torch.concat(tensors=(bos, noisy_actions_emb, pad), dim=1) # [batch, 1+steps+1, d_model]
+        conditions = torch.concat(tensors=(bos, conditions, pad), dim=1) # [batch, 1+steps+1, d_model]
         
         batch_idxs = torch.arange(0, batch_size, dtype=torch.int, device=noisy_actions_emb.device)              
         first_pad_idxs = first_pad_idxs.to(torch.int)
         
-        noisy_actions_emb[batch_idxs, first_pad_idxs] = self.eos.squeeze() # [batch, d_model]
-        condition[batch_idxs, first_pad_idxs] = self.eos.squeeze() # [batch, d_model]
+        noisy_actions_emb[batch_idxs, first_pad_idxs] = eos.squeeze()
+        conditions[batch_idxs, first_pad_idxs] = eos.squeeze()
         
-        padding_mask = torch.isnan(noisy_actions_emb).all(dim=-1) # [batch, steps, d_model]
-        noisy_actions_emb = self.pe(noisy_actions_emb) # TODO:: Include Positional Encoding !
+        padding_mask = torch.isnan(noisy_actions_emb).all(dim=-1) # [batch, 1+steps+1, d_model]
+        noisy_actions_emb = self.pe(noisy_actions_emb) # [batch, 1+steps+1, d_model]
+        conditions = self.pe(conditions) # [batch, 1+steps+1, d_model]
         
         timesteps = timesteps.to(torch.float32)[:, None].repeat(1, self.d_model) # [batch, d_model]
         t_emb = self.time_mlp(timesteps) # [batch, d_model]
-        
-        tgt = noisy_actions_emb + t_emb[:, None, :] # [batch, n_steps, d_model]
+        tgt = noisy_actions_emb + t_emb[:, None, :] # [batch, 1+steps+1, d_model]
 
         out = self.decoder(
             tgt=tgt, 
-            memory=condition,
+            memory=conditions,
             tgt_mask=tgt_mask,  
             tgt_key_padding_mask=padding_mask, 
             memory_key_padding_mask=padding_mask
@@ -161,7 +162,7 @@ class DIT(nn.Module):
         for t in reversed(range(self.noise_scheduler_kwargs.num_train_timesteps)): #  [99, 98, ..., 0]
             timesteps = torch.full(size=(batch_size, ), fill_value=t, dtype=torch.long, device=rgb_emb.device) # [batch]
             # Predicted noise based on current sample 
-            predicted_noise = self._backward_process(noisy_actions=noisy_actions, condition=rgb_emb, timesteps=timesteps)
+            predicted_noise = self._backward_process(noisy_actions=noisy_actions, conditions=rgb_emb, timesteps=timesteps)
             # Scheduler output
             step = self.scheduler.step(model_output=predicted_noise, timestep=timesteps, sample=noisy_actions) 
             # Reconstruct previous sample in diffusion process
