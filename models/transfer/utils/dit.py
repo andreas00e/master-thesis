@@ -54,9 +54,12 @@ class DIT(nn.Module):
         
         self.loss = nn.MSELoss()
         
-    def forward(self, actions, rgb_emb, rce_emb):
-        batch_size, n_steps, action_dim = actions.shape       
-        
+    def forward(
+        self, 
+        actions,
+        rgb_emb, 
+        rce_emb, 
+        ):        
         timesteps = torch.randint(
             low=0, 
             high=self.noise_scheduler_kwargs.num_train_timesteps, 
@@ -68,20 +71,32 @@ class DIT(nn.Module):
         noise = torch.randn_like(actions) # [batch, steps, action_dim]
         
         # Forward Process
-        noisy_actions = self.scheduler.add_noise(original_samples=actions, noise=noise, timesteps=timesteps) # [batch, steps, action_dim]
+        noisy_actions = self._forward_process(actions, noise, timesteps) # [batch, steps, action_dim]
          
         # Backward Process
         predicted_noise = self._backward_process(noisy_actions, rgb_emb, timesteps)
         predicted_noise = predicted_noise[:, 1:-1, :]
+        
         loss = self.loss(noise, predicted_noise)
         
         return loss
+    
+    def _forward_process(
+        self, 
+        original_samples, 
+        noise, 
+        timesteps
+        ): 
+        
+        noisy_sample = self.scheduler.add_noise(original_samples=original_samples, noise=noise, timesteps=timesteps)
+        
+        return noisy_sample 
     
     def _backward_process(
         self, 
         noisy_actions: TensorType["batch", "steps", "action_dim"], 
         condition: TensorType["batch", "steps", "*"], 
-        timestep: TensorType["batch"], 
+        timesteps: TensorType["batch"], 
         ): 
         
         batch_size, n_steps, _ = noisy_actions.shape
@@ -119,8 +134,8 @@ class DIT(nn.Module):
         padding_mask = torch.isnan(noisy_actions_emb).all(dim=-1) # [batch, steps, d_model]
         noisy_actions_emb = self.pe(noisy_actions_emb) # TODO:: Include Positional Encoding !
         
-        timestep = timestep.to(torch.float32)[:, None].repeat(1, self.d_model) # [batch, d_model]
-        t_emb = self.time_mlp(timestep) # [batch, d_model]
+        timesteps = timesteps.to(torch.float32)[:, None].repeat(1, self.d_model) # [batch, d_model]
+        t_emb = self.time_mlp(timesteps) # [batch, d_model]
         
         tgt = noisy_actions_emb + t_emb[:, None, :] # [batch, n_steps, d_model]
 
@@ -132,40 +147,24 @@ class DIT(nn.Module):
             memory_key_padding_mask=padding_mask
             )
         
-        predicted_noise = self.action_up(out)
+        predicted_noise = self.action_up(out) # [batch, n_steps, action_dim]
         return predicted_noise
     
+    @torch.no_grad()
+    def sample(self, rgb_emb):
+        batch_size = rgb_emb.shape[0]
+
+        # Start from pure Gaussian noise 
+        noisy_actions = torch.randn(size=(batch_size, self.action_horizon, self.action_dim), dtype=rgb_emb.dtype, device=rgb_emb.device) # [batch_size, action_horizon, action_dim]
+        
+        # Iteratively remove noise from sample 
+        for t in reversed(range(self.noise_scheduler_kwargs.num_train_timesteps)): #  [99, 98, ..., 0]
+            timesteps = torch.full(size=(batch_size, ), fill_value=t, dtype=torch.long, device=rgb_emb.device) # [batch]
+            # Predicted noise based on current sample 
+            predicted_noise = self._backward_process(noisy_actions=noisy_actions, condition=rgb_emb, timesteps=timesteps)
+            # Scheduler output
+            step = self.scheduler.step(model_output=predicted_noise, timestep=timesteps, sample=noisy_actions) 
+            # Reconstruct previous sample in diffusion process
+            noisy_actions = step.prev_sample
     
-    # @torch.no_grad()
-    # def sample_action(self, obs, num_samples=1):
-    #     batch_size = obs.shape[0]
-    #     device = obs.device
-
-    #     # Step 1: start from pure Gaussian noise
-    #     action_flat = torch.randn(
-    #         batch_size, num_samples,
-    #         self.action_horizon * self.action_dim, device=device
-    #     )
-
-    #     # Step 2: count down from T=100 to 0, removing a little noise each step
-    #     for t in reversed(range(self.num_diffusion_steps)):
-    #         timestep = torch.full((batch_size,), t, device=device, dtype=torch.long)
-
-    #         # Ask the network: "what noise is present at this timestep?"
-    #         predicted_noise = torch.stack([
-    #             self.forward(obs, action_flat[:, i], timestep)
-    #             for i in range(num_samples)
-    #         ], dim=1)
-
-    #         # Remove that noise (DDPM update rule)
-    #         alpha_t      = self.alphas_cumprod[t]
-    #         alpha_t_prev = self.alphas_cumprod[t-1] if t > 0 else torch.tensor(1.0)
-    #         action_flat  = (action_flat - (1 - alpha_t).sqrt() * predicted_noise) / alpha_t.sqrt()
-
-    #         # Add a small amount of fresh noise (except at the very last step)
-    #         if t > 0:
-    #             action_flat = (alpha_t_prev.sqrt() * action_flat
-    #                            + (1 - alpha_t_prev).sqrt() * torch.randn_like(action_flat))
-
-    #     # Step 3: reshape → (batch, num_samples, action_horizon, action_dim)
-    #     return action_flat.reshape(batch_size, num_samples, self.action_horizon, self.action_dim)
+        return noisy_actions

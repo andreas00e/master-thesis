@@ -30,16 +30,15 @@ class PE(nn.Module):
         seq_idxs: Optional[TensorType["batch", "chunks", "window"]]=None # positions of elemetns of x in its original sequence 
         ) -> TensorType["batch*chunk", "1+window", "d_model"]:
         
-        self.pe = self.pe.repeat(x.shape[0], 1, 1) # [batch, n_steps_max,  d_model]
+        pe = self.pe.expand(x.shape[0], -1, -1) # [batch, n_steps_max, d_model]
                 
         if seq_idxs: 
             idxs_pe = seq_idxs[..., :1] # [batch, chunks, 1] 
-            idxs = torch.concat(tensors=(idxs_pe, seq_idxs+1), dim=-1) # [batch, chunks, 1+window]
-        
+            pe = torch.concat(tensors=(idxs_pe, seq_idxs+1), dim=-1) # [batch, chunks, 1+window]
         else: 
-            idxs = ~torch.isnan(x) # [batch, n_steps_max, d_model]
-        
-        return x + self.pe[idxs]
+            pe = self.pe[:, :x.shape[1], :]
+
+        return x + pe
         
 # class PE(nn.Module): 
 #     def __init__(self, d_model: int, max_len: int) -> None:
