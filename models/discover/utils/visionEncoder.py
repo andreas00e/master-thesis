@@ -19,6 +19,7 @@ class VisionEncoder(nn.Module):
         
         super().__init__()
         
+        # TODO: 
         encoder_layer_dict = OmegaConf.to_container(encoder_layer_kwargs, resolve=True) if isinstance(encoder_layer_kwargs, DictConfig) else encoder_layer_kwargs
         transformer_encoder_dict = OmegaConf.to_container(transformer_encoder_kwargs, resolve=True) if isinstance(transformer_encoder_kwargs, DictConfig) else transformer_encoder_kwargs
         out_dict = OmegaConf.to_container(out_kwargs, resolve=True) if isinstance(out_kwargs, DictConfig) else out_kwargs
@@ -44,8 +45,10 @@ class VisionEncoder(nn.Module):
             nn.Linear(in_features=self.out_kwargs["hidden_features"], out_features=self.out_kwargs["out_features"])
         )
         
-        self.pe = PE(**pe_dict)
-        self.cls = nn.Parameter(data=torch.ones(size=(1, 1, self.d_model)))
+        self.pe: nn.Module = PE(**pe_dict)
+        
+        self.cls = nn.Parameter(data=torch.empty(size=(1, 1, self.d_model), dtype=torch.float32))
+        nn.init.xavier_uniform_(self.cls)
     
     def forward(self, x: TensorType["batch*chunk", "window", "*"], idxs: TensorType["batch", "chunk", "window"]) -> TensorType["*"]: 
         x = self.linear_in(x) # [batch*chunk, window, d_model] 

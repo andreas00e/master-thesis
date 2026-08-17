@@ -21,7 +21,6 @@ class PE(nn.Module):
         div_term = torch.exp(torch.arange(0, self.d_model, 2).float() * (-math.log(10000.0) / self.d_model)) # [d_model / 2]
         pe[:, 0::2] = torch.sin(position * div_term)  
         pe[:, 1::2] = torch.cos(position * div_term) 
-        pe = pe[None, None, ...] # [1, 1, max_length, d_model]
         self.register_buffer("pe", pe)
         
     def forward(
@@ -29,15 +28,14 @@ class PE(nn.Module):
         x: TensorType["...", "d_model"], 
         seq_idxs: Optional[TensorType["batch", "chunks", "window"]]=None # positions of elemetns of x in its original sequence 
         ) -> TensorType["batch*chunk", "1+window", "d_model"]:
-        
-        pe = self.pe.expand(*seq_idxs.shape[:2], -1, -1) # [batch*chunks, n_steps_max, d_model]
-                
+                        
         if isinstance(seq_idxs, torch.Tensor): 
             pe_idxs = torch.min(seq_idxs, dim=-1, keepdim=True).values # [batch, chunks, 1] 
             pe_idxs = torch.cat(tensors=(pe_idxs, seq_idxs+1), dim=-1) # [batch, chunks, 1+window]
-            pe = pe[pe_idxs]
+            pe = self.pe[pe_idxs]
+            pe = pe.view(*x.shape)
             
-        elif seq_idxs is None: 
+        elif seq_idxs is None: # TODO: Check if this still works fine!
             pe = self.pe[:, :x.shape[1], :]
             
         else: 
