@@ -15,15 +15,23 @@ class KMeans(nn.Module):
     def __init__(
         self, 
         k: int=3, 
-        max_iter: int=300, 
-        tol: float=1e-4
+        max_iter: Optional[int]=300, 
+        tol: Optional[float]=1e-4
         ) -> None:
         super().__init__()
         
         self.k = k
         self.max_iter = max_iter
         self.tol = tol
-        self.register_buffer("means", torch.empty(0)) # [k, d]
+        
+        weights = torch.empty(size=(1, 1), dtype=torch.float32)
+        means = torch.empty(size=(1, 1), dtype=torch.float32)
+        covs = torch.empty(size=(1, 1, 1), dtype=torch.float32)
+        
+        self.register_buffer("weights", weights) # [k, 1]
+        self.register_buffer("means", means) # [k, d]
+        self.register_buffer("covs", covs) # [k, d, d]
+        
         self.is_fitted = False
          
     def _compute_distances(self, x: TensorType["n", "d"]) -> TensorType["n", "k"]:
@@ -39,13 +47,14 @@ class KMeans(nn.Module):
         
         # Random init from data 
         rand_idxs = torch.randperm(n, device=x.device)[:self.k]
-        self.means.resize_(self.k, d).copy_(x[rand_idxs])
-        
+        self.means = self.means.expand(self.k, -1) # XXX: Make sure that that has not already been done before 
+        self.means.data = x.clone()[rand_idxs]
+                
         for _ in range(self.max_iter):
-            old_means = self.means.data.clone() #
-            distances = self._compute_distances(x) # [n, n_clusters]:
+            old_means = self.means.data.clone() 
+            distances = self._compute_distances(x) # [n, k]:
             labels = torch.argmin(distances, dim=1) # [n]: hard cluster assignments
-            one_hot = F.one_hot(labels, num_classes=self.k).to(x.dtype) # [n, k]: one-hot centroid mapping matrix       
+            one_hot = F.one_hot(labels, num_classes=self.k).to(x.dtype) # [n, k]: one-hot centroid mapping matrix (one in column of assigned cluster; zero elsewhere)      
             counts = torch.clamp(torch.sum(one_hot, dim=0, keepdim=True).T, min=1e-8) # [k, 1] # count points in each cluster (prevent division by zero with small epsilon)
 
             self.means.copy_((one_hot.T @ x) / counts) # [k, n] @ [n, d] / [k, 1]
@@ -81,16 +90,53 @@ class KMeans(nn.Module):
         counts = torch.zeros(self.k, dtype=torch.long, device=x.device)
         counts.scatter_add_(0, labels, torch.ones_like(labels))
 
-        weights = counts.float() / x.shape[0] # [k]: sum to 1 
+        self.weights = counts.float() / x.shape[0] # [k]: sum to 1 
         
-        covs = self._get_covariance(x, labels) # [k, d, d]
+        self.covs = self._get_covariance(x, labels) # [k, d, d]
         
         return {
-            "weights": weights, # [k]
+            "weights": self.weights, # [k]
             "means": self.means.data, # [k, d]
-            "covs": covs, # [k, d, d]
+            "covs": self.covs, # [k, d, d]
             "labels": labels # [n]
         } 
+
+class MBKMeans(nn.Module): 
+    def __init__(
+        self, 
+        k: int, 
+        max_iter: int,
+        ) -> None: 
+        
+        self.k = k # number of clusters 
+        self.max_iter = max_iter # number of maximum iterations 
+       
+        self.centers = None
+        self.counts = None
+        
+    def _init_cc(self, x: TensorType["b", "n", "d"]): 
+        idxs = torch.randperm(x.shape[0])[:self.k]
+        centers = x[idxs] # [k, n, d]
+        
+        return centers 
+
+    def forward(self, x: TensorType["mb", "n", "d"]) -> None: # mb: mini-batch
+        x = x.view(-1, delattr) # [mb*n, d]
+        
+        distances = self._compute_distances(x) # [mb*n, k]
+        labels = torch.argmin(distances, dim=1) # [mb*n]: hard cluster assignments
+        one_hot = F.one_hot(labels, num_classes=self.k).to(x.dtype) # [mb*n, k]: one-hot centroid mapping matrix       
+        self.counts = torch.clamp(torch.sum(one_hot, dim=0, keepdim=True).T, min=1e-8) # [k, 1] # per-center counts (prevent division by zero with small epsilon)
+        
+        lr = 1 / self.counts # [k, 1]
+        self.centers = (1 - lr) * self.centers + lr * x 
+        
+    def _compute_distances(self, x: TensorType["mb*n", "d"]) -> TensorType["mb*n", "k"]:
+        # ||X - C||^2 = ||X||^2 + ||C||^2 - 2*X*C.T  
+        x_norm = (x ** 2).sum(dim=1, keepdim=True) # [n, 1]
+        c_norm = (self.centers ** 2).sum(dim=1, keepdim=True).T # [1, k]
+        distances = x_norm + c_norm - 2 * x @ self.centers.T # [n, k]
+        return distances
 
 class RGMM(nn.Module): 
     def __init__(

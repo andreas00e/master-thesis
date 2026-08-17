@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn 
 from typing import List
 from torchvision.transforms import v2
 
@@ -50,5 +51,5 @@ TRANSFORMS = {
         )
 }
 
-def get_transforms(transforms: List[str]) -> v2.Compose: 
-    return v2.Compose([TRANSFORMS[k]() for k in transforms])
+def get_transforms(transforms: List[str]) -> nn.Sequential:  
+    return nn.Sequential(*[TRANSFORMS[k]() for k in transforms])

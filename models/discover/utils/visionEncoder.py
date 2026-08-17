@@ -47,14 +47,13 @@ class VisionEncoder(nn.Module):
         self.pe = PE(**pe_dict)
         self.cls = nn.Parameter(data=torch.ones(size=(1, 1, self.d_model)))
     
-    def forward(self, x: TensorType["*"], idxs: TensorType["*"]) -> TensorType["*"]: 
+    def forward(self, x: TensorType["batch*chunk", "window", "*"], idxs: TensorType["batch", "chunk", "window"]) -> TensorType["*"]: 
         x = self.linear_in(x) # [batch*chunk, window, d_model] 
         
-        cls = self.cls.repeat(x.shape[0], 1, 1) # [batch*chunk, 1, d_model]
+        cls = self.cls.expand(x.shape[0], -1, -1) # [batch*chunk, 1, d_model]
         x = torch.concat(tensors=(cls, x), dim=1) # [batch*chunk, 1+window, d_model]
         x = self.pe(x, idxs) # [batch*chunk, 1+window, d_model]
         x = self.encoder_transformer(x) # [batch*chunk, 1+window, d_model]
-        
         x = self.linear_out(x[:, 0, :]) # [batch*chunk, 8]
         
         return x 

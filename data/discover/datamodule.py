@@ -69,7 +69,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         
     def setup(self, stage=None) -> Tuple[Dataset, Dataset, Dataset]:
         dataset = MimicGenRobotDataset(
-            demo_map=self.demo_map,
+            demo_map=self.demo_map[:1000],
             df_gripper=self.df_gripper, 
             depths=self.depths,
             window=self.window,
@@ -77,7 +77,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             crop_factor=self.crop_factor,
             depth=self.depth, 
             expand_depth=self.expand_depth,
-            transforms= self.transforms
+            transforms=self.transforms
             )
         
         train_dataset, val_dataset, test_dataset = random_split(dataset, lengths=self.dataset_lengths)
@@ -106,12 +106,12 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             # multiprocessing_context=self.multiprocessing_context, 
             persistent_workers=self.persistent_workers, 
             )
-        return val_dataloader
+        return val_dataloader # 1
     
     def test_dataloader(self):
         test_dataloader = DataLoader(
             collate_fn=collate_discover,    
-            dataset=self.val_dataset, 
+            dataset=self.test_dataset, 
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
             pin_memory=self.pin_memory, 

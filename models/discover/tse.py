@@ -1,5 +1,6 @@
 # Temporal Skill Encoder (TSE)
 
+from typing import Dict
 from omegaconf import DictConfig
 
 import torch
@@ -15,6 +16,7 @@ from models.discover.utils.visionEncoder import VisionEncoder
 class TSE(pl.LightningModule): 
     def __init__(
         self, 
+        gripper_up_kwargs: DictConfig, 
         vision_backbone_kwargs: DictConfig, 
         vision_encoder_kwargs: DictConfig, 
         kmeans_kwargs: DictConfig, 
@@ -25,19 +27,20 @@ class TSE(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters() 
         
+        self.gripper_up_kwargs = gripper_up_kwargs
         self.vision_backbone_kwargs = vision_backbone_kwargs 
         self.vision_encoder_kwargs = vision_encoder_kwargs 
         self.kmeans_kwargs = kmeans_kwargs
         self.rgmm_kwargs = rgmm_kwargs 
         self.optimizer_kwargs = optimizer_kwargs
         
-        self.gripper = nn.Linear(1, 128) # TODO: Move to cfgs
+        self.gripper_up = nn.Linear(**self.gripper_up_kwargs)
         self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
         self.kmeans = KMeans(**self.kmeans_kwargs)
         self.rgmm = RGMM(**self.rgmm_kwargs)
         
-        self.kmeans.eval()
+        self.kmeans.eval() # no parameters to train
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
@@ -64,7 +67,7 @@ class TSE(pl.LightningModule):
 
         return x 
  
-    def _shared_step(self, batch: TensorType["batch"], stage: str) -> None: 
+    def _shared_step(self, batch: Dict[str, TensorType["batch", "chunks", "window", "*"]], stage: str) -> None: 
         x, x_plus, gripper_qpos, idxs = batch.values() 
         x_shape = x.shape # [batch, chunks, window, channels, height, width]
         

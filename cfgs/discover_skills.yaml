@@ -47,6 +47,10 @@ datamodule:
 model: 
   _target_: models.discover.tse.TSE
 
+  gripper_up_kwargs: 
+    in_features: 1 
+    out_features: 128
+
   vision_backbone_kwargs: 
     weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
     
