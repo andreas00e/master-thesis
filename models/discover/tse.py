@@ -33,7 +33,7 @@ class TSE(pl.LightningModule):
         self.kmeans_kwargs = kmeans_kwargs
         self.rgmm_kwargs = rgmm_kwargs 
         self.optimizer_kwargs = optimizer_kwargs
-        
+                
         self.gripper_up = nn.Linear(**self.gripper_up_kwargs)
         self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
@@ -41,13 +41,19 @@ class TSE(pl.LightningModule):
         self.rgmm = RGMM(**self.rgmm_kwargs)
         
         self.kmeans.eval() # no parameters to train
-
+        
+    def setup(self, stage):
+        if self.logger and hasattr(self.logger, "experiment"): 
+            self.rgmm.logger = self.logger.experiment
+        
+        return super().setup(stage)
+    
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
         scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, **self.optimizer_kwargs.lr_scheduler)
         
         return {
-            "optimizer": optimizer, 
+            "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler, 
                 "interval": "step"
@@ -78,11 +84,9 @@ class TSE(pl.LightningModule):
         x_emb = self(x, x_shape, idxs) # [batch*chunks*window, hidden_dim]
         x_plus_emb = self(x_plus, x_shape, idxs) # # [batch*chunks*window, hidden_dim]
         # gripper_emb = self.gripper(gripper_qpos) # [batch*chunks, window, 256]
-        
-        weights, means, covs, _ = self.kmeans(x_emb).values()
-        self.rgmm = RGMM(weights=weights, means=means, covs=covs, **self.rgmm_kwargs).to(self.device) # TODO: FIX THIS, wtf...
-        
-        loss_cl, loss_bml = self.rgmm(x_emb, x_plus_emb)
+                
+        weights, means, covs, _ = self.k_means(x_emb).values()
+        loss_cl, loss_bml = self.rgmm(x_emb, x_plus_emb, weights, means, covs)
         loss = loss_cl + self.gmm_kwargs.bml_weight * loss_bml
         
         self.log_dict({

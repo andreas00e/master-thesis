@@ -46,7 +46,7 @@ datamodule:
 
 model: 
   _target_: models.discover.tse.TSE
-
+  
   gripper_up_kwargs: 
     in_features: 1 
     out_features: 128
@@ -89,10 +89,7 @@ model:
     sim: 
       dim: 1.0
       eps: 1.0e-6
-    weights: ~
-    means: ~
-    covs: ~
-  
+
   optimizer_kwargs: 
     optimizer: 
       lr: 1e-3

@@ -138,7 +138,9 @@ class RGMM(nn.Module):
         self.sim = nn.CosineSimilarity(**self.sim)
         
         self.component_distribution, self.dtype, self.device, self.logger = [None]*4
-        self.G_min, self.G_max, self.count_G_min, self.count_G_max, self.idxs_min, self.idxs_max = [0]*6 
+        self.G_min, self.G_max, self.count_G_min, self.count_G_max, self.idxs_min, self.idxs_max, self.n = [0]*7 
+        
+        self.relu = nn.ReLU()
         
     def _get_mixture_model(self, means: TensorType["k", "d"], covs: TensorType["k", "d", "d"]) -> D.MultivariateNormal:
         """Create a mixture model of multivariate Gaussian distributions.
@@ -228,18 +230,20 @@ class RGMM(nn.Module):
         Returns:
             TensorType: Confidence scores of shape [n].
         """
-        n = x.shape[0]
-        probs = self.components.log_prob(x).exp() # [b, n, k] 
-        vals = torch.topk(probs, k=2, dim=-1).values # [b, n, 2]
+        n, _ = x.shape
+        probs = self.components.log_prob(x).exp() # [n, k] 
+        vals = torch.topk(probs, k=2, dim=-1).values # [n, 2]
         
-        rows = torch.arange(start=0, end=n, step=1) # [b, n]
-        cols = torch.argmax(probs, dim=1) # [b, n]
+        rows = torch.arange(n, dtype=self.dtype, device=self.device) # [n]
+        cols = torch.argmax(probs, dim=1) #  [n]
         
-        mask = torch.ones_like(probs, dtype=torch.bool) # [b, n, k] 
-        mask[rows, cols] = False # [b, n, k] 
+        mask = torch.ones_like(probs, dtype=torch.bool, device=self.device) # [n, k] 
+        mask[rows, cols] = False # [n, k] 
         probs = probs[mask].view(n, self.k-1) # [b, n, k-1]
         
-        return torch.sigmoid(vals[:, 0]-vals[:, 1]) / torch.sigmoid(torch.var(probs, dim=-1)) # [n]
+        confidence = torch.sigmoid(vals[:, 0]-vals[:, 1]) / torch.sigmoid(torch.var(probs, dim=-1)) # [n]
+        
+        return confidence
     
     def _get_m_s(self, p: TensorType["n", "k"]) -> TensorType["n", "2"]:
         """Extract top 2 posterior probabilities and their indices.
@@ -302,17 +306,15 @@ class RGMM(nn.Module):
         Returns:
             TensorType: Loss for false negatives.
         """
-        n = x.shape[0]
-        
-        probs = self._posterior(x, self.weights, self.component_distribution) # [b, n, k]: k posterior probabilites
+        probs = self._posterior(x, self.weights, self.component_distribution) # [n, k]: k posterior probabilites
         probs_i_s, probs_i_m, _, _ = self._get_m_s(probs)
-        probs_i = torch.topk(probs, k=2, dim=-1).values # [b, n, 2]: top 2 biggest posterior probabilities 
-        probs_i_m = probs_i[:, 0] # [b, n, 1]: biggest posterior probabilities (p_max)
-        probs_i_s = probs_i[:, 1] # [b, n, 1]: 2nd biggest posterior probabilities
+        probs_i = torch.topk(probs, k=2, dim=-1).values # [n, 2]: top 2 biggest posterior probabilities 
+        probs_i_m = probs_i[:, 0] # [n, 1]: biggest posterior probabilities (p_max)
+        probs_i_s = probs_i[:, 1] # [n, 1]: 2nd biggest posterior probabilities
         
-        idxs = torch.argmax(probs, dim=-1) # [b, n]: dimension of biggest posterior probabilities
-        idxs = idxs.unsqueeze(1) == idxs.unsqueeze(0) # [b, n, n] 
-        mask_idxs = ~torch.eye(n, dtype=torch.bool, device=x.device) # [b, n, n]
+        idxs = torch.argmax(probs, dim=-1) # [n]: dimension of biggest posterior probabilities
+        idxs = idxs.unsqueeze(1) == idxs.unsqueeze(0) # [n, n] 
+        mask_idxs = ~torch.eye(self.n, dtype=torch.bool, device=x.device) # [n, n]
         idxs &= mask_idxs # [n, n-1] # each rows is all x_j^m whose p_max is the same as x_i's p_max
         rows_idxs, cols_idxs = torch.nonzero(idxs, as_tuple=True) 
 
@@ -321,7 +323,7 @@ class RGMM(nn.Module):
         probs_i_m = probs_i_m[rows_idxs, ...] # [..., 1]: x_i's (relevant) biggest posterior probabilities
         probs_i_s = probs_i_s[rows_idxs, ...] # [..., 1]: x_i's (relevant) second biggest posterior probabilities
         
-        weight = torch.sigmoid(torch.abs(probs_i_s - probs_j_s)) * torch.sigmoid(torch.abs(probs_i_m - probs_j_m))
+        weight = torch.sigmoid(torch.abs(probs_i_s-probs_j_s)) * torch.sigmoid(torch.abs(probs_i_m-probs_j_m))
         unique_elements, inverse_indices = torch.unique(rows_idxs, return_inverse=True)
         counts = torch.zeros(size=(torch.unique(rows_idxs).numel(),), device=x.device)
         counts = torch.scatter_add(counts, 0, inverse_indices, torch.ones_like(weight, device=x.device))
@@ -330,16 +332,16 @@ class RGMM(nn.Module):
         weight_avg /= counts
         weight_avg = weight_avg[inverse_indices, ...]
         
-        x_j = x[cols_idxs, ...] 
+        x_j = x[cols_idxs, ...].clone()
         x = x[rows_idxs, ...]
         x_positive = x_positive[rows_idxs, ...]
         delta = self.sim(x, x_j) - self.sim(x, x_positive) 
         
-        loss_bml = weight / weight_avg * (self.relu(delta + self.bml_alpha) + (self.relu(-delta - self.bml_beta)))
+        loss_bml = weight / weight_avg * (self.relu(delta+self.bml_alpha) + (self.relu(-delta-self.bml_beta)))
         loss_bml = torch.scatter_add(output_tensor, 0, inverse_indices, loss_bml)
         
-        if unique_elements.shape != n: 
-            out = torch.zeros(size=(n, ), device=x.device)
+        if unique_elements.shape != self.n: 
+            out = torch.zeros(size=(self.n, ), device=x.device)
             out[unique_elements] = loss_bml
             loss_bml = out 
 
@@ -364,14 +366,14 @@ class RGMM(nn.Module):
             Tuple of (E_min, E_max, G_min, G_max).
         """
         
-        p = p[r_idxs, c_idxs] # [n]: biggest component of each sample       
-        p *= torch.log(p) # [n]: entropy for each sample 
+        p_max = p[r_idxs, c_idxs].clone() # [n]: biggest component of each sample      
+        p_max *= torch.log(p_max) # [n]: entropy for each sample 
          
         unique_elements, inverse_indices = torch.unique(c_idxs, return_inverse=True) # [n'], [n]
         out = torch.zeros(size=(unique_elements.shape[0], ), device=x.device) # [n']
         
         E_k = torch.zeros(size=(self.k, ), device=x.device) # [k]
-        E_k[unique_elements] = -torch.scatter_add(out, 0, inverse_indices, p) # [k]
+        E_k[unique_elements] = -torch.scatter_add(out, 0, inverse_indices, p_max) # [k]
         
         E_min = torch.min(E_k) # []: distribution with the smallest entropy
         E_max = torch.max(E_k) # []: distribution with the largest entropy
@@ -483,11 +485,7 @@ class RGMM(nn.Module):
          
         count_new_min = swap_idxs.numel() # number of all samples belonging to the new distribution with the smallest entropy  
         count_new_max = stay_idxs.numel() # number of all samples belonging to the new distribution with the biggest entropy 
-        
-        # if self.logger is not None: 
-        #     self.logger.log({"diff_min": count_new_min - self.count_G_min})
-        #     self.logger.log({"diff_max": count_new_max - self.count_G_max})
-        
+
         if count_new_min <= 0: 
             raise ValueError(f"There are no samples to swap!! {count_new_min}")       
         if count_new_max <= 0: 
@@ -591,10 +589,9 @@ class RGMM(nn.Module):
         five_right /= torch.sqrt(torch.det(self.covs[self.G_max]))
         five = five_left >= five_right # (Equation 23)
         print(f"five: {five}")
-
-
-        _is_convergence = torch.stack([one, two, three, four, five])
-        return torch.all(_is_convergence).item()
+        
+        is_convergence = torch.stack([one, two, three, four, five])
+        return torch.all(is_convergence).item()
     
     def _log_likelihood(
         self,
@@ -645,20 +642,20 @@ class RGMM(nn.Module):
         Returns:
             bool: True if converged, False otherwise.
         """
-        columns = [f"dim_{i}" for i in range(self.d)] + ["label"]
+        x_cpu = x.detach().cpu().tolist()
+        feature_cols = [f"dim_{i}" for i in range(self.d)] + ["label"]
         
-        n, d = x.shape
         # Initial posterior update: hard assignments -> soft assignments 
         p_zero = self._zeroth_posterior_update(x) # [n, k]: posterior probability of each sample belonging to Gaussian component k 
         
         # General computations         
-        r_idxs = torch.arange(n, device=self.device) # [n]
+        r_idxs = torch.arange(self.n, device=self.device) # [n]
         c_idxs = torch.argmax(p_zero, dim=-1) # [n]: Gaussian component k each sample most likely belongs to (hard assignment)
         
         # Initial mixture weights
         counts = torch.zeros(size=(self.k, ), dtype=self.dtype, device=self.device)
         counts.scatter_add_(0, c_idxs, torch.ones_like(c_idxs, dtype=self.dtype, device=self.device))
-        self.weights.copy_(counts / n) # [k]
+        self.weights = counts / self.n # [k]
         
         # Posterior update loop: 
         for i in tqdm(range(self.max_iter)): 
@@ -673,8 +670,8 @@ class RGMM(nn.Module):
             self.count_G_min = self.idxs_min.numel() # []: number of samples in the Gaussian with the smallest entropy 
             self.count_G_max = self.idxs_max.numel() # []: number of samples in the Gaussian with the biggest entropy 
             
-            x_min_zero = x.clone()[self.idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
-            x_max_zero = x.clone()[self.idxs_max] # [count_G_max, d]: samples belonging to the Gaussian with the biggest entropy
+            x_min_zero = x[self.idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
+            x_max_zero = x[self.idxs_max] # [count_G_max, d]: samples belonging to the Gaussian with the biggest entropy
             
             means_zero = self.means.clone()
             covs_zero = self.covs.clone()
@@ -692,21 +689,22 @@ class RGMM(nn.Module):
             is_convergence = self._is_convergence(x_min_zero, x_max_zero, x_min_two, x_max_two, means_zero, covs_zero)
             log_likelihood = self._log_likelihood(x, p_two, self.means.data, self.covs.data)
             
-            # if i % 10 == 0 and self.logger is not None: 
-            #     labels = torch.argmax(p_two, dim=-1).view(-1).tolist()
-            #     data = [list(vec)+[lbl] for vec, lbl in zip(x, labels)]
-            #     table = wandb.Table(columns=columns, data=data)
-            #     self.logger.log_dict({"high_dim_emb": table})
-            #     self.logger.log_dict({"log_likelihood": log_likelihood})
+            if self.logger is not None: 
+                self.logger.experiment.log({"log_likelihood": log_likelihood})
+                
+                if  i%10 == 0: 
+                    labels_cpu = torch.argmax(p_two, dim=-1).flatten().detach().cpu().tolist()
+                    data = [vec+[lbl] for vec, lbl in zip(x_cpu, labels_cpu)]
+                    table = wandb.Table(columns=feature_cols, data=data)
+                    self.logger.experiment.log({"high_dim_emb": table})
             
-            print(f"log_likelihood: {log_likelihood}")
-
             if is_convergence: 
-                print("Algorithm has succesfully converged!")
-                return True 
+                print(f"log_likelihood: {log_likelihood}")
+                print("Algorithm has succesfully converged!") 
+        
+                return True           
             else: 
                 p_zero = p_two 
-                i += 1
                 
         return False
     
@@ -727,7 +725,7 @@ class RGMM(nn.Module):
     def forward(
         self, 
         x: TensorType["n", "d"], 
-        x_plus: Optional[TensorType["n", "d"]]=None, 
+        x_plus: TensorType["n", "d"], 
         weights: Optional[TensorType["k"]]=None, 
         means: Optional[TensorType["k", "d"]]=None,  
         covs: Optional[TensorType["k", "d", "d"]]=None
@@ -747,9 +745,10 @@ class RGMM(nn.Module):
         
         assert x.numel() != 0, "Inputs cannot be empty!"
         assert x_plus.numel() != 0, "Positive pairs cannot be empty!"
-   
+         
         self.dtype = x.dtype
         self.device = x.device
+        self.n, _ = x.shape
         
         if weights is not None: 
             self.weights.copy_(weights)
@@ -760,8 +759,10 @@ class RGMM(nn.Module):
         
         self.component_distribution = self._get_mixture_model(means=self.means, covs=self.covs)
         
-        _ = self._update_gmm(x)
-        # loss_cl, loss_bml = self._update_encoder(x, x_plus) 
-        
-        #  return loss_cl, loss_bml
-        return None
+        is_convergence = self._update_gmm(x)
+        if is_convergence: 
+            print("Hello, now we update the encoder")
+            loss_cl, loss_bml = self._update_encoder(x, x_plus)
+            return loss_cl, loss_bml 
+        else: 
+            return None

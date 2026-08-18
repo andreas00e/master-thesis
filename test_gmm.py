@@ -1,15 +1,15 @@
+import logging 
 import torch
 
-
+from lightning.pytorch.loggers import WandbLogger
 from models.discover.utils.cluster import KMeans, RGMM
 
 import wandb
         
 def main(): 
-    wandb.init(project="scatter-plot")
-    
-    
-    k = 20
+    run = wandb.init(project="scatter-plot")
+
+    k = 5
     d = 4
     
     kmeans_kwargs = {
@@ -18,37 +18,34 @@ def main():
         "tol": 1e-4
     }
     
-    gmm_kwargs = {
+    rgmm_kwargs = {
         "k": k,  
         "d": d,
-        "alpha": 0.1, 
-        "beta": 0.2, 
+        "max_iter": 300, 
+        "bml_weight": 0.1,
+        "bml_alpha": 0.1, 
+        "bml_beta": 0.2, 
         "sim": {
             "dim": 1, 
             "eps": 1.0e-6
         }
     } 
     
-    device = "cuda" if torch.cuda.is_available() else "cpu"   
+    device = "cuda" if torch.cuda.is_available() else "cpu" 
     
     kmeans = KMeans(**kmeans_kwargs).to(device)
+    rgmm = RGMM(**rgmm_kwargs).to(device)
+    
+    lightning_logger = WandbLogger(project=run.project, id=run.id, resume="must")
+    rgmm.logger = lightning_logger
 
     x = torch.rand(size=(10_000, d)).to(device)
-    # x_plus = torch.rand(size=(100, d)).to(device)
+    x_plus = torch.rand(size=(10_000, d)).to(device)
     
     weights, means, covs, labels = kmeans(x).values()
     
-    # columns = [f"dim_{i}" for i in range(d)] + ["label"]
-    # data = [list(vec)+[lbl] for vec, lbl in zip(x, labels)]
-    
-    # table = wandb.Table(columns=columns, data=data)
-    # wandb.log({"embeddings": table})
-    
-    
-    gmm = RGMM(weights=weights, means=means, covs=covs, **gmm_kwargs).to(device)
-    _ = gmm(mode="update_gmm", x=x)
-    # out = gmm(mode="update_encoder", x=x, x_plus=x_plus)
-    print("Hello")
+    _ = rgmm(x=x, x_plus=x_plus, weights=weights, means=means, covs=covs)
+    print("FInished!")
 
 if __name__ == "__main__": 
     main()
