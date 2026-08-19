@@ -1,6 +1,5 @@
 import os 
 import pandas as pd
-from omegaconf import DictConfig 
 from typing import  List, Optional, Tuple, Union
 
 import lightning as pl 
@@ -19,10 +18,10 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         window: int,
         chunks: int,
         crop_factor: float,  
-        depth: bool, 
+        noise_level: float, 
         robots: Optional[Union[str, List]], 
         tasks: Optional[Union[str, List]], 
-        expand_depth: Optional[str], # grayscale, colormap 
+        depth: bool, 
         batch_size: int,
         shuffle: bool,  
         num_workers: int, 
@@ -40,10 +39,10 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.window = window
         self.chunks = chunks
         self.crop_factor = crop_factor 
-        self.depth = depth 
+        self.noise_level = noise_level
         self.robots = list(robots) if isinstance(robots, str) else robots
-        self.tasks = list(tasks)  if isinstance(robots, str) else tasks
-        self.expand_depth = expand_depth         
+        self.tasks = list(tasks) if isinstance(robots, str) else tasks
+        self.depth = depth
         
         # Dataloading kwargs
         self.batch_size = batch_size
@@ -59,29 +58,48 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
 
         # File handling 
         self.files = get_files(self.data_dir, self.depth, self.robots, self.tasks)
-        self.depths = None
-        # self.depths = get_depths(self.meta_dir)
         self.meta_data = get_metadata(self.meta_dir, self.files)
         self.df_gripper = pd.read_csv(os.path.join(self.meta_dir, "gripper_state_robot.csv"))
         self.demo_map, self.window = get_demomap(self.meta_data, self.files, self.window)
-    
-        self.train_dataset, self.val_dataset, self.test_dataset = self.setup()
         
-    def setup(self, stage=None) -> Tuple[Dataset, Dataset, Dataset]:
+        print(f"Number of demos in demo_map: {len(self.demo_map)}")
+    
+        self.dataset_, self.train_dataset, self.val_dataset, self.test_dataset = [None]*4 
+    
+    def teardown(self, stage=None) -> None:
+        dataset_ = getattr(self, "dataset_", None)
+        
+        if dataset_ is None: 
+            return 
+        if not (hasattr(dataset_, "close") and callable(dataset_.close)): 
+            return      
+        try: 
+            dataset_.close()
+        except Exception: 
+            if getattr(self, "trainer", None) is not None: 
+                logger = getattr(self.trainer, "logger", None)
+                if logger is not None: 
+                    step = getattr(self.trainer, "global_step", 0)
+                    logger.log_metrics({"datamodule/teardown_error": 1.0}, step=step)        
+        
+        self.dataset_ = None 
+        self.train_dataset = None 
+        self.val_dataset = None 
+        self.test_dataset = None 
+       
+    def setup(self, stage=None) -> None:
         dataset = MimicGenRobotDataset(
             demo_map=self.demo_map[:1000],
-            df_gripper=self.df_gripper, 
-            depths=self.depths,
+            df_g=self.df_gripper, 
             window=self.window,
             chunks=self.chunks, 
             crop_factor=self.crop_factor,
-            depth=self.depth, 
-            expand_depth=self.expand_depth,
+            noise_level=self.noise_level,
             transforms=self.transforms
             )
         
-        train_dataset, val_dataset, test_dataset = random_split(dataset, lengths=self.dataset_lengths)
-        return train_dataset, val_dataset, test_dataset
+        self.dataset_ = dataset
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, lengths=self.dataset_lengths)
     
     def train_dataloader(self):
         train_dataloader = DataLoader(
