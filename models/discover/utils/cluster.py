@@ -8,16 +8,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as D
 from torchtyping import TensorType
-from torch.linalg import cholesky_ex, eigh
+from torch.linalg import cholesky_ex, eigvalsh
 
 import wandb
 
 class KMeans(nn.Module):
     def __init__(
         self, 
-        k: int=3, 
-        max_iter: Optional[int]=300, 
-        tol: Optional[float]=1e-4
+        k: int, 
+        max_iter: Optional[int], 
+        tol: Optional[float]
         ) -> None:
         super().__init__()
         
@@ -43,8 +43,8 @@ class KMeans(nn.Module):
         return distances
      
     def _fit(self, x: TensorType["n", "d"]) -> "KMeans":
-        n, d = x.shape
-        assert n >= self.k, "Need at least k points"
+        n, _ = x.shape
+        assert n >= self.k, f"Need at least {self.k} points, got {n}"
         
         # Random init from data 
         rand_idxs = torch.randperm(n, device=x.device)[:self.k]
@@ -108,6 +108,9 @@ class RGMM(nn.Module):
         self, 
         k: int, # number of Gaussian distributions  
         d: int, # dimension of data and parameters of Gaussian distributions 
+        jitter_noise: float, 
+        shift_scale: float, 
+        shift_bias: float, 
         max_iter: int,
         bml_weight: float, 
         bml_alpha: float, 
@@ -118,11 +121,13 @@ class RGMM(nn.Module):
         
         self.k = k 
         self.d = d
+        self.jitter_noise = jitter_noise
+        self.shift_scale = shift_scale 
+        self.shift_bias = shift_bias 
         self.max_iter = max_iter
         self.bml_weight = bml_weight
         self.bml_alpha = bml_alpha 
         self.bml_beta = bml_beta 
-        self.sim = sim
         
         weights = torch.ones(self.k, dtype=torch.float32) / self.k
         means = torch.randn(size=(self.k, self.d), dtype=torch.float32)
@@ -135,7 +140,7 @@ class RGMM(nn.Module):
         self.tau = nn.Parameter(data=torch.randn((1, ), dtype=torch.float32)) # [1]
         self.lam = nn.Parameter(data=torch.randn(size=(1, ), dtype=torch.float32)) # [1]
         
-        self.sim = nn.CosineSimilarity(**self.sim)
+        self.sim = nn.CosineSimilarity(**sim)
         
         self.component_distribution, self.dtype, self.device, self.logger = [None]*4
         self.G_min, self.G_max, self.count_G_min, self.count_G_max, self.idxs_min, self.idxs_max, self.n = [0]*7 
@@ -184,16 +189,22 @@ class RGMM(nn.Module):
         Returns:
             TensorType: Positive definite covariance matrices of shape [k, d, d].
         """
-        A = (A + A.transpose(-1, -2)) / 2  # make all covariance matrices symmetric
-        # Make all covariance matrices positive definite
-        # Eigendecomposition
-        eigenvals, _ = eigh(A)
+        eye = torch.eye(self.d, dtype=self.dtype, device=self.device)
+        
+        # -> Symmetric covariance matrices 
+        A = (A + A.transpose(-1, -2)) / 2 
+        
+        # -> Positive definite covariance matrices 
+        A = A.to(torch.float64)
+        A = A + self.jitter_noise * eye
+        
+        eigenvals = eigvalsh(A) # eigendecomposition
         min_eig = eigenvals.amin(dim=-1)  
-        # Eigenvalue clipping
-        shift = torch.clamp(-min_eig, min=0) * 1.1 + 1e-6 
-        # Reconstruction
-        eye = torch.eye(A.shape[-1], device=A.device, dtype=A.dtype)
-        A += shift.view(-1, 1, 1) * eye
+        shift = torch.clamp(-min_eig, min=0) * self.shift_scale + self.shift_bias # eigenvalue clipping
+        
+        # -> Reconstruction
+        A = A + shift[..., None, None] * eye
+        A = A.to(self.dtype)
 
         return A
 
@@ -517,8 +528,8 @@ class RGMM(nn.Module):
         cov_max_two = torch.sum(cov_max_two, dim=0) / count_new_max # [d, d]
         self.covs[[self.G_min, self.G_max]] = torch.vstack((cov_min_two[None, ...], cov_max_two[None, ...]))
         
-        if not self._is_pos_def(self.covs[[self.G_min, self.G_max]]): 
-            self.covs[[self.G_min, self.G_max]] = self._to_pos_def(self.covs[[self.G_min, self.G_max]])
+        if not self._is_pos_def(self.covs): 
+            self.covs = self._to_pos_def(self.covs)
             
         component_distribution = self._get_mixture_model(means=self.means, covs=self.covs)
         
@@ -687,16 +698,16 @@ class RGMM(nn.Module):
         
             # Check for convergence
             is_convergence = self._is_convergence(x_min_zero, x_max_zero, x_min_two, x_max_two, means_zero, covs_zero)
-            log_likelihood = self._log_likelihood(x, p_two, self.means.data, self.covs.data)
+            log_likelihood = self._log_likelihood(x, p_two, self.means, self.covs)
             
             if self.logger is not None: 
-                self.logger.experiment.log({"log_likelihood": log_likelihood})
+                self.logger.log({"log_likelihood": log_likelihood})
                 
                 if  i%10 == 0: 
                     labels_cpu = torch.argmax(p_two, dim=-1).flatten().detach().cpu().tolist()
                     data = [vec+[lbl] for vec, lbl in zip(x_cpu, labels_cpu)]
                     table = wandb.Table(columns=feature_cols, data=data)
-                    self.logger.experiment.log({"high_dim_emb": table})
+                    self.logger.log({"high_dim_emb": table})
             
             if is_convergence: 
                 print(f"log_likelihood: {log_likelihood}")
@@ -763,6 +774,9 @@ class RGMM(nn.Module):
         if is_convergence: 
             print("Hello, now we update the encoder")
             loss_cl, loss_bml = self._update_encoder(x, x_plus)
+            
+            print(f"loss_cl: {loss_cl}")
+            print(f"loss_bml: {loss_bml}")
             return loss_cl, loss_bml 
         else: 
-            return None
+            return 0, 0

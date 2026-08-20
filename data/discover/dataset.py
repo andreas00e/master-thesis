@@ -16,7 +16,7 @@ class MimicGenRobotDataset(Dataset):
         demo_map: List[Tuple[os.PathLike, int, int]],
         df_g: pd.DataFrame, 
         window: int,
-        chunks: int, 
+        chunk: int, 
         crop_factor: float, 
         noise_level: float, 
         transforms: List[str]
@@ -29,7 +29,7 @@ class MimicGenRobotDataset(Dataset):
         self.demo_map = demo_map
         self.df_g = df_g
         self.window = window
-        self.chunks = chunks 
+        self.chunk = chunk
         self.crop_factor = crop_factor
         self.noise_level = noise_level
 
@@ -81,8 +81,8 @@ class MimicGenRobotDataset(Dataset):
         rgb_two_pos = self.transforms_pos(rgb_two) # [n, c=3, h=224, w=224]
         rgb_two = self.transforms(rgb_two) # [n, c=3, h=224, w=224]  
             
-        offsets = torch.randint(0, rgb_one.shape[0]-self.window+1, size=(self.chunks, )) # indexing, not slicing
-        idxs = offsets[:, None] + torch.arange(self.window) # [chunks, window]
+        offsets = torch.randint(0, rgb_one.shape[0]-self.window+1, size=(self.chunk, )) # indexing, not slicing
+        idxs = offsets[:, None] + torch.arange(self.window) # [chunk, window]
        
         g_qpos_full = hf["data"][demo]["obs"]["robot0_gripper_qpos"][()] # [n, d]: d in {2, 6}
         g_min = self.df_g[f"{robot}_min"].values[:g_qpos_full.shape[1]][None, :] # [1, d]
@@ -91,16 +91,14 @@ class MimicGenRobotDataset(Dataset):
         g_qpos_full = np.clip((g_qpos_full - g_min) / (g_max - g_min), 0.0, 1.0) # [n, d]
         g_qpos_full = np.mean(g_qpos_full, axis=-1)
         g_qpos_full = torch.from_numpy(g_qpos_full).to(torch.float32) # [n]
-        g_qpos = g_qpos_full[idxs] # [chunks, window]
+        g_qpos = g_qpos_full[idxs] # [chunk, window]
         g_qpos_plus = torch.clip(g_qpos + self.noise_level * torch.randn_like(g_qpos), 0.0, 1.0)
         
-
-        
-        item["rgb_one"] = rgb_one[idxs, ...]
+        item["rgb_one"] = rgb_one[idxs, ...] # [chunk, window, c, h, w]
         item["rgb_one_plus"] = rgb_one_pos[idxs, ...] 
         item["rgb_two"] = rgb_two[idxs, ...]
         item["rgb_two_plus"] = rgb_two_pos[idxs, ...]
-        item["g_qpos"] = g_qpos[idxs]
-        item["g_qpos_plus"] = g_qpos_plus[idxs]
+        item["g_qpos"] = g_qpos
+        item["g_qpos_plus"] = g_qpos_plus
         item["idxs"] = idxs
         return item 

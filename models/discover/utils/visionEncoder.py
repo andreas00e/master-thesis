@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn 
 from torchtyping import TensorType
 
-
 from models.utils.utils import PE
 
 
@@ -19,7 +18,7 @@ class VisionEncoder(nn.Module):
         
         super().__init__()
         
-        # TODO: 
+        # TODO: Change that wierd stuff
         encoder_layer_dict = OmegaConf.to_container(encoder_layer_kwargs, resolve=True) if isinstance(encoder_layer_kwargs, DictConfig) else encoder_layer_kwargs
         transformer_encoder_dict = OmegaConf.to_container(transformer_encoder_kwargs, resolve=True) if isinstance(transformer_encoder_kwargs, DictConfig) else transformer_encoder_kwargs
         out_dict = OmegaConf.to_container(out_kwargs, resolve=True) if isinstance(out_kwargs, DictConfig) else out_kwargs

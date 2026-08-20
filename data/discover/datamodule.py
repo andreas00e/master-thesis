@@ -16,7 +16,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         data_dir: os.PathLike, # directory containing the hdf5 trajectory files 
         meta_dir: os.PathLike, # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
         window: int,
-        chunks: int,
+        chunk: int,
         crop_factor: float,  
         noise_level: float, 
         robots: Optional[Union[str, List]], 
@@ -37,7 +37,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.data_dir = data_dir
         self.meta_dir = meta_dir
         self.window = window
-        self.chunks = chunks
+        self.chunk = chunk
         self.crop_factor = crop_factor 
         self.noise_level = noise_level
         self.robots = list(robots) if isinstance(robots, str) else robots
@@ -89,10 +89,10 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
        
     def setup(self, stage=None) -> None:
         dataset = MimicGenRobotDataset(
-            demo_map=self.demo_map[:1000],
+            demo_map=self.demo_map[:10],
             df_g=self.df_gripper, 
             window=self.window,
-            chunks=self.chunks, 
+            chunk=self.chunk, 
             crop_factor=self.crop_factor,
             noise_level=self.noise_level,
             transforms=self.transforms

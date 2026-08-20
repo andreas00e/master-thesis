@@ -9,9 +9,9 @@ datamodule:
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
   window: 8 
-  chunks: 2
+  chunk: 10
   crop_factor: 0.75
-  depth: False
+  noise_level: 0.1
   robots: # has to be a list or null!
     - iiwa
     # - panda 
@@ -20,19 +20,18 @@ datamodule:
   tasks: # has to be a list or null!
     # - square
     - threading 
-  expand_depth: colormap 
-  batch_size: 2
+  depth: False
+  batch_size: 4
   shuffle: True
   num_workers: 31
   pin_memory: True
-  drop_last: True
   persistent_workers: True 
   # multiprocessing_context: "forkserver" # prevents fork deadlocks in CUDA DDP
   
   dataset_lengths: 
-  - 0.1
-  - 0.1 
-  - 0.8
+  - 0.2
+  - 0.2 
+  - 0.6
 
   transforms: 
     - to_image
@@ -75,19 +74,22 @@ model:
       max_len: 300
   
   kmeans_kwargs: 
-    k: 20 
+    k: 4 
     max_iter: 200 
     tol: 1e-4
 
   rgmm_kwargs: 
     k: ${model.kmeans_kwargs.k}
     d: ${model.vision_encoder_kwargs.out_kwargs.out_features}
+    jitter_noise: 1e-6
+    shift_scale: 1.1 
+    shift_bias: 1e-5
     max_iter: 200
     bml_weight: 1e-4
     bml_alpha: 0.2
     bml_beta: 0.5
     sim: 
-      dim: 1.0
+      dim: 1
       eps: 1.0e-6
 
   optimizer_kwargs: 

@@ -7,7 +7,7 @@ notebooks/
 outputs/
 wandb/
 
-test_gripper.py
+models/utils/decoder.py
 
 import.log
 requirements.txt

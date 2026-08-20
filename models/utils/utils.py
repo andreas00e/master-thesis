@@ -35,8 +35,8 @@ class PE(nn.Module):
             pe = self.pe[pe_idxs]
             pe = pe.view(*x.shape)
             
-        elif seq_idxs is None: # TODO: Check if this still works fine!
-            pe = self.pe[:, :x.shape[1], :]
+        elif seq_idxs is None: 
+            pe = self.peI
             
         else: 
             raise ValueError
