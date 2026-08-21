@@ -29,9 +29,9 @@ datamodule:
   # multiprocessing_context: "forkserver" # prevents fork deadlocks in CUDA DDP
   
   dataset_lengths: 
-  - 0.2
-  - 0.2 
-  - 0.6
+  - 0.8
+  - 0.1
+  - 0.1
 
   transforms: 
     - to_image
@@ -75,8 +75,9 @@ model:
   
   kmeans_kwargs: 
     k: 4 
+    d: ${model.vision_encoder_kwargs.out_kwargs.out_features}
     max_iter: 200 
-    tol: 1e-4
+    rtol: 1e-4
 
   rgmm_kwargs: 
     k: ${model.kmeans_kwargs.k}

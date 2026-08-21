@@ -22,30 +22,22 @@ class TSE(pl.LightningModule):
         kmeans_kwargs: DictConfig, 
         rgmm_kwargs: DictConfig,
         optimizer_kwargs: DictConfig, 
-        ) -> None:
+        ) -> None: 
         
         super().__init__()
         self.save_hyperparameters() 
         
-        self.gripper_up_kwargs = gripper_up_kwargs
-        self.vision_backbone_kwargs = vision_backbone_kwargs 
-        self.vision_encoder_kwargs = vision_encoder_kwargs 
-        self.kmeans_kwargs = kmeans_kwargs
-        self.rgmm_kwargs = rgmm_kwargs 
         self.optimizer_kwargs = optimizer_kwargs
                 
-        self.gripper_up = nn.Linear(**self.gripper_up_kwargs)
-        self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
-        self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
-        self.kmeans = KMeans(**self.kmeans_kwargs)
-        self.rgmm = RGMM(**self.rgmm_kwargs)
-        self.kmeans.eval() 
+        self.gripper_up = nn.Linear(**gripper_up_kwargs)
+        self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
+        self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
+        self.kmeans = KMeans(**kmeans_kwargs).eval()
+        self.rgmm = RGMM(**rgmm_kwargs)
         
     def setup(self, stage):
-        if self.logger and hasattr(self.logger, "experiment"): 
-            self.rgmm.logger = self.logger.experiment
-        
-        return super().setup(stage)
+        self.rgmm.logger = getattr(self.logger, "experiment", None)
+        return None
     
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
@@ -61,43 +53,29 @@ class TSE(pl.LightningModule):
     
     def forward(
         self, 
-        x: TensorType["batch*chunk*window", "channels", "height", "width"],
-        x_shape: TensorType["batch*chunk*window", "channels", "height", "width"], 
-        idxs: TensorType["batch", "chunk", "window"]
-        ) -> TensorType["batch*chunk", "hidden_dim"]:
+        x: TensorType["b*ck*wd", "c", "h", "w"],
+        x_shape: TensorType["b*ck*wd", "c", "h", "w"], 
+        idxs: TensorType["b", "c", "wd"]
+        ) -> TensorType["b*ck", "d_model"]:
         
-        x = self.visionBackbone(x) # [batch*chunk*window, hidden_dim]
-        x = x.view(-1, x_shape[2], x.shape[-1]) # [batch*chunk, window, hidden_dim]
-        x = self.visionEncoder(x, idxs).squeeze() # [batch*chunk, hidden_dim]
+        x = self.visionBackbone(x) # [b*ck*wd, c_model]
+        x = x.view(-1, x_shape[2], x.shape[-1]) # [b*c, w, d_model]
+        x = self.visionEncoder(x, idxs).squeeze() # [b*ck, d_model]
 
         return x 
  
-    def _shared_step(self, batch: Dict[str, TensorType["batch", "chunk", "window", "*"]], stage: str) -> None: 
-        rgb_one, rgb_one_plus, rgb_two, rgb_two_plus, g_qpos, g_qpos_plus, idxs = batch.values()
-        
-        rgb_shape = rgb_one.shape # [batch, chunk, window, channels, height, width]
-        
-        rgb_one = rgb_one.view(-1, *rgb_shape[3:]) # [batch*chunk*window, channels, height, width]
-        rgb_one_plus = rgb_one_plus.view(-1, *rgb_shape[3:]) # [batch*chunk*window, channels, height, width]
-        
-        g_qpos = g_qpos.view(-1)[:, None] # [batch*chunk*window, 1]
+    def _shared_step(self, batch: Dict[str, TensorType["b", "ck", "wd", "*"]], stage: str) -> float: 
+        rgb_shape = batch["rgb_one"].shape # [b, ck, wd, c=3, h=224, w=224]
+        rgb_one = batch["rgb_one"].view(-1, *rgb_shape[3:]) # [b*ck*wd, c=3, h=224, w=224]
+        rgb_one_plus = batch["rgb_one_plus"].view(-1, *rgb_shape[3:]) # [b*ck*wd, c=3, h=224, w=224]
+        # g_qpos = batch["g_qpos"].view(-1)[:, None] # [b*ck*wd, 1]
 
-        x_emb = self(rgb_one, rgb_shape, idxs) # [batch*chunk*window, hidden_dim]
-        x_plus_emb = self(rgb_one_plus, rgb_shape, idxs) # # [batch*chunk*window, hidden_dim]
-        # gripper_emb = self.gripper(gripper_qpos) # [batch*chunk, window, 256]
+        x_emb = self(rgb_one, rgb_shape, batch["idxs"]) # [b*ck, d_model]
+        x_plus_emb = self(rgb_one_plus, rgb_shape, batch["idxs"]) # [b*ck, d_model]
+        # gripper_emb = self.gripper(gripper_qpos) # [b*ck, wd, d_model]
                 
         weights, means, covs, _ = self.kmeans(x_emb).values()
-        loss_cl, loss_bml = self.rgmm(x_emb, x_plus_emb, weights, means, covs)
-        loss = loss_cl + self.rgmm_kwargs.bml_weight * loss_bml
-        
-        self.log_dict({
-            f"{stage}_loss_cl": 
-                loss_cl, 
-            f"{stage}_loss_bml": 
-                loss_bml, 
-            f"{stage}_loss": 
-                loss
-        })
+        loss = self.rgmm(x_emb, x_plus_emb, weights, means, covs)
         
         return loss
         

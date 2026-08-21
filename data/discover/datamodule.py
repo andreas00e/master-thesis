@@ -1,9 +1,10 @@
 import os 
 import pandas as pd
-from typing import  List, Optional, Tuple, Union
+from termcolor import colored 
+from typing import  List, Optional, Union
 
 import lightning as pl 
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import DataLoader, random_split
 
 from data.utils.load_files import get_files, get_metadata, get_demomap
 from data.discover.dataset import MimicGenRobotDataset
@@ -29,8 +30,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         # multiprocessing_context: str, 
         persistent_workers: bool,
         dataset_lengths: List[int], 
-        transforms: List[str],
-        *args, **kwargs) -> None:
+        transforms: List[str]
+        ) -> None:
         super().__init__()
         
         # Data kwargs
@@ -62,7 +63,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.df_gripper = pd.read_csv(os.path.join(self.meta_dir, "gripper_state_robot.csv"))
         self.demo_map, self.window = get_demomap(self.meta_data, self.files, self.window)
         
-        print(f"Number of demos in demo_map: {len(self.demo_map)}")
+        print(colored(f"Number of demos in demo_map: {len(self.demo_map)}", "green"))
     
         self.dataset_, self.train_dataset, self.val_dataset, self.test_dataset = [None]*4 
     
@@ -89,7 +90,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
        
     def setup(self, stage=None) -> None:
         dataset = MimicGenRobotDataset(
-            demo_map=self.demo_map[:10],
+            demo_map=self.demo_map[:200],
             df_g=self.df_gripper, 
             window=self.window,
             chunk=self.chunk, 

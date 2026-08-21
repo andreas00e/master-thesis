@@ -1,26 +1,35 @@
 import os 
 import h5py 
+import random 
+
+from typing import List 
 
 import torch
 from torch.utils.data import Dataset 
 
-from data.discover.utils import tranforms
-
+# from data.discover.utils. import tranforms
 from models.discover.tse import TSE 
 
 class TestDataset(Dataset): 
     def __init__(
         self, 
         data_dir, 
-        robot, 
-        task, 
-        transforms_list
-        ):
+        robots: List[str], 
+        tasks: List[str]
+    ):
         super().__init__()
-        
-        self.files = [file for file in os.list(dir) if robot in file and task in file]
-        self.transforms = tranforms(transforms_list)
-        
+  
+        all_files = [file for file in os.listdir(data_dir) if "depth" not in file and any(robot in file for robot in robots) and any(task in file for task in tasks)] 
+        random.shuffle(all_files)
+
+        files = [
+            next((f for f in all_files if robot in f and task in f), None)
+            for robot in robots
+            for task in tasks
+        ]
+                    
+        print(files)
+                
     def __len__(self): 
          return 1 
     
@@ -41,27 +50,17 @@ class TestDataset(Dataset):
             
 def main():
     checkpoint_path = "/home/bing_TUM/ehrensberger/master-thesis/"
-    data_dir = "/home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot"
-    robot = "panda"
-    task = "threading"
+    data_dir = "/home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot/"
+    robots = ["iiwa", "panda", "sawyer", "ur5e"]
+    tasks = ["square", "threading"]
     
     dataset_kwargs = {
         "data_dir": data_dir, 
-        "robot": robot, 
-        "task": task 
-    }
-    
+        "robots": robots, 
+        "tasks": tasks 
+    } 
     
     dataset = TestDataset(**dataset_kwargs)
-    model = TSE.load_from_checkpoint(checkpoint_path)
-    model.eval() 
-    
-    data = next(iter(dataset))
-    
-    out = model.self(data)
-   
-    print(out)
-     
 
 if __name__ == "__main__":
     main() 

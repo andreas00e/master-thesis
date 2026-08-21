@@ -1,8 +1,10 @@
 import os
 import h5py
-from tqdm import tqdm 
 import numpy as np 
 import pandas as pd
+from tqdm import tqdm 
+from termcolor import colored 
+
 
 from typing import List, Optional, Union
 
@@ -20,10 +22,20 @@ def get_files(
     
     robots = _filtered_or_all(robots, all_robots)
     tasks  = _filtered_or_all(tasks, all_tasks)
-    files = [os.path.join(data_dir, file) for file in all_files
+    files = [
+        os.path.join(data_dir, file) for file in all_files
         if any(robot in file for robot in robots)
-        and any(task in file for task in tasks)]
+        and any(task in file for task in tasks)
+        ]
     
+    # if stage == "test": 
+    #     random.shuffle(files)
+    #     files = [
+    #         next((f for f in all_files if robot in f and task in f), None)
+    #         for robot in robots
+    #         for task in tasks
+    #     ]
+     
     return files 
 
 def _filtered_or_all(selected: Union[str, List], available: List[str]) -> List[str]: 
@@ -48,7 +60,7 @@ def get_metadata(meta_dir: os.PathLike, files: List[os.PathLike]) -> pd.DataFram
     df = pd.read_csv(meta_file) if os.path.isfile(meta_file) else pd.DataFrame()
 
     new_cols = {}
-    for file in tqdm(files, desc="Fetching length of each demo"):
+    for file in tqdm(files, desc=colored("Fetching length of each demo", "green"), color="green"):
         if file not in df.columns:
             with h5py.File(file, "r") as hf:
                 data = hf["data"]
@@ -66,7 +78,7 @@ def get_demomap(meta_data: pd.DataFrame, files: List[os.PathLike], window: int):
     demo_map = []
     min_horizon = np.inf
     
-    for file in tqdm(files, desc="Fetching mapping from files to individual demos"): 
+    for file in tqdm(files, desc=colored("Fetching mapping from files to individual demos", "green"), color="green"): 
         if file in df.columns:  
             f = [file] * len(df)
             idx = [f"demo_{idx}" for idx in df.index]
