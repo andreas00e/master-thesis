@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as D
 from torchtyping import TensorType
-from torch.linalg import cholesky_ex, eigvalsh
+from torch.linalg import cholesky, cholesky_ex, eigvalsh, solve_triangular
 
 import wandb
 
@@ -152,8 +152,8 @@ class RGMM(nn.Module):
         """Create a mixture model of multivariate Gaussian distributions.
         
         Args:
-            means: Mean vectors of shape [k, d].
-            covs: Covariance matrices of shape [k, d, d].
+            means: Mean vectors of shape [k, d] 
+            covs: Covariance matrices of shape [k, d, d]
         
         Returns:
             D.MultivariateNormal: Multivariate normal distribution.
@@ -165,7 +165,6 @@ class RGMM(nn.Module):
         
         return component_distribution
     
-    @torch.no_grad()
     def _is_pos_def(self, A: TensorType["k", "d", "d"]) -> bool:
         """Check if covariance matrices are positive definite.
         
@@ -181,8 +180,7 @@ class RGMM(nn.Module):
         _, info = cholesky_ex(A) # 2nd: Cholesky decomposition
 
         return bool(torch.all(info == 0))
-    
-    @torch.no_grad()
+
     def _to_pos_def(self, A: TensorType["k", "d", "d"]) -> TensorType["k", "d", "d"]:
         """Convert covariance matrices to positive definite form.
         
@@ -216,24 +214,24 @@ class RGMM(nn.Module):
         x: TensorType["n", "d"],
         weights: TensorType["k"], 
         distribution: D.MultivariateNormal
-        
     ) -> TensorType["n", "k"]:
-        """Compute posterior probabilities using Bayes' rule.
+        """Compute posterior probabilities using Bayes' rule
         
         Args:
-            x: Input data of shape [n, d].
-            weights: Mixture weights of shape [k].
+            x: Input data
+            weights: Mixture weights 
             distribution: Multivariate normal distribution.
         
         Returns:
-            TensorType: Posterior probabilities of shape [n, k].
+            Posterior probabilities
         """
         log_probs = distribution.log_prob(x.unsqueeze(1)) # [n, k]: unweighted log-density
         log_weights = torch.log(weights) # [k]
         log_joint = log_probs + log_weights # [n, k]: log(w_k * log(N(x | mu_k, Sigma_k)) = log(w_k) + log(N(x | mu_k, Sigma_k))
         log_posterior = log_joint - torch.logsumexp(log_joint, dim=-1, keepdim=True) # [n, k]: normalize over k 
+        log_posterior = log_posterior.exp()
         
-        return log_posterior.exp() # [n, k]: posterior probabilities p_{i,k} 
+        return log_posterior # [n, k]: posterior probabilities p_{i,k} 
     
     def _confidence(self, x: TensorType["n", "d"]) -> TensorType["n"]:
         """Compute confidence scores for samples.
@@ -399,20 +397,16 @@ class RGMM(nn.Module):
         return E_min, E_max, G_min, G_max
     
     @torch.no_grad()
-    def _zeroth_posterior_update(
-        self, 
-        x: TensorType["n", "d"]
-        ) -> TensorType["n", "k"]:
-        """Compute initial posterior probabilities.
+    def _zeroth_posterior_update(self, x: TensorType["n", "d"]) -> TensorType["n", "k"]:
+        """Compute initial posterior probabilities
         
         Args:
-            x: Input data of shape [n, d].
+            x: Input data
         
         Returns:
-            TensorType: Posterior probabilities of shape [n, k].
+            Posterior probabilities
         """
-        
-        return self._posterior(x, self.weights, self.component_distribution) # [n, k]
+        return self._posterior(x, self.weights.clone(), self.component_distribution.clone()) # [n, k]
     
     @torch.no_grad()   
     def _first_posterior_update(
@@ -546,20 +540,36 @@ class RGMM(nn.Module):
         return p_one, x_min_two, x_max_two
     
     @torch.no_grad()
-    def _mahalanobis_distance(self, x: TensorType["n", "d"], mean: TensorType["k", "d"], cov: TensorType["k", "d", "d"]) -> TensorType["n"]:
+    def _mahalanobis_distance(
+        self, 
+        x: TensorType["n", "d"],
+        mean: TensorType["d"], 
+        cov: TensorType["d", "d"], 
+        L: Optional[TensorType["d", "d"]]=None
+        ) -> TensorType["n"]:
         """Compute Mahalanobis distance between samples and a Gaussian component.
         
         Args:
-            x: Input samples.
-            mean: Mean of the Gaussian component.
-            cov: Covariance matrix of the Gaussian component.
+            x: Input samples of shape [n, d].
+            mean: Mean of the Gaussian component of shape [d].
+            cov: Covariance matrix of the Gaussian component: of shape [d, d]
+            L: Precomputed Cholesky factor of cov; if None, computed internally from cov
         
         Returns:
-            TensorType: Mahalanobis distances.
+            torch.tensor: Mahalanobis distances of shape [n]
         """
-        distances = (x - mean)[:, None, :] @ torch.inverse(cov)[None, :, :] @ (x - mean)[:, :, None] #  [n, 1, d] * [1, d, d] * [n, d, 1] -> [n, 1, 1]
-        distances = torch.sqrt(distances) # [n, 1, 1]
-        return distances.view(-1) # [n]
+        if L is None: 
+            L = cholesky(cov) # [d, d]: cov = LL^T 
+        
+        # diff^T @ (LL^T)^-1 @ diff = diff^T @ L^-1^T @ L^⁻1 @ diff = (L^-1 @ diff)^T @ L^-1 @ diff = z^T @ z = ||z|| ** 2 
+        # solve_triangular: A * X = B -> B^-1 * A = X^-1
+        
+        diff = (x-mean).unsqueeze(-1) # [n, d, 1]: batch of n columns vectors
+        z = solve_triangular(L, diff, upper=False) # [n, n] @ [n, d, 1] -> [n, d, 1]: solve z = L^-1 @ diff 
+        sq_distance = (z.squeeze(-1) ** 2).sum(-1) # [n]: ||z|| ** 2
+        distances = torch.sqrt(torch.clamp_min(sq_distance, min=0.0)) # [n]: ||z||
+        
+        return distances 
     
     @torch.no_grad()
     def _is_convergence(
@@ -569,20 +579,20 @@ class RGMM(nn.Module):
         x_min_two: TensorType["n_min_two", "d"], 
         x_max_two: TensorType["n_max_two", "d"], 
         means_zero: TensorType["n", "d"],  
-        covs_zero
+        covs_zero: TensorType["n", "d", "d"]
         ) -> torch.Tensor.bool:
         """Check convergence criteria for the GMM update.
         
         Args:
-            x_min_zero: Min entropy data before splits.
-            x_max_zero: Max entropy data before splits.
-            x_min_two: Min entropy data after splits.
-            x_max_two: Max entropy data after splits.
-            means_zero: Original means before updates.
-            covs_zero: Original covariances before updates.
+            x_min_zero: Min entropy data before splits of shape [n_min_zero, d].
+            x_max_zero: Max entropy data before splits of shape [n_max_zero, d].
+            x_min_two: Min entropy data after splits of shape [n_min_two, d].
+            x_max_two: Max entropy data after splits of shape [n_max_two, d].
+            means_zero: Original means before updates of shape [n, d, d].
+            covs_zero: Original covariances before updates of shape [n, d, d].
         
         Returns:
-            bool: True if convergence criteria are satisfied.
+            torch.tensor.bool: True if convergence criteria are satisfied.
         """
         one_left = torch.sum(torch.exp(-self._mahalanobis_distance(x_min_two, self.means[self.G_min], self.covs[self.G_min])))
         one_right = torch.sum(torch.exp(-self._mahalanobis_distance(x_min_zero, means_zero[self.G_min], covs_zero[self.G_min])))
@@ -621,10 +631,10 @@ class RGMM(nn.Module):
         """Compute log-likelihood of the mixture model in terms of the Mahalanobis.
         
         Args:
-            x: Input data.
-            p: Posterior probabilities.
-            means: Component means.
-            covs: Component covariances.
+            x: Input data of shape [n, d]
+            p: Posterior probabilities of shape [n, k].
+            means: Component means of shape [k, d].
+            covs: Component covariances_ of shape [k, d, d].
         
         Returns:
             torch.Tensor: Log-likelihood value.
@@ -637,32 +647,31 @@ class RGMM(nn.Module):
         
         for k in range(self.k): 
             idxs = torch.nonzero(labels == k).view(-1)
+            
             if idxs.numel() == 0: 
                 continue 
+            else: 
+                x_k = x[idxs]    
+                      
+            L = cholesky(covs[k]) # [d, d], covs[k] = L*L^T, L: Lower triangular matrix 
+            log_det_cov_k = 2.0 * torch.sum(torch.log(torch.diagonal(L)))     
             
-            x_k = x[idxs]          
-            L = torch.linalg.cholesky(covs[k])
-            log_det_cov_k = 2.0 * torch.sum(torch.log(torch.diagonal(L)))            
+            d_k = self._mahalanobis_distance(x_k, means[k], covs[k], L)
             
-            d_k = self._mahalanobis_distance(x_k, means[k], covs[k])
-            
-            cluster_ll = torch.sum(-0.5 * d_k - 0.5 * log_det_cov_k + constant_term)
+            cluster_ll = torch.sum(-0.5 * d_k - 0.5 * log_det_cov_k + constant_term) # mixture weights are omitted deliberately
             log_likelihood += cluster_ll
         
         return log_likelihood / x.shape[0]
     
     @torch.no_grad()
-    def _update_gmm(self, x: TensorType["n", "d"]): # TODO: Add return type 
-        """Update Gaussian Mixture Model parameters via iterative entropy-based splitting.
+    def _update_gmm(self, x: TensorType["n", "d"]) -> TensorType["bool"]: 
+        """Update GMM parameters via iterative entropy-based splitting.
         Args:
-            x: Input data of shape [n, d].
+            x: Input data of shape [n, d]
         Returns:
             bool: True if converged, False otherwise.
         """
-        x_cpu = x.clone().cpu().tolist() # copy of data points for later logging
-        feature_cols = [f"dim_{i}" for i in range(self.d)] + ["label"]
-        
-        # Initial posterior update: hard assignments -> soft assignments 
+        # Initial posterior update: kmeans hard assignments -> soft assignments 
         p_zero = self._zeroth_posterior_update(x) # [n, k]: posterior probability of each sample belonging to Gaussian component k 
         
         # General computations         
@@ -672,7 +681,7 @@ class RGMM(nn.Module):
         # Initial mixture weights
         counts = torch.zeros(size=(self.k, ), dtype=self.dtype, device=self.device)
         counts.scatter_add_(0, c_idxs, torch.ones_like(c_idxs, dtype=self.dtype, device=self.device))
-        self.weights = counts / self.n # [k]
+        self.weights.copy(counts / self.n) # [k]
         
         # Posterior update loop: 
         for i in tqdm(range(self.max_iter)): 
@@ -692,11 +701,12 @@ class RGMM(nn.Module):
             
             means_zero = self.means.clone()
             covs_zero = self.covs.clone()
+            
+            # First posterior update
+            p_one = self._first_posterior_update(x, p_zero, x_min_zero, x_max_zero)
 
-            p_one = self._first_posterior_update(x, p_zero.clone(), x_min_zero, x_max_zero)
-
-            # 2nd posterior update
-            p_two, x_min_two, x_max_two = self._second_posterior_update(x, p_one.clone())
+            # Second posterior update
+            p_two, x_min_two, x_max_two = self._second_posterior_update(x, p_one)
         
             # Check for convergence
             is_convergence = self._is_convergence(x_min_zero, x_max_zero, x_min_two, x_max_two, means_zero, covs_zero)
@@ -706,6 +716,8 @@ class RGMM(nn.Module):
                 self.logger.log({"log_likelihood": log_likelihood})
                 
                 if  i%10 == 0: 
+                    x_cpu = x.clone().cpu().tolist() # copy of data points for later logging
+                    feature_cols = [f"dim_{i}" for i in range(self.d)] + ["label"]
                     labels_cpu = torch.argmax(p_two, dim=-1).flatten().detach().cpu().tolist()
                     data = [vec+[lbl] for vec, lbl in zip(x_cpu, labels_cpu)]
                     table = wandb.Table(columns=feature_cols, data=data)
@@ -723,7 +735,7 @@ class RGMM(nn.Module):
         return ValueError
     
     def _update_encoder(self, x: TensorType["n", "d"], x_plus: TensorType["n", "d"]) -> TensorType["1, "]: 
-        """Compute the encoder loss by combining the contrastive (cl) and the bi-directional marginal (bml) losses.
+        """Compute encoder loss by combining contrastive loss (cl), and bi-directional marginal loss (bml)
         
         Args:
             x: Input data
@@ -781,12 +793,15 @@ class RGMM(nn.Module):
         if covs is not None: 
             self.covs.copy_(covs)
         
+        if not self._is_pos_def(self.covs): 
+            self.covs.copy_(self._to_pos_def(self.covs))
+        
         # Initialize GMM
-        self.component_distribution = self._get_mixture_model(means=self.means, covs=self.covs)
-        is_convergence = self._update_gmm(x.clone().detach())
+        self.component_distribution = D.MultivariateNormal(loc=self.means, covariance_matrix=self.covs)
+        is_convergence = self._update_gmm(x.clone().detach()) # pass copy of x, remove that copy from x's computational graph 
         
         if is_convergence :
-            self.component_distribution = self._get_mixture_model(means=self.means, covs=self.covs)
+            self.component_distribution = D.MultivariateNormal(loc=self.means, covariance_matrix=self.covs)
             loss = self._update_encoder(x, x_plus)
             return loss 
         else: 
