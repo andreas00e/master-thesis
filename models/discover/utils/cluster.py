@@ -16,59 +16,64 @@ class KMeans(nn.Module):
     def __init__(
         self, 
         k: int, 
-        max_iter: Optional[int], 
-        tol: Optional[float]
+        d: int, 
+        max_iter: int,
+        rtol: float
         ) -> None:
         super().__init__()
         
+        if k > 0: raise ValueError(f"The number of clusters has to be positive, got {k}!")
+        if d > 0: ValueError(f"The dimension of data points has to be positive, got {d}!")
+        if max_iter > 0: ValueError(f"The number of fit iterations has to be positive, got {max_iter}!")
+        if rtol > 0: ValueError(f"The convergence tolerance has to be positive, got {rtol}!")
+
         self.k = k
+        self.d = d 
         self.max_iter = max_iter
-        self.tol = tol
+        self.rtol = rtol
         
-        weights = torch.empty(size=(1, 1), dtype=torch.float32)
-        means = torch.empty(size=(1, 1), dtype=torch.float32)
-        covs = torch.empty(size=(1, 1, 1), dtype=torch.float32)
-        
-        self.register_buffer("weights", weights) # [k, 1]
-        self.register_buffer("means", means) # [k, d]
-        self.register_buffer("covs", covs) # [k, d, d]
+        self.register_buffer("weights", torch.empty(size=(self.k, ), dtype=torch.float32)) # [k, 1]
+        self.register_buffer("means", torch.empty(size=(self.k, self.d), dtype=torch.float32)) # [k, d]
+        self.register_buffer("covs", torch.empty(size=(self.k, self.d, self.d), dtype=torch.float32)) # [k, d, d]
         
         self.is_fitted = False
-         
+    
+    @torch.no_grad() 
     def _compute_distances(self, x: TensorType["n", "d"]) -> TensorType["n", "k"]:
-        # ||X - C||^2 = ||X||^2 + ||C||^2 - 2*X*C.T  
+          # ||X - C||^2 = ||X||^2 + ||C||^2 - 2*X*C.T  
         x_norm = (x ** 2).sum(dim=1, keepdim=True) # [n, 1]
         c_norm = (self.means ** 2).sum(dim=1, keepdim=True).T # [1, k]
         distances = x_norm + c_norm - 2 * x @ self.means.T # [n, k]
         return distances
-     
+    
+    @torch.no_grad() 
     def _fit(self, x: TensorType["n", "d"]) -> "KMeans":
         n, _ = x.shape
         assert n >= self.k, f"Need at least {self.k} points, got {n}"
         
         # Random init from data 
         rand_idxs = torch.randperm(n, device=x.device)[:self.k]
-        self.means = self.means.expand(self.k, -1) # XXX: Make sure that that has not already been done before 
-        self.means.data = x.clone()[rand_idxs]
+        self.means = x.clone()[rand_idxs] # [k, d]
                 
         for _ in range(self.max_iter):
-            old_means = self.means.data.clone() 
-            distances = self._compute_distances(x) # [n, k]:
+            old_means = self.means.clone() 
+            distances = self._compute_distances(x) # [n, k] 
             labels = torch.argmin(distances, dim=1) # [n]: hard cluster assignments
             one_hot = F.one_hot(labels, num_classes=self.k).to(x.dtype) # [n, k]: one-hot centroid mapping matrix (one in column of assigned cluster; zero elsewhere)      
             counts = torch.clamp(torch.sum(one_hot, dim=0, keepdim=True).T, min=1e-8) # [k, 1] # count points in each cluster (prevent division by zero with small epsilon)
-
             self.means.copy_((one_hot.T @ x) / counts) # [k, n] @ [n, d] / [k, 1]
+            
             # Check for convergence by tracking the shift of the centroids
-            if torch.norm(self.means - old_means) < self.tol:
+            if torch.allclose(self.means, old_means, rtol=self.rtol): 
                 break
 
         self.is_fitted = True
         return self
     
+    @torch.no_grad()
     def _get_covariance(self, x: TensorType["n", "d"], labels: TensorType["n"]) -> TensorType["k", "d", "d"]: 
         covs = []
-        
+
         for k in range(self.k):
             mask = labels == k
             data = x[mask]
@@ -82,22 +87,22 @@ class KMeans(nn.Module):
         covs = torch.stack(covs, dim=0) # [k, d, d]
         return covs 
     
+    @torch.no_grad()
     def forward(self, x: TensorType["n", "d"]) -> Dict[str,TensorType["*"]]:
         if not self.is_fitted:
             self._fit(x)
             
-        distances = self._compute_distances(x)
+        distances = self._compute_distances(x) # [n, k]
         labels = torch.argmin(distances, dim=1) # [n]
-        counts = torch.zeros(self.k, dtype=torch.long, device=x.device)
-        counts.scatter_add_(0, labels, torch.ones_like(labels))
+        counts = torch.zeros(self.k, dtype=torch.long, device=x.device) # [k]
+        counts.scatter_add_(0, labels, torch.ones_like(labels)) #[k]
 
         self.weights = counts.float() / x.shape[0] # [k]: sum to 1 
-        
         self.covs = self._get_covariance(x, labels) # [k, d, d]
         
         return {
             "weights": self.weights, # [k]
-            "means": self.means.data, # [k, d]
+            "means": self.means, # [k, d]
             "covs": self.covs, # [k, d, d]
             "labels": labels # [n]
         } 
@@ -115,7 +120,7 @@ class RGMM(nn.Module):
         bml_weight: float, 
         bml_alpha: float, 
         bml_beta: float, 
-        sim: DictConfig, # parameters of cosine similarity
+        sim: DictConfig # parameters of cosine similarity
         ) -> None: 
         super().__init__()
         
@@ -129,13 +134,9 @@ class RGMM(nn.Module):
         self.bml_alpha = bml_alpha 
         self.bml_beta = bml_beta 
         
-        weights = torch.ones(self.k, dtype=torch.float32) / self.k
-        means = torch.randn(size=(self.k, self.d), dtype=torch.float32)
-        covs = torch.eye(n=self.d).unsqueeze(0).repeat(self.k, 1, 1)
-        
-        self.register_buffer("weights", weights) # [k]
-        self.register_buffer("means", means) # [k, d]
-        self.register_buffer("covs", covs) # [k, d, d]
+        self.register_buffer("weights", torch.ones(self.k, dtype=torch.float32) / self.k) # [k]
+        self.register_buffer("means", torch.randn(size=(self.k, self.d), dtype=torch.float32)) # [k, d]
+        self.register_buffer("covs",  torch.eye(n=self.d).unsqueeze(0).repeat(self.k, 1, 1)) # [k, d, d]
         
         self.tau = nn.Parameter(data=torch.randn((1, ), dtype=torch.float32)) # [1]
         self.lam = nn.Parameter(data=torch.randn(size=(1, ), dtype=torch.float32)) # [1]
@@ -146,7 +147,7 @@ class RGMM(nn.Module):
         self.G_min, self.G_max, self.count_G_min, self.count_G_max, self.idxs_min, self.idxs_max, self.n = [0]*7 
         
         self.relu = nn.ReLU()
-        
+    
     def _get_mixture_model(self, means: TensorType["k", "d"], covs: TensorType["k", "d", "d"]) -> D.MultivariateNormal:
         """Create a mixture model of multivariate Gaussian distributions.
         
@@ -164,6 +165,7 @@ class RGMM(nn.Module):
         
         return component_distribution
     
+    @torch.no_grad()
     def _is_pos_def(self, A: TensorType["k", "d", "d"]) -> bool:
         """Check if covariance matrices are positive definite.
         
@@ -180,6 +182,7 @@ class RGMM(nn.Module):
 
         return bool(torch.all(info == 0))
     
+    @torch.no_grad()
     def _to_pos_def(self, A: TensorType["k", "d", "d"]) -> TensorType["k", "d", "d"]:
         """Convert covariance matrices to positive definite form.
         
@@ -242,10 +245,10 @@ class RGMM(nn.Module):
             TensorType: Confidence scores of shape [n].
         """
         n, _ = x.shape
-        probs = self.components.log_prob(x).exp() # [n, k] 
+        probs = self._posterior(x, self.weights, self.component_distribution) # [n, k]: k posterior probabilites
         vals = torch.topk(probs, k=2, dim=-1).values # [n, 2]
         
-        rows = torch.arange(n, dtype=self.dtype, device=self.device) # [n]
+        rows = torch.arange(n, dtype=torch.long, device=self.device) # [n]
         cols = torch.argmax(probs, dim=1) #  [n]
         
         mask = torch.ones_like(probs, dtype=torch.bool, device=self.device) # [n, k] 
@@ -298,13 +301,13 @@ class RGMM(nn.Module):
         conf_d = torch.var(probs_j, dim=-1) # [b, n]
         conf = conf_n / conf_d # [b, n]
         weight = probs_i_s / conf # [b, n]
-        weight /= torch.sum(weight) # [b, n]
+        weight = weight/ torch.sum(weight) # [b, n]
          
-        d = torch.exp(self.sim(x, x_plus) / self.tau) + weight * torch.exp(self.sim(x, x_negative)) # [n]
-        n = torch.exp(self.sim(x, x_plus) / self.tau) # [b, n]
-        
-        loss_cl = - torch.log(n / torch.sum(d)) # [b, 1] 
-        
+        nom = torch.exp(self.sim(x, x_plus) / self.tau) # [b, n]
+        denom = torch.exp(self.sim(x, x_plus) / self.tau) + weight * torch.exp(self.sim(x, x_negative) / self.tau) # [n]
+
+        loss_cl = - torch.log(nom / torch.sum(denom)) # [b, 1] 
+    
         return loss_cl 
     
     def _false_negatives(self, x: TensorType["n", "d"], x_positive: TensorType["n", "d"]) -> TensorType["n", "d"]:
@@ -318,7 +321,7 @@ class RGMM(nn.Module):
             TensorType: Loss for false negatives.
         """
         probs = self._posterior(x, self.weights, self.component_distribution) # [n, k]: k posterior probabilites
-        probs_i_s, probs_i_m, _, _ = self._get_m_s(probs)
+        probs_i_m, probs_i_s, _, _ = self._get_m_s(probs)
         probs_i = torch.topk(probs, k=2, dim=-1).values # [n, 2]: top 2 biggest posterior probabilities 
         probs_i_m = probs_i[:, 0] # [n, 1]: biggest posterior probabilities (p_max)
         probs_i_s = probs_i[:, 1] # [n, 1]: 2nd biggest posterior probabilities
@@ -351,13 +354,14 @@ class RGMM(nn.Module):
         loss_bml = weight / weight_avg * (self.relu(delta+self.bml_alpha) + (self.relu(-delta-self.bml_beta)))
         loss_bml = torch.scatter_add(output_tensor, 0, inverse_indices, loss_bml)
         
-        if unique_elements.shape != self.n: 
+        if unique_elements.numel() != self.n: 
             out = torch.zeros(size=(self.n, ), device=x.device)
             out[unique_elements] = loss_bml
             loss_bml = out 
 
         return loss_bml
     
+    @torch.no_grad()
     def _entropy_indices(
         self, 
         x: TensorType["n", "d"], 
@@ -378,7 +382,8 @@ class RGMM(nn.Module):
         """
         
         p_max = p[r_idxs, c_idxs].clone() # [n]: biggest component of each sample      
-        p_max *= torch.log(p_max) # [n]: entropy for each sample 
+        p_max = p_max.clamp_min(1e-12)
+        p_max = p_max * torch.log(p_max) # [n]: entropy for each sample 
          
         unique_elements, inverse_indices = torch.unique(c_idxs, return_inverse=True) # [n'], [n]
         out = torch.zeros(size=(unique_elements.shape[0], ), device=x.device) # [n']
@@ -393,6 +398,7 @@ class RGMM(nn.Module):
         
         return E_min, E_max, G_min, G_max
     
+    @torch.no_grad()
     def _zeroth_posterior_update(
         self, 
         x: TensorType["n", "d"]
@@ -407,7 +413,8 @@ class RGMM(nn.Module):
         """
         
         return self._posterior(x, self.weights, self.component_distribution) # [n, k]
-        
+    
+    @torch.no_grad()   
     def _first_posterior_update(
         self, 
         x: TensorType["n", "d"], 
@@ -433,25 +440,24 @@ class RGMM(nn.Module):
         weight_buf = 0.0
         
         # Mean vector of the merged distribution 
-        mean_new = (torch.sum(x_min, dim=0) + torch.sum(x_max, dim=0)) / (self.count_G_min + self.count_G_max) # [d]
+        mean_one = (torch.sum(x_min, dim=0) + torch.sum(x_max, dim=0)) / (self.count_G_min + self.count_G_max) # [d]
         
         # Exchange posterior probabilities
         p_one = p_zero.clone()
         tmp_min = p_one[self.idxs_min, self.G_min].clone()
         tmp_max = p_one[self.idxs_min, self.G_max].clone()
-
         p_one[self.idxs_min, self.G_min] = tmp_max
         p_one[self.idxs_min, self.G_max] = tmp_min
         
         # Covariance matrix of the merged distribution 
-        num_cov = p_one[:, self.G_max][:, None, None] * ((x - mean_new)[:, :, None] * (x - mean_new)[:, None, :]) # [n, 1, 1] * ([n, d, 1] * .[n, 1, d]) -> [n, d, d]
+        num_cov = p_one[:, self.G_max][:, None, None] * ((x - mean_one)[:, :, None] * (x - mean_one)[:, None, :]) # [n, 1, 1] * ([n, d, 1] * .[n, 1, d]) -> [n, d, d]
         num_cov = torch.sum(num_cov, dim=0) # [d, d]
         cov_m = num_cov / (self.count_G_min + self.count_G_max) # [d, d]: new covariance matrix of the Gaussian with the biggest entropy 
         
         # Update weights
         self.weights[[self.G_min, self.G_max]] = torch.tensor((weight_buf, weight_new), dtype=self.dtype, device=self.device) # [2]
         # Update means
-        self.means[self.G_max] = mean_new # [d]
+        self.means[self.G_max] = mean_one # [d]
         # Update covariance matrices
         self.covs[self.G_max] = cov_m # [d, d]
         if not self._is_pos_def(self.covs[self.G_max]): 
@@ -464,30 +470,28 @@ class RGMM(nn.Module):
         p_one[self.idxs_max] = self._posterior(x=x_max, weights=self.weights, distribution=component_distribution) # [n, k]
         
         return p_one
-
+    
+    @torch.no_grad()
     def _second_posterior_update(
         self, 
         x: TensorType["n", "d"], 
         p_one: TensorType["n", "k"]
         ) -> Tuple[TensorType["*"], ...]:
         """Second posterior update: Split merged component along max variance dimension.
-        
         Args:
             x: Input data of shape [n, d].
             p_one: Posterior probabilities after first update of shape [n, k].
-        
         Returns:
             Tuple of (updated_posteriors, x_min, x_max).
         """
         n, _ = x.shape
                  
-        mean_one = self.means[self.G_max].clone() # mean of merged distribution   
-        cov_one = self.covs[self.G_max].clone() # covariance of merged distribution
+        mean_one = self.means.clone()[self.G_max] # mean of merged distribution   
+        cov_one = self.covs.clone()[self.G_max] # covariance of merged distribution
         
         dim_max_var = torch.argmax(torch.diagonal(cov_one)).item() # []: dimension with the biggest variance
 
-        idxs = torch.hstack((self.idxs_min, self.idxs_max)) # [count_G_min+count_G_max, d]: all data points belonging to the merged distribution 
-        idxs = idxs.flatten()
+        idxs = torch.hstack((self.idxs_min, self.idxs_max)).flatten() # [count_G_min+count_G_max, d]: all data points belonging to the merged distribution 
         
         stay_mask = x[idxs, dim_max_var] <= mean_one[dim_max_var] 
         swap_mask = ~stay_mask
@@ -509,13 +513,13 @@ class RGMM(nn.Module):
         p_two[swap_idxs, self.G_min] = tmp_max 
         p_two[swap_idxs, self.G_max] = tmp_min 
 
-        x_min_two = x[swap_idxs].clone() # all samples belonging to the new distribution with the smallest entropy 
-        x_max_two = x[stay_idxs].clone() #all samples belonging to the new distribution with the biggest entropy 
+        x_min_two = x.clone()[swap_idxs] # all samples belonging to the new distribution with the smallest entropy 
+        x_max_two = x.clone()[stay_idxs] #all samples belonging to the new distribution with the biggest entropy 
 
         # Update the mixture weights of the two new Gaussian distributions
         weight_min_two = torch.tensor(count_new_min / n) # []: new weight of the Gaussian with the past smallest entropy 
         weight_max_two = torch.tensor(count_new_max / n) # []: new weight of the Gaussian with the past biggest entropy 
-        self.weights[[self.G_min, self.G_max]] = torch.hstack((weight_min_two, weight_max_two)).to(self.dtype).to(self.device) # [2]
+        self.weights[[self.G_min, self.G_max]].copy_(torch.hstack((weight_min_two, weight_max_two)).to(self.dtype).to(self.device)) # [2]
         
         # update the mean vectorss of the two new Gaussian distributions
         mean_min_two = torch.sum(x_min_two, dim=0) / count_new_min # [d]: new mean vector of the Gaussian with the biggest entropy                
@@ -541,6 +545,7 @@ class RGMM(nn.Module):
         
         return p_one, x_min_two, x_max_two
     
+    @torch.no_grad()
     def _mahalanobis_distance(self, x: TensorType["n", "d"], mean: TensorType["k", "d"], cov: TensorType["k", "d", "d"]) -> TensorType["n"]:
         """Compute Mahalanobis distance between samples and a Gaussian component.
         
@@ -556,6 +561,7 @@ class RGMM(nn.Module):
         distances = torch.sqrt(distances) # [n, 1, 1]
         return distances.view(-1) # [n]
     
+    @torch.no_grad()
     def _is_convergence(
         self, 
         x_min_zero: TensorType["n_min_zero", "d"], 
@@ -604,6 +610,7 @@ class RGMM(nn.Module):
         is_convergence = torch.stack([one, two, three, four, five])
         return torch.all(is_convergence).item()
     
+    @torch.no_grad()
     def _log_likelihood(
         self,
         x: TensorType["n", "d"], 
@@ -643,17 +650,16 @@ class RGMM(nn.Module):
             log_likelihood += cluster_ll
         
         return log_likelihood / x.shape[0]
-
-    def _update_gmm(self, x: TensorType["n", "d"])  -> None:
+    
+    @torch.no_grad()
+    def _update_gmm(self, x: TensorType["n", "d"]): # TODO: Add return type 
         """Update Gaussian Mixture Model parameters via iterative entropy-based splitting.
-        
         Args:
             x: Input data of shape [n, d].
-        
         Returns:
             bool: True if converged, False otherwise.
         """
-        x_cpu = x.detach().cpu().tolist()
+        x_cpu = x.clone().cpu().tolist() # copy of data points for later logging
         feature_cols = [f"dim_{i}" for i in range(self.d)] + ["label"]
         
         # Initial posterior update: hard assignments -> soft assignments 
@@ -681,20 +687,16 @@ class RGMM(nn.Module):
             self.count_G_min = self.idxs_min.numel() # []: number of samples in the Gaussian with the smallest entropy 
             self.count_G_max = self.idxs_max.numel() # []: number of samples in the Gaussian with the biggest entropy 
             
-            x_min_zero = x[self.idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
-            x_max_zero = x[self.idxs_max] # [count_G_max, d]: samples belonging to the Gaussian with the biggest entropy
+            x_min_zero = x.clone()[self.idxs_min] # [count_G_min, d]: samples belonging to the Gaussian with the smallest entropy
+            x_max_zero = x.clone()[self.idxs_max] # [count_G_max, d]: samples belonging to the Gaussian with the biggest entropy
             
             means_zero = self.means.clone()
             covs_zero = self.covs.clone()
-        
-            if E_min <= E_max: 
-                # 1st posterior update
-                p_one = self._first_posterior_update(x, p_zero, x_min_zero, x_max_zero)
-            else: 
-                return False 
+
+            p_one = self._first_posterior_update(x, p_zero.clone(), x_min_zero, x_max_zero)
 
             # 2nd posterior update
-            p_two, x_min_two, x_max_two = self._second_posterior_update(x, p_one)
+            p_two, x_min_two, x_max_two = self._second_posterior_update(x, p_one.clone())
         
             # Check for convergence
             is_convergence = self._is_convergence(x_min_zero, x_max_zero, x_min_two, x_max_two, means_zero, covs_zero)
@@ -709,30 +711,39 @@ class RGMM(nn.Module):
                     table = wandb.Table(columns=feature_cols, data=data)
                     self.logger.log({"high_dim_emb": table})
             
-            if is_convergence: 
-                print(f"log_likelihood: {log_likelihood}")
-                print("Algorithm has succesfully converged!") 
-        
-                return True           
+            if not is_convergence: 
+                p_zero = p_two.clone()  
+                # General computations         
+                r_idxs = torch.arange(self.n, device=self.device) # [n]
+                c_idxs = torch.argmax(p_zero, dim=-1) # [n]: Gaussian component k each sample most likely belongs to (hard assignment)
             else: 
-                p_zero = p_two 
-                
-        return False
+                print("Algorithm has converged!")
+                return None
+                              
+        return ValueError
     
-    def _update_encoder(self, x: TensorType["n", "d"], x_plus: TensorType["n", "d"]) -> Tuple[TensorType[""], TensorType[""]]:
-        """Compute encoder loss combining contrastive and cluster losses.
+    def _update_encoder(self, x: TensorType["n", "d"], x_plus: TensorType["n", "d"]) -> TensorType["1, "]: 
+        """Compute the encoder loss by combining the contrastive (cl) and the bi-directional marginal (bml) losses.
         
         Args:
-            x: Input data.
-            x_plus: Positive pairs.
+            x: Input data
+            x_plus: Positive pairs
         
         Returns:
-            Tuple of (contrastive_loss, cluster_loss).
+            loss: Encoder loss
         """
         loss_cl = self._hard_negatives(x, x_plus)
         loss_bml = self._false_negatives(x, x_plus)
-        return loss_cl, loss_bml
         
+        loss = loss_cl + self.bml_weight * loss_bml
+        
+        if self.logger is not None: 
+            self.logger.log({"loss_cl": loss_cl})
+            self.logger.log({"loss_bml": loss_bml})
+            self.logger.log({"loss": loss})
+        
+        return loss 
+    
     def forward(
         self, 
         x: TensorType["n", "d"], 
@@ -741,26 +752,28 @@ class RGMM(nn.Module):
         means: Optional[TensorType["k", "d"]]=None,  
         covs: Optional[TensorType["k", "d", "d"]]=None
         ) -> TensorType[""]:
-        """Forward pass: Fit GMM, and compute the encoder losses.
+        """Forward pass: Fit GMM, compute encoder losses
         
         Args:
-            weights: Mixture weights.
-            means: Component means.
-            covs: Component covariances.
-            x: Input data of shape [n, d].
-            x_plus: Positive pairs of shape [n, d].
-        
+            x: Input data 
+            x_plus: Positive pairs 
+            weights: Mixture weights
+            means: Component means
+            covs: Component covariances
+
         Returns:
-            Tuple of (contrastive_loss, bi-direcctional marign loss).
+            loss: Encoder loss
         """
-        
-        assert x.numel() != 0, "Inputs cannot be empty!"
-        assert x_plus.numel() != 0, "Positive pairs cannot be empty!"
-         
         self.dtype = x.dtype
         self.device = x.device
-        self.n, _ = x.shape
+        self.n, d = x.shape
         
+        if x.numel() <= 0: raise ValueError("Inputs cannot be empty.") 
+        if x_plus.numel() <= 0: raise ValueError("Positive pairs cannot be empty.")
+        if d != self.d: raise ValueError(f"The dimension of the data, and the dimension of the model should be equal,  \
+            but got dimension {d} for the data, and dimension {self.d} for the model.")
+        
+        # Initialize GMM parameter 
         if weights is not None: 
             self.weights.copy_(weights)
         if means is not None: 
@@ -768,15 +781,13 @@ class RGMM(nn.Module):
         if covs is not None: 
             self.covs.copy_(covs)
         
+        # Initialize GMM
         self.component_distribution = self._get_mixture_model(means=self.means, covs=self.covs)
+        is_convergence = self._update_gmm(x.clone().detach())
         
-        is_convergence = self._update_gmm(x)
-        if is_convergence: 
-            print("Hello, now we update the encoder")
-            loss_cl, loss_bml = self._update_encoder(x, x_plus)
-            
-            print(f"loss_cl: {loss_cl}")
-            print(f"loss_bml: {loss_bml}")
-            return loss_cl, loss_bml 
+        if is_convergence :
+            self.component_distribution = self._get_mixture_model(means=self.means, covs=self.covs)
+            loss = self._update_encoder(x, x_plus)
+            return loss 
         else: 
-            return 0, 0
+            return torch.sum(x) * 0.0 + torch.sum(x_plus) * 0.0
