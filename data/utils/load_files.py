@@ -60,7 +60,7 @@ def get_metadata(meta_dir: os.PathLike, files: List[os.PathLike]) -> pd.DataFram
     df = pd.read_csv(meta_file) if os.path.isfile(meta_file) else pd.DataFrame()
 
     new_cols = {}
-    for file in tqdm(files, desc=colored("Fetching length of each demo", "green"), color="green"):
+    for file in tqdm(files, desc=colored("Fetching length of each demo", "green"), colour="green"):
         if file not in df.columns:
             with h5py.File(file, "r") as hf:
                 data = hf["data"]
@@ -78,7 +78,7 @@ def get_demomap(meta_data: pd.DataFrame, files: List[os.PathLike], window: int):
     demo_map = []
     min_horizon = np.inf
     
-    for file in tqdm(files, desc=colored("Fetching mapping from files to individual demos", "green"), color="green"): 
+    for file in tqdm(files, desc=colored("Fetching mapping from files to individual demos", "green"), colour="green"): 
         if file in df.columns:  
             f = [file] * len(df)
             idx = [f"demo_{idx}" for idx in df.index]

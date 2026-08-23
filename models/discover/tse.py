@@ -66,8 +66,11 @@ class TSE(pl.LightningModule):
  
     def _shared_step(self, batch: Dict[str, TensorType["b", "ck", "wd", "*"]], stage: str) -> float: 
         rgb_shape = batch["rgb_one"].shape # [b, ck, wd, c=3, h=224, w=224]
+        
         rgb_one = batch["rgb_one"].view(-1, *rgb_shape[3:]) # [b*ck*wd, c=3, h=224, w=224]
         rgb_one_plus = batch["rgb_one_plus"].view(-1, *rgb_shape[3:]) # [b*ck*wd, c=3, h=224, w=224]
+
+
         # g_qpos = batch["g_qpos"].view(-1)[:, None] # [b*ck*wd, 1]
 
         x_emb = self(rgb_one, rgb_shape, batch["idxs"]) # [b*ck, d_model]

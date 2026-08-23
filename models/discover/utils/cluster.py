@@ -274,7 +274,7 @@ class RGMM(nn.Module):
         
         return probs_i_m, probs_i_s, idxs_i_m, idxs_i_s
     
-    def _hard_negatives(self, x: TensorType["n", "d"], x_plus: TensorType["n", "d"]) -> TensorType["n", "d"]:
+    def _hard_negatives(self, x: TensorType["n", "d"], x_plus: TensorType["n", "d"]) -> TensorType[""]:
         """Find hard negatives, and compute contrastive loss.
         
         Args:
@@ -305,10 +305,11 @@ class RGMM(nn.Module):
         denom = torch.exp(self.sim(x, x_plus) / self.tau) + weight * torch.exp(self.sim(x, x_negative) / self.tau) # [n]
 
         loss_cl = -torch.log(nom / torch.sum(denom)) # [b, 1] 
-    
+        loss_cl = torch.mean(loss_cl) 
+         
         return loss_cl 
     
-    def _false_negatives(self, x: TensorType["n", "d"], x_positive: TensorType["n", "d"]) -> TensorType["n", "d"]:
+    def _false_negatives(self, x: TensorType["n", "d"], x_positive: TensorType["n", "d"]) -> TensorType[""]:
         """Compute loss accounting for false negatives in clustering.
         
         Args:
@@ -355,7 +356,8 @@ class RGMM(nn.Module):
             out = torch.zeros(size=(n, ), device=x.device)
             out[unique_elements] = loss_bml
             loss_bml = out 
-
+        
+        loss_bml = torch.mean(loss_bml)
         return loss_bml
     
     @torch.no_grad()

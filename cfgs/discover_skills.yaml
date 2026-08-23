@@ -3,6 +3,9 @@ seed: 42
 data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
 meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
 
+d_model: 256
+d_emb: 8 
+
 datamodule: 
   _target_: data.discover.datamodule.MimicGenRobotDataModule
 
@@ -44,20 +47,25 @@ datamodule:
     - normalize
 
 model: 
-  _target_: models.discover.tse.TSE
-  
-  gripper_up_kwargs: 
-    in_features: 1 
-    out_features: 128
+  # _target_: models.discover.tse.TSE
+  _target_: models.discover.tse_new.TSE
 
-  vision_backbone_kwargs: 
-    weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
+  # gripper_up_kwargs: 
+  #   in_features: 1 
+  #   out_features: ${d_model}
+
+  cluster_head_kwargs: 
+    in_features: ${d_model}
+    out_features: 1
+
+  # vision_backbone_kwargs: 
+  #   weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
     
   vision_encoder_kwargs: 
     encoder_layer_kwargs: 
-      d_model: 256
+      d_model: ${d_model}
       nhead: 1 
-      dim_feedforward: 256
+      dim_feedforward: 512
 
     transformer_encoder_kwargs:
       num_layers: 2
@@ -67,31 +75,38 @@ model:
 
     out_kwargs: 
       hidden_features: 32
-      out_features: 4
+      out_features: ${d_emb}
 
     pe_kwargs: 
-      d_model: ${model.vision_encoder_kwargs.encoder_layer_kwargs.d_model}
+      d_model: ${d_model}
       max_len: 300
+
+  vic_reg_kwargs: 
+    lmb: 25
+    mu: 25
+    nu: 1
+    gamma: 1
+    eps: 1e-4
   
   kmeans_kwargs: 
     k: 4 
-    d: ${model.vision_encoder_kwargs.out_kwargs.out_features}
+    d: ${d_emb}
     max_iter: 200 
     rtol: 1e-4
 
-  rgmm_kwargs: 
-    k: ${model.kmeans_kwargs.k}
-    d: ${model.vision_encoder_kwargs.out_kwargs.out_features}
-    jitter_noise: 1e-6
-    shift_scale: 1.1 
-    shift_bias: 1e-5
-    max_iter: 200
-    bml_weight: 1e-4
-    bml_alpha: 0.2
-    bml_beta: 0.5
-    sim: 
-      dim: 1
-      eps: 1.0e-6
+  # rgmm_kwargs: 
+  #   k: ${model.kmeans_kwargs.k}
+  #   d: ${model.vision_encoder_kwargs.out_kwargs.out_features}
+  #   jitter_noise: 1e-6
+  #   shift_scale: 1.1 
+  #   shift_bias: 1e-5
+  #   max_iter: 200
+  #   bml_weight: 1e-4
+  #   bml_alpha: 0.2
+  #   bml_beta: 0.5
+  #   sim: 
+  #     dim: 1
+  #     eps: 1.0e-6
 
   optimizer_kwargs: 
     optimizer: 

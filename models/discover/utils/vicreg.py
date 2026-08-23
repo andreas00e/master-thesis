@@ -3,27 +3,26 @@ import torch.nn.functional as F
 
 from torchtyping import TensorType
 
-class VicReg(): 
+class VICReg(): 
     def __init__(
         self, 
-        lambd_: float, 
+        lmb: float, 
         mu: float, 
         nu: float, 
         gamma: float, 
-        epsilon: float
+        eps: float
         ) -> None:
         
-        self.lambd_ = lambd_
+        self.lmb = lmb
         self.mu = mu 
         self.nu = nu
         self.gamma = gamma
-        self.epsilon = epsilon 
+        self.eps = eps 
     
-    def _variance_loss(self, x: TensorType["n", "d"]): 
-        _, d = x.shape
+    def _variance_loss(self, x: TensorType["n", "d"]) -> TensorType["*"]:         
+        s = torch.sqrt(torch.var(x, dim=-1) + self.eps) # [d]
+        out = 1 / x.shape[-1] * torch.sum(torch.max(0, self.gamma - s)) # []
         
-        s = torch.sqrt(torch.var(x, dim=-1) + self.epsilon) # [d]
-        out = 1 / d * torch.sum(torch.max(0, self.gamma - s))
         return out 
     
     def _covariance_loss(self, x: TensorType["n", "d"]) -> TensorType[""]: 
@@ -33,8 +32,8 @@ class VicReg():
         return out 
     
     def forward(self, z, z_): 
-        inv_loss = self.F.mse_loss(z, z_)
-        var_loss = self._variance_loss(z) + self._variance_loss(z_)
-        cov_loss = torch.cov(z, correction=1) + self._covariance_loss(z_)
+        inv_loss = self.F.mse_loss(z, z_) # []
+        var_loss = self._variance_loss(z) + self._variance_loss(z_) # []
+        cov_loss = torch.cov(z, correction=1) + self._covariance_loss(z_) # []
         
-        return self.lambd_ * inv_loss + self.mu * var_loss + self.nu * cov_loss
+        return self.lmb * inv_loss + self.mu * var_loss + self.nu * cov_loss # []
