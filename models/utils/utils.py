@@ -36,11 +36,8 @@ class PE(nn.Module):
             pe = pe.view(*x.shape)
             
         elif seq_idxs is None: 
-            pe = self.peI
-            
-        else: 
-            raise ValueError
-
+            pe = self.pe
+    
         return x + pe
 
 class NormPE(nn.Module):

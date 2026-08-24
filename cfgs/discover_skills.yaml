@@ -73,10 +73,15 @@ model:
       enable_nested_tensor: False 
       mask_check: False
 
-    out_kwargs: 
+    down_emb_kwargs: 
+      in_features: 1000 
+      out_features: ${d_model}
+    
+    up_emb_kwargs:
+      in_features: ${d_model}
       hidden_features: 32
-      out_features: ${d_emb}
-
+      out_features: ${d_emb} 
+      
     pe_kwargs: 
       d_model: ${d_model}
       max_len: 300

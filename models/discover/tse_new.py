@@ -1,4 +1,4 @@
-from typing import List
+import wandb
 from omegaconf import DictConfig
 
 import torch 
@@ -57,7 +57,7 @@ class TSE(pl.LightningModule):
         ) -> TensorType["batch*chunk", "d_model"]:
         
         x = self.visionBackbone(x) # [batch*chunk*window, d_model]
-        x = x.view(*x_shape[:2], x_shape[2], -1) # [batch*chunk, window, d_model]
+        x = x.view(x_shape[0]*x_shape[1], x_shape[2], -1) # [batch*chunk, window, d_model]
         x = self.visionEncoder(x, idxs) # [batch*chunk, 1, d_model]
         
         return x
@@ -80,25 +80,10 @@ class TSE(pl.LightningModule):
         
         rgb_one_emb = self(rgb_one, rgb_shape, idxs) # [batch*chunk, d_model]
         rgb_two_emb = self(rgb_two, rgb_shape, idxs) # [batch*chunk, d_model]
-        
+            
         loss_align = self.vicReg(rgb_one_emb, rgb_two_emb) # []
         
-        embs = 0.5 * (rgb_one_emb + rgb_two_emb) # [batch*chunk, d_model]
-
-        if batch_idx == 1:
-            self.labels = self.labels.expand(rgb_one.shape[0]) # [batch*chunk]
-            self.labels = self.kMeans(embs.detach()).unsqueeze(-1) # [batch*chunk, 1]
-            
-        x_emb = self.clusterHead(embs) # [batch*chunk, 1]
-        
-        loss_cluster = F.cross_entropy(x_emb, self.labels)
- 
-        logits_rgb_one = self.clusterHead(rgb_one_emb) # [batch*chunk, 1]
-        logits_rgb_two = self.clusterHead(rgb_two_emb) # [batch*chunk, 1]
-        
-        kl_one = self._klDivLoss(logits_rgb_one, logits_rgb_two)
-        
-        return loss_align + loss_cluster + kl_one
+        return loss_align
     
     def training_step(self, batch, batch_idx) -> TensorType["batch"]:  
         return self._shared_step(batch=batch, batch_idx=batch_idx, stage="train")
