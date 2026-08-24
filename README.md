@@ -5,4 +5,6 @@ These learned skills are then used for downstream behavior cloning with a transf
 
 ## 1st: Skill Identification 
 
+Our approach is based on the approach presented in the XSKill paper. It tackles some caveats 
+
 ## 2nd: Skill Transfer 
