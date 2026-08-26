@@ -4,6 +4,7 @@ data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/ro
 meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
 
 d_model: 256
+k: 16
 d_emb: 8 
 
 datamodule: 
@@ -47,16 +48,13 @@ datamodule:
     - normalize
 
 model: 
-  # _target_: models.discover.tse.TSE
-  _target_: models.discover.tse_new.TSE
-
+  _target_: models.discover.tse.TSE
+  # _target_: models.discover.tse_new.TSE
+  
+  sinkhorn_iterations: 3 
   # gripper_up_kwargs: 
   #   in_features: 1 
   #   out_features: ${d_model}
-
-  cluster_head_kwargs: 
-    in_features: ${d_model}
-    out_features: 1
 
   # vision_backbone_kwargs: 
   #   weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
@@ -86,18 +84,23 @@ model:
       d_model: ${d_model}
       max_len: 300
 
-  vic_reg_kwargs: 
-    lmb: 25
-    mu: 25
-    nu: 1
-    gamma: 1
-    eps: 1e-4
+    cluster_head_kwargs: 
+    in_features: ${d_model}
+    out_features: ${k}
+    bias: False
+
+  # vic_reg_kwargs: 
+  #   lmb: 25
+  #   mu: 25
+  #   nu: 1
+  #   gamma: 1
+  #   eps: 1e-4
   
-  kmeans_kwargs: 
-    k: 4 
-    d: ${d_emb}
-    max_iter: 200 
-    rtol: 1e-4
+  # kmeans_kwargs: 
+  #   k: 4 
+  #   d: ${d_emb}
+  #   max_iter: 200 
+  #   rtol: 1e-4
 
   # rgmm_kwargs: 
   #   k: ${model.kmeans_kwargs.k}

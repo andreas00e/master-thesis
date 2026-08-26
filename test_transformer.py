@@ -3,8 +3,6 @@ from omegaconf import DictConfig
 
 import torch 
 import torch.nn as nn 
-import torch.nn.functional as F 
-
 from torchtyping import TensorType
 
 
@@ -16,43 +14,45 @@ class BottlneckFusion(nn.Module):
         ) -> None:
         super().__init__()
         
-        self.device, self.t, self.d = general_kwargs.values()
+        self.device, self.B, self.d = general_kwargs.values() # B: number of bottleneck tokens 
         self.attn = nn.MultiheadAttention(**attn_kwargs)
         
-        self.boto = nn.Parameter(data=torch.empty(size=(self.t, self.d), dtype=torch.float32, device=self.device)) # bottleneck token 
+        self.boto = nn.Parameter(data=torch.empty(size=(self.B, self.d), dtype=torch.float32, device=self.device)) # bottleneck token 
         nn.init.xavier_uniform_(self.boto)
     
-    def forward(self, x: List[TensorType["n", "d"]]) -> TensorType["*"]:
+    def forward(self, x: List[TensorType["n", "d"]]) -> TensorType["n*m+t", "d"]:
         n, _ = x[0].shape
         m = len(x) # number of modalities 
         
         seq = torch.stack(x).view(-1, self.d) # [n*m, d]
-        seq = torch.cat((seq, self.boto))  # [n*m+t, d]
+        seq = torch.cat((seq, self.boto))  # [n*m+B, d]
         
-        attn_mask = torch.zeros(size=(seq.shape[0], seq.shape[0]), dtype=seq.dtype, device=seq.device) # [n*m+t, n*m+t]
-        
+        attn_mask = torch.zeros(size=(seq.shape[0], seq.shape[0]), dtype=seq.dtype, device=seq.device) # [n*m+B, n*m+B]
+                
         for i in range(m):
-              attn_mask[n*i:n*(i+1), :-self.t] = torch.full(size=(n, n*m), fill_value=float("-inf"), dtype=seq.dtype, device=seq.device)
+              attn_mask[n*i:n*(i+1), :-self.B] = torch.full(size=(n, n*m), fill_value=float("-inf"), dtype=seq.dtype, device=seq.device)
               attn_mask[n*i:n*(i+1), n*i:n*(i+1)] = torch.full(size=(n, n), fill_value=0, dtype=seq.dtype, device=seq.device)
-                  
-        print(attn_mask)
-        exit()
-        attn_output, _ = self.attn(seq, seq, seq, attn_mask=attn_mask)
+        
+        attn_output, _ = self.attn(seq, seq, seq, attn_mask=attn_mask) # [n*m+B, d]
+        
+        token_output = attn_output[:-self.B, -self.B:] # [n*m, B]
+        token_output = torch.stack(torch.chunk(token_output, m)) # [m, ]
+        token_output = torch.mean(token_output, dim=1)
 
-        return attn_output
+        return token_output
          
 def main(): 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     n = 2
-    t = 1
-    d = 32
-    m = 5
+    B = 2
+    d = 4
+    m = 2
 
     model_kwargs = {
         "general_kwargs": {
             "device": device,
-            "t": t,
+            "B": B,
             "d": d   
         },"attn_kwargs": {
             "embed_dim": d, 

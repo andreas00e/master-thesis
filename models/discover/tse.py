@@ -1,10 +1,10 @@
-# Temporal Skill Encoder (TSE)
-
 from typing import Dict
 from omegaconf import DictConfig
+from torchvision.models import squeezenet1_1
 
 import torch
 import torch.nn as nn 
+import torch.nn.functional as F
 from torchtyping import TensorType
 import lightning.pytorch as pl 
 
@@ -15,30 +15,22 @@ from models.discover.utils.visionEncoder import VisionEncoder
 
 class TSE(pl.LightningModule): 
     def __init__(
-        self, 
-        gripper_up_kwargs: DictConfig, 
-        vision_backbone_kwargs: DictConfig, 
+        self,
+        sinkhorn_iterations: int,  
         vision_encoder_kwargs: DictConfig, 
-        kmeans_kwargs: DictConfig, 
-        rgmm_kwargs: DictConfig,
+        cluster_head_kwargs: DictConfig, 
         optimizer_kwargs: DictConfig, 
         ) -> None: 
         
         super().__init__()
         self.save_hyperparameters() 
-        
+                
+        self.sinkhorn_iterations = sinkhorn_iterations
         self.optimizer_kwargs = optimizer_kwargs
                 
-        self.gripper_up = nn.Linear(**gripper_up_kwargs)
-        self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
-        self.kmeans = KMeans(**kmeans_kwargs).eval()
-        self.rgmm = RGMM(**rgmm_kwargs)
+        self.clusterHead = nn.Linear(**cluster_head_kwargs) 
         
-    def setup(self, stage):
-        self.rgmm.logger = getattr(self.logger, "experiment", None)
-        return None
-    
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
         scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, **self.optimizer_kwargs.lr_scheduler)
@@ -65,20 +57,28 @@ class TSE(pl.LightningModule):
         return x 
  
     def _shared_step(self, batch: Dict[str, TensorType["b", "ck", "wd", "*"]], stage: str) -> float: 
-        rgb_shape = batch["rgb_one"].shape # [b, ck, wd, c=3, h=224, w=224]
+        obs_shape = batch["rgb_one"].shape # [batch, chunk, window, channels=3, height=224, width=224]
+
+        obs = batch["rgb_two"].view(-1, *obs_shape[3:]) # [batch*chunk*window, channels=3, height=224, width=224]
+        obs_plus = batch["rgb_two_plus"].view(-1, *obs_shape[3:]) # [batch*chunk*window, channels=3, height=224, width=224]
         
-        rgb_one = batch["rgb_one"].view(-1, *rgb_shape[3:]) # [b*ck*wd, c=3, h=224, w=224]
-        rgb_one_plus = batch["rgb_one_plus"].view(-1, *rgb_shape[3:]) # [b*ck*wd, c=3, h=224, w=224]
-
-
-        # g_qpos = batch["g_qpos"].view(-1)[:, None] # [b*ck*wd, 1]
-
-        x_emb = self(rgb_one, rgb_shape, batch["idxs"]) # [b*ck, d_model]
-        x_plus_emb = self(rgb_one_plus, rgb_shape, batch["idxs"]) # [b*ck, d_model]
-        # gripper_emb = self.gripper(gripper_qpos) # [b*ck, wd, d_model]
+        obs_emb = self(obs, obs_plus, batch["idxs"]) # [n=batch*chunk, d_model]
+        obs_plus_emb = self(obs, obs_plus, batch["idxs"]) # [n=batch*chunk, d_model]
                 
-        weights, means, covs, _ = self.kmeans(x_emb).values()
-        loss = self.rgmm(x_emb, x_plus_emb, weights, means, covs)
+        obs_emb = self.clusterHead(obs_emb) # [n, k]
+        obs_plus_emb = self.clusterHead(obs_emb) # [n, k]
+        
+        p_A = F.softmax(obs, dim=-1) # [n, k]
+        p_B = F.softmax(obs, dim=-1) # [n, k]
+        
+        s_A = self.distributed_sinkhorn(obs_emb) # [n, k]
+        s_B = self.distributed_sinkhorn(obs_plus_emb) # [n, k]
+        
+        
+        loss_a = F.cross_entropy(p_A, s_B)  
+        loss_b = F.cross_entropy(p_B, s_A)
+        
+        loss = 1/2 * (loss_a + loss_b)
         
         return loss
         
@@ -90,3 +90,27 @@ class TSE(pl.LightningModule):
 
     def test_step(self, batch, batch_idx) -> TensorType["batch"]:        
         return self._shared_step(batch=batch, stage="test")
+    
+    @torch.no_grad()
+    def distributed_sinkhorn(self, out):
+        Q = torch.exp(out / self.epsilon).t(
+        )  # Q is K-by-B for consistency with notations from our paper
+        B = Q.shape[1]  # number of samples to assign
+        K = Q.shape[0]  # how many prototypes
+
+        # make the matrix sums to 1
+        sum_Q = torch.sum(Q)
+        Q /= sum_Q
+
+        for _ in range(self.sinkhorn_iterations):
+            # normalize each row: total weight per prototype must be 1/K
+            sum_of_rows = torch.sum(Q, dim=1, keepdim=True)
+            Q /= sum_of_rows
+            Q /= K
+
+            # normalize each column: total weight per sample must be 1/B
+            Q /= torch.sum(Q, dim=0, keepdim=True)
+            Q /= B
+
+        Q *= B  # the colomns must sum to 1 so that Q is an assignment
+        return Q.t()
