@@ -91,7 +91,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     def setup(self, stage=None) -> None:
         dataset = MimicGenRobotDataset(
             demo_map=self.demo_map[:200],
-            df_g=self.df_gripper, 
+            df_gripper=self.df_gripper, 
             window=self.window,
             chunk=self.chunk, 
             crop_factor=self.crop_factor,
