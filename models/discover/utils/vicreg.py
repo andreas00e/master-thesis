@@ -19,8 +19,10 @@ class VICReg():
         self.gamma = gamma
         self.eps = eps 
     
-    def _variance_loss(self, x: TensorType["n", "d"]) -> TensorType["*"]:         
-        s = torch.sqrt(torch.var(x, dim=-1) + self.eps) # [d]
+    def _variance_loss(self, x: TensorType["n", "d"]) -> TensorType[""]:  
+        self.gamma = torch.tensor(self.gamma, dtype=x.dtype, device=x.device)
+
+        s = torch.sqrt(torch.var(x) + self.eps) # [d]
         out = 1 / x.shape[-1] * torch.sum(torch.max(0, self.gamma - s)) # []
         
         return out 
@@ -31,8 +33,8 @@ class VICReg():
         
         return out 
     
-    def forward(self, z, z_): 
-        inv_loss = self.F.mse_loss(z, z_) # []
+    def forward(self, z: TensorType["n", "d"], z_: TensorType["n", "d"]) -> TensorType[""]: 
+        inv_loss = F.mse_loss(z, z_) # []
         var_loss = self._variance_loss(z) + self._variance_loss(z_) # []
         cov_loss = torch.cov(z, correction=1) + self._covariance_loss(z_) # []
         

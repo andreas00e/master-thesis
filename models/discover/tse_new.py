@@ -1,3 +1,5 @@
+import math
+import wandb
 from typing import Dict
 from omegaconf import DictConfig
 from torchvision.models import squeezenet1_1
@@ -15,6 +17,9 @@ from models.discover.utils.visionEncoder import VisionEncoder
 
 class TSE(pl.LightningModule): 
     def __init__(
+        self, 
+        general: DictConfig, 
+        cluster_head_kwargs: DictConfig, 
         self,
         sinkhorn_iterations: int,  
         vision_encoder_kwargs: DictConfig, 
@@ -30,6 +35,9 @@ class TSE(pl.LightningModule):
                 
         self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
         self.clusterHead = nn.Linear(**cluster_head_kwargs) 
+        
+        self.C = nn.Parameter(torch.empty(size=(general.d_model. general.k)), dtype=torch.float32, device=self.device) 
+        nn.init._xavier_uniform(self.C)
         
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
@@ -50,6 +58,24 @@ class TSE(pl.LightningModule):
         idxs: TensorType["b", "c", "wd"]
         ) -> TensorType["b*ck", "d_model"]:
         
+        x = self.visionBackbone(x) # [batch*chunk*window, d_model]
+        x = x.view(x_shape[0]*x_shape[1], x_shape[2], -1) # [batch*chunk, window, d_model]
+        x = self.visionEncoder(x, idxs).squeze() # [batch*chunk, d_model]
+        
+        return x
+        
+    
+    def _klDivLoss(self, x, y):
+        x = F.log_softmax(x, dim=-1)
+        y = F.softmax(y, dim=-1) 
+        a = self.kl_loss(x, y)
+        b = self.kl_loss(y, x)
+        out = 0.5 * (a + b)
+        
+        return out 
+    
+    def _shared_step(self, batch, batch_idx, stage): 
+        rgb_shape = batch["rgb_one"].shape # [batch, chunks, window, channels=3, height=224, width=224]
         x = self.visionBackbone(x) # [b*ck*wd, c_model]
         x = x.view(-1, x_shape[2], x.shape[-1]) # [b*c, w, d_model]
         x = self.visionEncoder(x, idxs).squeeze() # [b*ck, d_model]
@@ -60,6 +86,24 @@ class TSE(pl.LightningModule):
         rgb_shape = batch["rgb_one"].shape # [batch, chunk, window, channels=3, height=224, width=224]
         
         
+        rgb_one = batch["rgb_one"].view(-1, *rgb_shape[3:]) # [batch*chunk*window, channels=3, height=224, width=224]
+        rgb_two = batch["rgb_two"].view(-1, *rgb_shape[3:]) # [batch*chunk*window, channels=3, height=224, width=224]
+        idxs = batch["idxs"]
+        
+        rgb_one_z = self(rgb_one, rgb_shape, idxs) # [batch*chunk, d_model]
+        rgb_two_z = self(rgb_two, rgb_shape, idxs) # [batch*chunk, d_model]
+            
+        loss_align = self.vicReg.forward(rgb_one_z, rgb_two_z) # []
+        
+        rgb_one_c = rgb_one_z @ self.C # [batch*chunk, d_c]
+        rgb_two_c = rgb_two_z @ self.C # [batch*chunk, d_c]
+        
+        rgb_one_p = self.clusterHead(rgb_one_c) # [batch*chunk, k]
+        rgb_two_p = self.clusterHead(rgb_two_c) # [batch*chunk, k]
+
+        
+        return loss_align
+    
         rgb_one = batch["rgb_one"] # robot0_eye_in_hand_image
         rgb_two = batch["rgb_two"] # agentview_image
         idxs = batch["idxs"] # idxs

@@ -47,6 +47,7 @@ class VisionEncoder(nn.Module):
         x = torch.concat(tensors=(cls, x), dim=1) # [batch*chunk, 1+window, d_model]
         x = self.pe(x, idxs) # [batch*chunk, 1+window, d_model]
         x = self.encoder_transformer(x) # [batch*chunk, 1+window, d_model]
+        
         x = self.up_emb(x[:, 0, :]) # [batch*chunk, 8]
         
         return x 
