@@ -1,36 +1,34 @@
 import os 
 import pandas as pd
-from termcolor import colored 
 from typing import  List, Optional, Union
 
+import torch
+from torch.utils.data import DataLoader, ConcatDataset, random_split
 import lightning as pl 
-from torch.utils.data import DataLoader, random_split
 
 from data.utils.load_files import get_files, get_metadata, get_demomap
 from data.discover.dataset import MimicGenRobotDataset
-
 from data.utils.collate import collate_discover
 
 
 class MimicGenRobotDataModule(pl.LightningDataModule): 
     def __init__(self, 
-        data_dir: os.PathLike, # directory containing the hdf5 trajectory files 
-        meta_dir: os.PathLike, # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
-        window: int,
-        chunk: int,
-        crop_factor: float,  
+        data_dir: Union[str, os.PathLike], # directory containing the hdf5 trajectory files 
+        meta_dir: Union[str, os.PathLike], # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
         noise_level: float, 
-        robots: Optional[Union[str, List]], 
-        tasks: Optional[Union[str, List]], 
+        robots: Optional[Union[str, List[str]]], 
+        tasks: Optional[Union[str, List[str]]], 
         depth: bool, 
         batch_size: int,
         shuffle: bool,  
         num_workers: int, 
         pin_memory: bool, 
-        # multiprocessing_context: str, 
         persistent_workers: bool,
         dataset_lengths: List[int], 
-        transforms: List[str]
+        transforms: List[str], 
+        crop_factor: Optional[float]=None,
+        window: Optional[int]=None,
+        chunk: Optional[int]=None  
         ) -> None:
         super().__init__()
         
@@ -42,7 +40,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.crop_factor = crop_factor 
         self.noise_level = noise_level
         self.robots = list(robots) if isinstance(robots, str) else robots
-        self.tasks = list(tasks) if isinstance(robots, str) else tasks
+        self.tasks = list(tasks) if isinstance(tasks, str) else tasks
         self.depth = depth
         
         # Dataloading kwargs
@@ -58,53 +56,64 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.transforms = transforms
 
         # File handling 
-        self.files = get_files(self.data_dir, self.depth, self.robots, self.tasks)
+        self.files = get_files(self.data_dir, self.depth, self.robots, self.tasks) # all hdf5 files 
         self.meta_data = get_metadata(self.meta_dir, self.files)
         self.df_gripper = pd.read_csv(os.path.join(self.meta_dir, "gripper_state_robot.csv"))
         self.demo_map, self.window = get_demomap(self.meta_data, self.files, self.window)
-        
-        print(colored(f"Number of demos in demo_map: {len(self.demo_map)}", "green"))
-    
-        self.dataset_, self.train_dataset, self.val_dataset, self.test_dataset = [None]*4 
-    
-    def teardown(self, stage=None) -> None:
-        dataset_ = getattr(self, "dataset_", None)
-        
-        if dataset_ is None: 
-            return 
-        if not (hasattr(dataset_, "close") and callable(dataset_.close)): 
-            return      
-        try: 
-            dataset_.close()
-        except Exception: 
-            if getattr(self, "trainer", None) is not None: 
-                logger = getattr(self.trainer, "logger", None)
-                if logger is not None: 
-                    step = getattr(self.trainer, "global_step", 0)
-                    logger.log_metrics({"datamodule/teardown_error": 1.0}, step=step)        
-        
-        self.dataset_ = None 
-        self.train_dataset = None 
-        self.val_dataset = None 
-        self.test_dataset = None 
+            
+        self.dataset_ = None
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
        
-    def setup(self, stage=None) -> None:
-        dataset = MimicGenRobotDataset(
-            demo_map=self.demo_map[:200],
+    def setup(self, stage: Optional[str]=None) -> None:
+        if getattr(self, "dataset_", None) is not None: 
+            self.teardown(stage=stage)
+            
+        datasets = [
+            MimicGenRobotDataset(
+            demo_map=self.demo_map[f"{str(task)}_{str(robot)}"],
             df_gripper=self.df_gripper, 
             window=self.window,
             chunk=self.chunk, 
             crop_factor=self.crop_factor,
             noise_level=self.noise_level,
             transforms=self.transforms
-            )
+            ) 
+            for task in self.tasks 
+            for robot in self.robots
+        ]
         
-        self.dataset_ = dataset
-        self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, lengths=self.dataset_lengths)
+        generator = torch.Generator().manual_seed(getattr(self, "seed", 42))
+                
+        self.dataset_ = ConcatDataset(datasets)
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(
+            self.dataset_, lengths=self.dataset_lengths, generator=generator
+            )
     
+    def teardown(self, stage: Optional[str]=None) -> None:
+        dataset_ = getattr(self, "dataset_", None)
+        
+        if dataset_ is not None: 
+            datasets_ = getattr(dataset_, "datasets", [dataset_]) 
+
+            for ds in datasets_:
+                if (hasattr(ds, "close") and callable(ds.close)): 
+                    ds.close()
+                                    
+        self.dataset_ = None 
+        self.train_dataset = None 
+        self.val_dataset = None 
+        self.test_dataset = None 
+        
+    def __del__(self):
+        try:
+            self.teardown()
+        except:
+            pass  
+        
     def train_dataloader(self):
-        train_dataloader = DataLoader(
-            collate_fn=collate_discover,    
+        return DataLoader(
             dataset=self.train_dataset, 
             batch_size=self.batch_size, 
             shuffle=self.shuffle,    
@@ -112,29 +121,37 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             pin_memory=self.pin_memory, 
             # multiprocessing_context=self.multiprocessing_context, 
             persistent_workers=self.persistent_workers, 
+            collate_fn=collate_discover  
             )
-        return train_dataloader
     
     def val_dataloader(self):
-        val_dataloader = DataLoader(
-            collate_fn=collate_discover,    
+        return DataLoader(
             dataset=self.val_dataset, 
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
             pin_memory=self.pin_memory, 
             # multiprocessing_context=self.multiprocessing_context, 
             persistent_workers=self.persistent_workers, 
+            collate_fn=collate_discover 
             )
-        return val_dataloader # 1
     
     def test_dataloader(self):
-        test_dataloader = DataLoader(
-            collate_fn=collate_discover,    
+        return DataLoader(
             dataset=self.test_dataset, 
             batch_size=self.batch_size, 
             num_workers=self.num_workers, 
             pin_memory=self.pin_memory, 
             # multiprocessing_context=self.multiprocessing_context, 
             persistent_workers=self.persistent_workers, 
+            collate_fn=collate_discover,    
             )
-        return test_dataloader
+        
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"robots={self.robots}, "
+            f"tasks={self.tasks}, "
+            f"depth={self.depth}, "
+            f"batch_size={self.batch_size}, "
+            f"dataset_lengths={self.dataset_lengths})"
+        )
