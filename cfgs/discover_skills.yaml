@@ -48,11 +48,14 @@ datamodule:
 
 model: 
   # _target_: models.discover.tse.TSE
-  _target_: models.discover.tse_new.TSE
-
+  _target_: models.discover.tse_new_two.TSE
+  
   # gripper_up_kwargs: 
   #   in_features: 1 
   #   out_features: ${d_model}
+  general: 
+    k: 20 # number of skill prototypes/ clusters
+    d_model: ${d_model}
 
   cluster_head_kwargs: 
     in_features: ${d_model}

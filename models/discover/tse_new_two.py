@@ -1,5 +1,4 @@
-import math
-import wandb
+import numpy as np 
 from omegaconf import DictConfig
 
 import torch 
@@ -8,11 +7,6 @@ import torch.nn.functional as F
 from torchvision.models import resnet18
 import lightning.pytorch as pl
 from torchtyping import TensorType 
-
-from models.discover.utils.visionEncoder import VisionEncoder
-from models.discover.utils.cluster import KMeans
-from models.discover.utils.vicreg import VICReg
-
 
 class TSE(pl.LightningModule): 
     def __init__(
@@ -28,19 +22,15 @@ class TSE(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters() 
         
+        print(general)
+        
         self.optimizer_kwargs = optimizer_kwargs
         
-        self.clusterHead = nn.Linear(**cluster_head_kwargs)
         self.visionBackbone = resnet18(weights=None)
-        self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
-        self.vicReg = VICReg(**vic_reg_kwargs)
-        self.kMeans = KMeans(**kmeans_kwargs).eval()
-        
-        self.labels = self.register_buffer("labels", torch.empty(size=(1, ), dtype=torch.int, device=self.device))
-        self.kl_loss = nn.KLDivLoss(reduction="batchmean")
-        
-        self.C = nn.Parameter(torch.empty(size=(general.d_model. general.k)), dtype=torch.float32, device=self.device) 
-        nn.init._xavier_uniform(self.C)
+        self.attention = nn.MultiheadAttention(embed_dim=general.d_model, num_heads=1, batch_first=True)
+
+        self.token = nn.Parameter(data=torch.empty(size=(8, general.d_model), dtype=torch.float32, device=self.device))
+        nn.init.xavier_uniform_(self.token)
         
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
@@ -66,37 +56,32 @@ class TSE(pl.LightningModule):
         x = self.visionEncoder(x, idxs).squeze() # [batch*chunk, d_model]
         
         return x
-        
-    
-    def _klDivLoss(self, x, y):
-        x = F.log_softmax(x, dim=-1)
-        y = F.softmax(y, dim=-1) 
-        a = self.kl_loss(x, y)
-        b = self.kl_loss(y, x)
-        out = 0.5 * (a + b)
-        
-        return out 
-    
+
     def _shared_step(self, batch, batch_idx, stage): 
         rgb_shape = batch["rgb_one"].shape # [batch, chunks, window, channels=3, height=224, width=224]
+        n = rgb_shape[0] * rgb_shape[1] * rgb_shape[2]
         
-        rgb_one = batch["rgb_one"].view(-1, *rgb_shape[3:]) # [batch*chunk*window, channels=3, height=224, width=224]
-        rgb_two = batch["rgb_two"].view(-1, *rgb_shape[3:]) # [batch*chunk*window, channels=3, height=224, width=224]
-        idxs = batch["idxs"]
+        rgb_one = batch["rgb_one"].view(-1, *rgb_shape[3:]) # [n=batch*chunk*window, channels=3, height=224, width=224]
+        rgb_two = batch["rgb_two"].view(-1, *rgb_shape[3:]) # [n=batch*chunk*window, channels=3, height=224, width=224]
         
-        rgb_one_z = self(rgb_one, rgb_shape, idxs) # [batch*chunk, d_model]
-        rgb_two_z = self(rgb_two, rgb_shape, idxs) # [batch*chunk, d_model]
+        token_one = self.visionBackbone(rgb_one) # [n, d_model]
+        token_two = self.visionBackbone(rgb_two) # [n, d_model]
+        
+        seq = torch.cat(tensors=(token_one, token_two, self.token), dim=0) # [n*2+m, d_model]
+        
+        attn_mask = torch.zeros(size=(seq.shape[0], seq.shape[0]), dtype=torch.float32, device=self.device) # [n*2+m, n*2+m]
+        
+        l = int(seq.shape[0] / n - 1)
+        for i in range(l):       
+                attn_mask[n*(1+i):n*(2+i), :l*n] torch.full(size=(n, n), fill_value=-np.inf, dtype=torch.float32, device=self.device)
+                
+                attn_mask[n*(1+i):n*(2+i), n*i:n*(1+i)] = torch.full(size=(n, n), fill_value=-np.inf, dtype=torch.float32, device=self.device)
+                attn_mask[n*i:n*(1+i), n*(1+i):n*(2+i)] = torch.full(size=(n, n), fill_value=-np.inf, dtype=torch.float32, device=self.device)
             
-        loss_align = self.vicReg.forward(rgb_one_z, rgb_two_z) # []
+        out, _ = self.attention(query=seq, key=seq, value=seq, attn_mask=attn_mask)
+        loss = F.mse_loss(seq, out)
         
-        rgb_one_c = rgb_one_z @ self.C # [batch*chunk, d_c]
-        rgb_two_c = rgb_two_z @ self.C # [batch*chunk, d_c]
-        
-        rgb_one_p = self.clusterHead(rgb_one_c) # [batch*chunk, k]
-        rgb_two_p = self.clusterHead(rgb_two_c) # [batch*chunk, k]
-
-        
-        return loss_align
+        return loss
     
     def training_step(self, batch, batch_idx) -> TensorType["batch"]:  
         return self._shared_step(batch=batch, batch_idx=batch_idx, stage="train")
