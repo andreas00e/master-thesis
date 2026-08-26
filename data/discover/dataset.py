@@ -14,6 +14,8 @@ from data.discover.utils.transforms import get_transforms
 class MimicGenRobotDataset(Dataset): 
     def __init__(self, 
         demo_map: List[Tuple[os.PathLike, int, int]],
+        robot: str, 
+        task: str, 
         df_gripper: pd.DataFrame, 
         transforms: List[str],
         noise_level: float, 
@@ -64,7 +66,6 @@ class MimicGenRobotDataset(Dataset):
             self._file_cache[file_path] = hf
         return hf
         
-
     def __getitem__(self, idx: int) -> Dict[str, TensorType["*"]]: 
         item = {}
         file_path, demo, _ =  self.demo_map[idx]
