@@ -5,5 +5,6 @@
     "**/node_modules/**": true,
     "**/.venv/**": true,
     "**/env/**": true
-  }
+  },
+  "python-envs.defaultEnvManager": "ms-python.python:system"
 }
