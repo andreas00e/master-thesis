@@ -1,12 +1,10 @@
 import os
 import h5py
-import numpy as np 
 import pandas as pd
 from tqdm import tqdm 
 from termcolor import colored 
 
-
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Tuple,  Union
 
   
 def get_files(
@@ -76,7 +74,7 @@ def get_demomap(meta_data: pd.DataFrame, files: List[os.PathLike], window: int):
     df = meta_data
     
     demo_map = []
-    min_horizon = np.inf
+    min_horizon = float("inf")
     
     for file in tqdm(files, desc=colored("Fetching mapping from files to individual demos", "green"), colour="green"): 
         if file in df.columns:  
@@ -99,6 +97,43 @@ def get_demomap(meta_data: pd.DataFrame, files: List[os.PathLike], window: int):
     if min_horizon < window: 
         print(f"The chosen size of the window is bigger than the smallest episode length! \n \
                 Therefore, the size of the window gets changed from {window} to {min_horizon}.")
+        window = int(min_horizon)
+    
+    return demo_map, window
+
+def get_demomap(metadata: pd.DataFrame, files: List[os.PathLike], window: int) -> Tuple[Dict[str, List[Tuple[str, int, int]]], int]: 
+    demo_map = {}
+    min_horizon = float("inf")
+    
+    for file in tqdm(files): 
+        key = os.path.basename(file).split(".")[0]  # task_d_{0, 1}_robot
+        
+        if file in metadata.columns:  
+            f = [str(file)] * len(metadata)
+            idx = [f"demo_{i}" for i in metadata.index]
+            n_steps = [int(v) for v in metadata[file].values]
+            demos = list(zip(f, idx, n_steps))
+            
+            if n_steps:
+                min_horizon = min(min_horizon, min(n_steps))
+
+        else:
+            demos = [] 
+            try:  
+                with h5py.File(file, "r") as hf:
+                    data = hf["data"]
+                    for demo, demo_group in data.items():
+                        n_steps = int(demo_group["actions"].shape[0])
+                        demos.append((str(file), str(demo), n_steps)) 
+                        min_horizon = min(min_horizon, n_steps)
+            except Exception as e: 
+                raise FileNotFoundError(f"Could not open file: {file}") from e
+                
+        demo_map[key] = demos
+                   
+    if min_horizon < window: 
+        print(f"The chosen size of the window is bigger than the smallest episode length!\n"
+              f"Therefore, the size of the window gets changed from {window} to {int(min_horizon)}.")
         window = int(min_horizon)
     
     return demo_map, window
