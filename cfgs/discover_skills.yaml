@@ -1,37 +1,34 @@
 seed: 42
 
+d_model: 256 
+d_emb: 8 
+k: 16
+
 data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
 meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
-
-d_model: 256
-k: 16
-d_emb: 8 
 
 datamodule: 
   _target_: data.discover.datamodule.MimicGenRobotDataModule
 
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
-  window: 8 
-  chunk: 10
-  crop_factor: 0.75
-  noise_level: 0.1
-  robots: # has to be a list or null!
+
+  robots: # Union[List[str], null]: iiwa, panda, sawyer, ur5e
     - iiwa
-    # - panda 
-    # - sawyer 
-    # - ur5e
-  tasks: # has to be a list or null!
-    # - square
+  tasks: # Union[List[str], null]: square, threading
     - threading 
-  depth: False
+  depth: False # if True: include depth maps  
+  crop_factor: 0.75 # (0, 1)
+  noise_level: 0.1 # (0, 1)
+  window: 8 # >= 1
+  chunk: 10 # >= 1
+
   batch_size: 4
   shuffle: True
   num_workers: 31
   pin_memory: True
   persistent_workers: True 
   # multiprocessing_context: "forkserver" # prevents fork deadlocks in CUDA DDP
-  
   dataset_lengths: 
   - 0.8
   - 0.1
@@ -51,7 +48,6 @@ model:
   _target_: models.discover.tse.TSE
   # _target_: models.discover.tse_new.TSE
   
-  sinkhorn_iterations: 3 
   # gripper_up_kwargs: 
   #   in_features: 1 
   #   out_features: ${d_model}
@@ -85,16 +81,22 @@ model:
       max_len: 300
 
   cluster_head_kwargs: 
+  cluster_head_kwargs: 
     in_features: ${d_model}
     out_features: ${k}
     bias: False
 
-  # vic_reg_kwargs: 
-  #   lmb: 25
-  #   mu: 25
-  #   nu: 1
-  #   gamma: 1
-  #   eps: 1e-4
+  vic_reg_kwargs: 
+    lmb: 25
+    mu: 25
+    nu: 1
+    gamma: 1
+    eps: 1e-4
+  
+  sinkhorn_kwargs: 
+    sinkhorn_iterations: 3 
+    epsilon: 0.1
+
   
   # kmeans_kwargs: 
   #   k: 4 
@@ -130,6 +132,8 @@ logger:
   project: skill_discovery
 
 trainer: 
+  _target_: lightning.pytorch.trainer
+
   accelerator: gpu   
   # strategy: ddp # delete to run on single gpu
   devices: # for ddp: -1 

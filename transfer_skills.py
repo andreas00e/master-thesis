@@ -13,20 +13,17 @@ warnings.filterwarnings("ignore", category=UserWarning, module="lightning")
 
 
 @hydra.main(config_path="cfgs/", config_name="transfer_skills", version_base=None)
-def main(cfg): 
-    multiprocessing.set_start_method("spawn", force=True)
-    
+def main(cfg):     
     pl.seed_everything(cfg.seed)
 
     datamodule = instantiate(cfg.datamodule)
     model = instantiate(cfg.model)
     logger = instantiate(cfg.logger)
-
-    trainer = pl.Trainer(logger=logger, **cfg.trainer)
-    _ = trainer.fit(model=model, datamodule=datamodule)
+    trainer = instantiate(cfg.trainer, logger=logger)
     
+    trainer.fit(model=model, datamodule=datamodule)
     
-    print("Hello")
 
 if __name__ == "__main__": 
+    multiprocessing.set_start_method("spawn", force=True)
     main()
