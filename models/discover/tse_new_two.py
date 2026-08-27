@@ -73,7 +73,7 @@ class TSE(pl.LightningModule):
         
         l = int(seq.shape[0] / n - 1)
         for i in range(l):       
-                attn_mask[n*(1+i):n*(2+i), :l*n] torch.full(size=(n, n), fill_value=-np.inf, dtype=torch.float32, device=self.device)
+                attn_mask[n*(1+i):n*(2+i), :l*n] =  torch.full(size=(n, n), fill_value=-np.inf, dtype=torch.float32, device=self.device)
                 
                 attn_mask[n*(1+i):n*(2+i), n*i:n*(1+i)] = torch.full(size=(n, n), fill_value=-np.inf, dtype=torch.float32, device=self.device)
                 attn_mask[n*i:n*(1+i), n*(1+i):n*(2+i)] = torch.full(size=(n, n), fill_value=-np.inf, dtype=torch.float32, device=self.device)

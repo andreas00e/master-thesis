@@ -51,13 +51,10 @@ model:
   _target_: models.discover.tse.TSE
   # _target_: models.discover.tse_new.TSE
   
-  sinkhorn_iterations: 3 
   # gripper_up_kwargs: 
   #   in_features: 1 
   #   out_features: ${d_model}
-  general: 
-    k: 20 # number of skill prototypes/ clusters
-    d_model: ${d_model}
+
 
   # vision_backbone_kwargs: 
   #   weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
@@ -87,17 +84,22 @@ model:
       d_model: ${d_model}
       max_len: 300
 
-    cluster_head_kwargs: 
+  cluster_head_kwargs: 
     in_features: ${d_model}
     out_features: ${k}
     bias: False
 
-  # vic_reg_kwargs: 
-  #   lmb: 25
-  #   mu: 25
-  #   nu: 1
-  #   gamma: 1
-  #   eps: 1e-4
+  vic_reg_kwargs: 
+    lmb: 25
+    mu: 25
+    nu: 1
+    gamma: 1
+    eps: 1e-4
+  
+  sinkhorn_kwargs: 
+    sinkhorn_iterations: 3 
+    epsilon: 0.1
+
   
   # kmeans_kwargs: 
   #   k: 4 
