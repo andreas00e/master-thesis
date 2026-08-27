@@ -6,7 +6,7 @@ import torch
 import lightning as pl 
 from torch.utils.data import Dataset, DataLoader, random_split
 
-from data.utils.load_files import get_files, get_metadata, get_demomap
+from data.utils.load_files import get_files, get_metadata, get_demo_list
 from data.utils.collate import collate_transfer
 from data.transfer.dataset import TransferDataset
 
@@ -56,7 +56,7 @@ class TransferDataModule(pl.LightningDataModule):
         self.files = get_files(self.data_dir, self.depth, self.robots, self.tasks)
         self.meta_data = get_metadata(self.meta_dir, self.files)
 
-        self.demo_map, _ = get_demomap(self.meta_data, self.files, 8)
+        self.demo_map, _ = get_demo_list(self.meta_data, self.files, 8)
         
         self.joint_dsc = self._get_joint_dsc()
         self.train_dataset, self.val_dataset, self.test_dataset = self.setup()

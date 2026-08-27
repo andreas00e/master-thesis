@@ -1,12 +1,12 @@
 import os 
 import pandas as pd
-from typing import  List, Optional, Union
+from typing import List, Optional, Union
 
 import torch
 from torch.utils.data import DataLoader, ConcatDataset, random_split
-import lightning as pl 
+import lightning.pytorch as pl 
 
-from data.utils.load_files import get_files, get_metadata, get_demomap
+from data.utils.load_files import get_files, get_metadata, get_demo_list
 from data.discover.dataset import MimicGenRobotDataset
 from data.utils.collate import collate_discover
 
@@ -15,10 +15,13 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     def __init__(self, 
         data_dir: Union[str, os.PathLike], # directory containing the hdf5 trajectory files 
         meta_dir: Union[str, os.PathLike], # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
-        noise_level: float, 
         robots: Optional[Union[str, List[str]]], 
         tasks: Optional[Union[str, List[str]]], 
         depth: bool, 
+        crop_factor: float,        
+        noise_level: float, 
+        window: int, 
+        chunk: int, 
         batch_size: int,
         shuffle: bool,  
         num_workers: int, 
@@ -26,23 +29,26 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         persistent_workers: bool,
         dataset_lengths: List[int], 
         transforms: List[str], 
-        crop_factor: Optional[float]=None,
-        window: Optional[int]=None,
-        chunk: Optional[int]=None  
         ) -> None:
         super().__init__()
+        
+        if not 0 < noise_level < 1: raise ValueError(f"noise_level has to be in (0,1), got {noise_level}.")
+        if num_workers > os.cpu_count(): raise ValueError(f"num_workers is bigger than actual limit, got {num_workers}.")
+        if sum(dataset_lengths) != 1: raise ValueError(f"Sum of dataset lengths do not sum up to 1, got {sum(dataset_lengths)}.")
+        if window < 1: raise ValueError(f"Window size has to be bigger than 1, got {window}.")
+        if chunk < 1: raise ValueError(f"Chunk size has to be bigger than 1, got {chunk}.")
         
         # Data kwargs
         self.data_dir = data_dir
         self.meta_dir = meta_dir
-        self.window = window
-        self.chunk = chunk
-        self.crop_factor = crop_factor 
-        self.noise_level = noise_level
         self.robots = list(robots) if isinstance(robots, str) else robots
         self.tasks = list(tasks) if isinstance(tasks, str) else tasks
         self.depth = depth
-        
+        self.crop_factor = crop_factor
+        self.noise_level = noise_level
+        self.window = window
+        self.chunk = chunk
+
         # Dataloading kwargs
         self.batch_size = batch_size
         self.shuffle = shuffle
@@ -56,10 +62,10 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.transforms = transforms
 
         # File handling 
-        self.files = get_files(self.data_dir, self.depth, self.robots, self.tasks) # all hdf5 files 
+        self.files = get_files(self.data_dir, self.depth, self.robots, self.tasks) # all hdf5 files containg given robot(s) and task(s)
         self.meta_data = get_metadata(self.meta_dir, self.files)
         self.df_gripper = pd.read_csv(os.path.join(self.meta_dir, "gripper_state_robot.csv"))
-        self.demo_map, self.window = get_demomap(self.meta_data, self.files, self.window)
+        self.demo_map, self.window = get_demo_list(self.meta_data, self.files, self.window)
             
         self.dataset_ = None
         self.train_dataset = None

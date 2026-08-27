@@ -1,12 +1,13 @@
 import os
 import h5py
+import numpy as np
 import pandas as pd
 from tqdm import tqdm 
 from pathlib import Path
 from termcolor import colored 
 from typing import Dict, List, Optional, Tuple,  Union
 
-  
+
 def get_files(
     data_dir: Union[str, os.PathLike], 
     depth: bool=False, 
@@ -44,6 +45,49 @@ def get_depths(meta_dir: os.PathLike) -> pd.DataFrame:
     depth_path = Path(meta_dir) / "depths.csv"
     return pd.read_csv(depth_path)  if depth_path.is_file() else pd.DataFrame()
 
+def _get_gripper(meta_dir: Union[str, os.PathLike], files: List[Union[str, os.PathLike]], robots): 
+    meta_dir = Path(meta_dir)
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    meta_file = meta_dir / "meta.csv"
+    
+    df = pd.read_csv(meta_file) if meta_file.is_file() else pd.DataFrame()
+    
+    min = float("inf")
+    max = float("-inf")
+    
+    new_columns = {}
+    for file in tqdm(files, desc="Fetching gripper joint states from each hdf5 file"): 
+        robot = Path(file).stem.split("_")[-1]
+        
+        if robot not in df.columns: 
+            new_df = {}
+            try: 
+                with h5py.File(file, "r") as hf: 
+                    demo_min = []
+                    demo_max = []
+                    data = hf["data"]
+                    for demo in data.keys(): 
+                        gripper_qpos = data[demo]["obs"]["robot0_gripper_qpos"][()]
+                        
+                        demo_min = np.min(gripper_qpos, axis=0)
+                        demo_max = np.max(gripper_qpos, axis=0)
+                       
+                        min_mask = demo_min < df[robot]["min"]
+                        max_mask = demo_max > df[robot]["max"]         
+                
+                        if min_mask.any(): 
+                            new_df[robot]["min"][min_mask] = demo_min[min_mask]
+                        if max_mask.any(): 
+                            new_df[robot]["max"][max_mask] = demo_max[max_mask]
+                    
+            except Exception as e: 
+                raise FileNotFoundError(colored(f"Could not open file: {file}", "red")) from e
+
+        else: 
+            continue
+    
+    return df 
+
 def get_metadata(meta_dir: Union[str, os.PathLike], files: List[Union[str, os.PathLike]]) -> pd.DataFrame:
     meta_dir = Path(meta_dir)
     meta_dir.mkdir(parents=True, exist_ok=True)
@@ -52,7 +96,7 @@ def get_metadata(meta_dir: Union[str, os.PathLike], files: List[Union[str, os.Pa
     df = pd.read_csv(meta_file) if meta_file.is_file() else pd.DataFrame()
 
     new_columns = {}
-    for file in tqdm(files, desc=colored("Fetching number of steps in each demo", "green"), colour="green"):
+    for file in tqdm(files, esc=colored("Fetching number of steps in each demo", "green"), colour="green"):
         file_str = str(file)
         
         if file_str not in df.columns:
@@ -68,6 +112,7 @@ def get_metadata(meta_dir: Union[str, os.PathLike], files: List[Union[str, os.Pa
         df.to_csv(meta_file, index=False)
 
     return df
+
 
 def get_demo_list(metadata: pd.DataFrame, files: List[Union[str,os.PathLike]], window: int) -> Tuple[List[Tuple[str, str, int]], int]:     
     demo_map: List[Tuple[str, str, int]] = []

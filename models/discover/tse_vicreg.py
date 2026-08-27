@@ -70,10 +70,12 @@ class TSE(pl.LightningModule):
         
         one_emb = self(rgb_one, rgb_shape, idxs) # [batch*chunk*window, d_model]
         two_emb = self(rgb_two, rgb_shape, idxs) # # [batch*chunk*window, d_model]
-        
+                
         one_emb = self.skillHead(one_emb) # [n=batch*chunk, k]
         two_emb = self.skillHead(two_emb) # [n, k]
         
+        alignment_loss = self.vicReg(one_emb, two_emb) # align embedding spaces 
+
         label_one = self.distributed_sinkhorn(two_emb) # [n, k]
         label_two = self.distributed_sinkhorn(one_emb) # [n, k]
         
@@ -83,9 +85,16 @@ class TSE(pl.LightningModule):
         loss_one = F.kl_div(torch.log(gold_one), label_one, reduction="batchmean")
         loss_two = F.kl_div(torch.log(gold_two), label_two, reduction="batchmean")
         
-        loss = 1/2 * (loss_one + loss_two)
+        prediction_loss = 1/2 * (loss_one + loss_two) 
+        loss = alignment_loss + prediction_loss
         
-        return loss
+        self.log_dict(
+            {f"{stage}_prediction_loss": loss}, 
+            {f"{stage}_alignment_loss": loss}, 
+            {f"{stage}_loss": loss}
+        )
+        
+        return loss 
         
     def training_step(self, batch, batch_idx) -> TensorType["batch"]:  
         return self._shared_step(batch=batch, stage="train")
