@@ -55,9 +55,6 @@ model:
   # gripper_up_kwargs: 
   #   in_features: 1 
   #   out_features: ${d_model}
-  general: 
-    k: 20 # number of skill prototypes/ clusters
-    d_model: ${d_model}
 
   # vision_backbone_kwargs: 
   #   weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
@@ -87,7 +84,7 @@ model:
       d_model: ${d_model}
       max_len: 300
 
-    cluster_head_kwargs: 
+  cluster_head_kwargs: 
     in_features: ${d_model}
     out_features: ${k}
     bias: False

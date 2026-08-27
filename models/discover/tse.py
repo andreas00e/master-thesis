@@ -16,7 +16,7 @@ from models.discover.utils.visionEncoder import VisionEncoder
 class TSE(pl.LightningModule): 
     def __init__(
         self,
-        sinkhorn_iterations: int,  
+        sinkhorn_iterations: int, 
         vision_encoder_kwargs: DictConfig, 
         cluster_head_kwargs: DictConfig, 
         optimizer_kwargs: DictConfig, 
