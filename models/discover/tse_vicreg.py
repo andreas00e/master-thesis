@@ -1,6 +1,6 @@
 from typing import Dict
 from omegaconf import DictConfig
-from torchvision.models import squeezenet1_1
+from torchvision import models
 
 import torch
 import torch.nn as nn 
@@ -28,7 +28,7 @@ class TSE(pl.LightningModule):
         self.sinkhorn_kwargs = sinkhorn_kwargs        
         self.optimizer_kwargs = optimizer_kwargs
         
-        self.visionBackbone = squeezenet1_1()
+        self.visionBackbone = models.mobilenet_v3_small()
         self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
         self.vicReg = VICReg(**vic_reg_kwargs)
         self.skillHead = nn.Linear(**cluster_head_kwargs) 
@@ -59,19 +59,19 @@ class TSE(pl.LightningModule):
         return x
     
     def _shared_step(self, batch: Dict[str, TensorType["batch", "chunk", "window", "*"]], stage: str) -> TensorType[""]: 
-        rgb_one = batch["rgb_one"] # robot0_eye_in_hand_image
-        rgb_two = batch["rgb_two"] # agentview_image
-        idxs = batch["idxs"] # idxs
+        rgb_one = batch["rgb_one_anc"] # robot0_eye_in_hand_image
+        rgb_two = batch["rgb_two_anc"] # agentview_image
+        idxs = batch["idxs"]           # idxs
         
         rgb_shape = rgb_one.shape
         
         rgb_one = rgb_one.view(-1, *rgb_shape[3:]) # [batch*chunk*window, channels=3, height=224, width=224]
         rgb_two = rgb_two.view(-1, *rgb_shape[3:]) # [batch*chunk*window, channels=3, height=224, width=224]
         
-        one_emb = self(rgb_one, rgb_shape, idxs) # [batch*chunk*window, d_model]
-        two_emb = self(rgb_two, rgb_shape, idxs) # # [batch*chunk*window, d_model]
+        one_emb = self(rgb_one, rgb_shape, idxs) # [n=batch*chunk, d_model]
+        two_emb = self(rgb_two, rgb_shape, idxs) # [n=batch*chunk, d_model]
                 
-        one_emb = self.skillHead(one_emb) # [n=batch*chunk, k]
+        one_emb = self.skillHead(one_emb) # [n, k]
         two_emb = self.skillHead(two_emb) # [n, k]
         
         alignment_loss = self.vicReg(one_emb, two_emb) # align embedding spaces 
@@ -89,8 +89,8 @@ class TSE(pl.LightningModule):
         loss = alignment_loss + prediction_loss
         
         self.log_dict(
-            {f"{stage}_prediction_loss": loss}, 
-            {f"{stage}_alignment_loss": loss}, 
+            {f"{stage}_prediction_loss": prediction_loss}, 
+            {f"{stage}_alignment_loss": alignment_loss}, 
             {f"{stage}_loss": loss}
         )
         

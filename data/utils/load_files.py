@@ -96,7 +96,7 @@ def get_metadata(meta_dir: Union[str, os.PathLike], files: List[Union[str, os.Pa
     df = pd.read_csv(meta_file) if meta_file.is_file() else pd.DataFrame()
 
     new_columns = {}
-    for file in tqdm(files, esc=colored("Fetching number of steps in each demo", "green"), colour="green"):
+    for file in tqdm(files, desc=colored("Fetching number of steps in each demo", "green"), colour="green"):
         file_str = str(file)
         
         if file_str not in df.columns:
@@ -113,12 +113,11 @@ def get_metadata(meta_dir: Union[str, os.PathLike], files: List[Union[str, os.Pa
 
     return df
 
-
 def get_demo_list(metadata: pd.DataFrame, files: List[Union[str,os.PathLike]], window: int) -> Tuple[List[Tuple[str, str, int]], int]:     
     demo_map: List[Tuple[str, str, int]] = []
     min_horizon = float("inf")
     
-    for file in tqdm(files, desc="Building demo list"):
+    for file in tqdm(files, desc=colored("Building demo list", "green"), colour="green"):
         file_str = str(file)
         
         if file_str in metadata.columns:  
@@ -154,7 +153,7 @@ def get_demo_dict(metadata: pd.DataFrame, files: List[Union[str, os.PathLike]], 
     demo_dict: Dict[str, List[Tuple[str, str, int]]] = {}
     min_horizon = float("inf")
     
-    for file in tqdm(files, desc="Building demo dict"): 
+    for file in tqdm(files, desc=colored("Building demo dict", "green"), colour="green"):
         file_str = str(file)
         key = Path(file).stem
         

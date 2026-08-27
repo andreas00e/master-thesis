@@ -23,9 +23,9 @@ def main(cfg):
     datamodule = instantiate(cfg.datamodule)
     model = instantiate(cfg.model)
     logger = instantiate(cfg.logger)
-
-    trainer = pl.Trainer(logger=logger, **cfg.trainer)
-    _ = trainer.fit(model=model, datamodule=datamodule)
+    trainer = instantiate(cfg.trainer, logger=logger)
+    
+    trainer.fit(model=model, datamodule=datamodule)
     
 
 if __name__ == "__main__": 

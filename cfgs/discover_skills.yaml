@@ -13,26 +13,28 @@ datamodule:
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
 
-  robots: # Union[List[str], null]: iiwa, panda, sawyer, ur5e
+  robots: # iiwa, panda, sawyer, ur5e
     - iiwa
-  tasks: # Union[List[str], null]: square, threading
+  tasks: # square, threading
     - threading 
-  depth: False # if True: include depth maps  
+  n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
+  depth: False # True: include depth maps  
   crop_factor: 0.75 # (0, 1)
   noise_level: 0.1 # (0, 1)
-  window: 8 # >= 1
-  chunk: 10 # >= 1
+  window: 6 # > 0
+  chunk: 2 # > 0
 
   batch_size: 4
   shuffle: True
   num_workers: 31
   pin_memory: True
   persistent_workers: True 
-  # multiprocessing_context: "forkserver" # prevents fork deadlocks in CUDA DDP
   dataset_lengths: 
   - 0.8
   - 0.1
   - 0.1
+
+  seed: ${seed}
 
   transforms: 
     - to_image
@@ -45,7 +47,7 @@ datamodule:
     - normalize
 
 model: 
-  _target_: models.discover.tse.TSE
+  _target_: models.discover.tse_vicreg.TSE
   # _target_: models.discover.tse_new.TSE
   
   # gripper_up_kwargs: 
@@ -79,24 +81,22 @@ model:
     pe_kwargs: 
       d_model: ${d_model}
       max_len: 300
-
-  cluster_head_kwargs: 
-  cluster_head_kwargs: 
-    in_features: ${d_model}
-    out_features: ${k}
-    bias: False
-
+  
   vic_reg_kwargs: 
     lmb: 25
     mu: 25
     nu: 1
     gamma: 1
     eps: 1e-4
+
+  cluster_head_kwargs: 
+    in_features: ${d_model}
+    out_features: ${k}
+    bias: False
   
   sinkhorn_kwargs: 
     sinkhorn_iterations: 3 
     epsilon: 0.1
-
   
   # kmeans_kwargs: 
   #   k: 4 
@@ -132,7 +132,7 @@ logger:
   project: skill_discovery
 
 trainer: 
-  _target_: lightning.pytorch.trainer
+  _target_: lightning.pytorch.Trainer
 
   accelerator: gpu   
   # strategy: ddp # delete to run on single gpu

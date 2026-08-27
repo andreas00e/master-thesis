@@ -2,6 +2,7 @@ import os
 import math
 import pandas as pd
 from pathlib import Path
+from omegaconf import ListConfig
 from typing import List, Optional, Union
 
 import torch
@@ -54,8 +55,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         # Data kwargs
         self.data_dir = Path(data_dir)
         self.meta_dir = Path(meta_dir)
-        self.robots = [robots] if isinstance(robots, str) else robots if isinstance(robots, list) else []
-        self.tasks = [tasks] if isinstance(tasks, str) else tasks if isinstance(tasks, list) else []
+        self.robots = [robots] if isinstance(robots, str) else robots if isinstance(robots, ListConfig) else []
+        self.tasks = [tasks] if isinstance(tasks, str) else tasks if isinstance(tasks, ListConfig) else []
         
         self.n_ds = n_ds
         self.depth = depth
@@ -122,7 +123,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         if not datasets: 
             raise RuntimeError("No datasets were constructed")
         
-        generator = torch.Generator().manual_seed(getattr(self, "seed", 42))
+        generator = torch.Generator().manual_seed(self.seed)
                 
         self.dataset_ = ConcatDataset(datasets)
         self.train_dataset, self.val_dataset, self.test_dataset = random_split(
@@ -169,7 +170,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
 
     def test_dataloader(self) -> DataLoader:
         return self._make_dataloader(self.test_dataset, shuffle=False)
-
         
     def __repr__(self) -> str:
         return (
