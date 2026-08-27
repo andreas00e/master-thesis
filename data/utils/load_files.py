@@ -2,121 +2,127 @@ import os
 import h5py
 import pandas as pd
 from tqdm import tqdm 
+from pathlib import Path
 from termcolor import colored 
-
 from typing import Dict, List, Optional, Tuple,  Union
 
   
 def get_files(
-    data_dir: os.PathLike, 
-    depth: Optional[bool]=None, 
-    robots: Optional[Union[str, List]]=None, 
-    tasks: Optional[Union[str, List]]=None, 
-    ) -> List[os.PathLike]:
+    data_dir: Union[str, os.PathLike], 
+    depth: bool=False, 
+    robots: Optional[Union[str, List[str]]]=None, 
+    tasks: Optional[Union[str, List[str]]]=None, 
+    ) -> List[str]:
     
-    all_files = [file for file in os.listdir(data_dir) if ("depth" in file) == depth]
-    all_robots = list(set(f.split(".")[-2].split("_")[-1] for f in all_files)) # no given robot -> all robots
-    all_tasks = list(set(f.split(".")[-2].split("_")[0] for f in all_files)) # no given task -> all tasks
+    data_dir = Path(data_dir)
+    
+    all_files = [f for f in data_dir.iterdir() if f.is_file() and ("depth" in f.name) == depth]
+    all_robots = list(set(f.stem.split("_")[-1] for f in all_files)) # no given robot -> all robots
+    all_tasks = list(set(f.stem.split("_")[0] for f in all_files)) # no given task -> all tasks
     
     robots = _filtered_or_all(robots, all_robots)
     tasks  = _filtered_or_all(tasks, all_tasks)
     files = [
-        os.path.join(data_dir, file) for file in all_files
-        if any(robot in file for robot in robots)
-        and any(task in file for task in tasks)
+        str(f) for f in all_files
+        if any(robot in f.name for robot in robots)
+        and any(task in f.name for task in tasks)
         ]
-    
-    # if stage == "test": 
-    #     random.shuffle(files)
-    #     files = [
-    #         next((f for f in all_files if robot in f and task in f), None)
-    #         for robot in robots
-    #         for task in tasks
-    #     ]
      
     return files 
 
-def _filtered_or_all(selected: Union[str, List], available: List[str]) -> List[str]: 
+def _filtered_or_all(selected: Optional[Union[str, List[str]]], available: List[str]) ->  List[str]: 
     if selected is None:
         return available
+    
+    if isinstance(selected, str): 
+        selected = [selected]
+    
     filtered = [x for x in selected if x in available]
     return filtered if filtered else available
 
 def get_depths(meta_dir: os.PathLike) -> pd.DataFrame: 
-    depth_path = os.path.join(meta_dir, "depths.csv")
-    if os.path.isfile(depth_path):
-        df = pd.read_csv(depth_path)
-    else: 
-        df = pd.DataFrame()
-    return df
+    depth_path = Path(meta_dir) / "depths.csv"
+    return pd.read_csv(depth_path)  if depth_path.is_file() else pd.DataFrame()
 
-def get_metadata(meta_dir: os.PathLike, files: List[os.PathLike]) -> pd.DataFrame:
-    if not os.path.isdir(meta_dir):
-        os.mkdir(meta_dir)
+def get_metadata(meta_dir: Union[str, os.PathLike], files: List[Union[str, os.PathLike]]) -> pd.DataFrame:
+    meta_dir = Path(meta_dir)
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    meta_file = meta_dir / "meta.csv"
+
+    df = pd.read_csv(meta_file) if meta_file.is_file() else pd.DataFrame()
+
+    new_columns = {}
+    for file in tqdm(files, desc=colored("Fetching number of steps in each demo", "green"), colour="green"):
+        file_str = str(file)
         
-    meta_file = os.path.join(meta_dir, "meta.csv")
-    df = pd.read_csv(meta_file) if os.path.isfile(meta_file) else pd.DataFrame()
-
-    new_cols = {}
-    for file in tqdm(files, desc=colored("Fetching length of each demo", "green"), colour="green"):
-        if file not in df.columns:
-            with h5py.File(file, "r") as hf:
-                data = hf["data"]
-                new_cols[file] = [demo_group["actions"].shape[0] for _, demo_group in data.items()]
-
-    if new_cols:
-        df = pd.concat([df, pd.DataFrame(new_cols)], axis=1)
+        if file_str not in df.columns:
+            try:
+                with h5py.File(file, "r") as hf:
+                    data = hf["data"]
+                    new_columns[file_str] = [demo_group["actions"].shape[0] for _, demo_group in data.items()]
+            except (KeyError, OSError) as e:
+                raise FileNotFoundError(colored(f"Could not open file: {file}", "red")) from e
+                
+    if new_columns:
+        df = pd.concat([df, pd.DataFrame(new_columns)], axis=1)
         df.to_csv(meta_file, index=False)
 
     return df
 
-def get_demomap(meta_data: pd.DataFrame, files: List[os.PathLike], window: int): 
-    df = meta_data
-    
-    demo_map = []
+def get_demo_list(metadata: pd.DataFrame, files: List[Union[str,os.PathLike]], window: int) -> Tuple[List[Tuple[str, str, int]], int]:     
+    demo_map: List[Tuple[str, str, int]] = []
     min_horizon = float("inf")
     
-    for file in tqdm(files, desc=colored("Fetching mapping from files to individual demos", "green"), colour="green"): 
-        if file in df.columns:  
-            f = [file] * len(df)
-            idx = [f"demo_{idx}" for idx in df.index]
-            n_steps = list(df[file].values)
+    for file in tqdm(files, desc="Building demo list"):
+        file_str = str(file)
+        
+        if file_str in metadata.columns:  
+            valid_series = metadata[file_str].dropna()
             
-            demos = list(zip(f, idx, n_steps))
-            demo_map.extend(demos)
+            if len(valid_series) == 0: 
+                continue
+            else:
+                n_steps_list = valid_series.astype(int).to_list()
+                demos = [(file_str, f"demo_{idx}", n_steps) for idx, n_steps in zip(valid_series.index, n_steps_list)]
+                demo_map.extend(demos)
+                min_horizon = min(min_horizon, min(n_steps_list))
 
         else: 
-            with h5py.File(file, "r") as hf:
-                data = hf["data"]
-                
-            for demo, demo_group in data.items():
-                n_steps = demo_group["actions"].shape[0]
-                demo_map.append([file, demo, n_steps]) 
-                min_horizon = min(min_horizon, n_steps)
+            try: 
+                with h5py.File(file, "r") as hf:
+                    data = hf["data"]
+                    for demo, demo_group in data.items():
+                        n_steps = int(demo_group["actions"].shape[0])
+                        demo_map.append((file_str, str(demo), n_steps)) 
+                        min_horizon = min(min_horizon, n_steps)
+            except Exception as e: 
+                raise FileNotFoundError(colored(f"Could not open file: {file}", "red")) from e
                         
     if min_horizon < window: 
         print(f"The chosen size of the window is bigger than the smallest episode length! \n \
-                Therefore, the size of the window gets changed from {window} to {min_horizon}.")
+                Therefore, the size of the window gets changed from {window} to {int(min_horizon)}.")
         window = int(min_horizon)
     
     return demo_map, window
 
-def get_demomap(metadata: pd.DataFrame, files: List[os.PathLike], window: int) -> Tuple[Dict[str, List[Tuple[str, int, int]]], int]: 
-    demo_map = {}
+def get_demo_dict(metadata: pd.DataFrame, files: List[Union[str, os.PathLike]], window: int) -> Tuple[Dict[str, List[Tuple[str, str, int]]], int]: 
+    demo_dict: Dict[str, List[Tuple[str, str, int]]] = {}
     min_horizon = float("inf")
     
-    for file in tqdm(files): 
-        key = os.path.basename(file).split(".")[0]  # task_d_{0, 1}_robot
+    for file in tqdm(files, desc="Building demo dict"): 
+        file_str = str(file)
+        key = Path(file).stem
         
-        if file in metadata.columns:  
-            f = [str(file)] * len(metadata)
-            idx = [f"demo_{i}" for i in metadata.index]
-            n_steps = [int(v) for v in metadata[file].values]
-            demos = list(zip(f, idx, n_steps))
+        if file_str in metadata.columns:  
+            valid_series = metadata[file_str].dropna()
             
-            if n_steps:
-                min_horizon = min(min_horizon, min(n_steps))
-
+            if len(valid_series) == 0: 
+                demos = []
+            else: 
+                n_steps_list = valid_series.astype(int).to_list()
+                demos = [(file_str, f"demo_{idx}", n_steps) for idx, n_steps in zip(valid_series.index, n_steps_list)]
+                min_horizon = min(min_horizon, min(n_steps_list))
+                
         else:
             demos = [] 
             try:  
@@ -124,16 +130,16 @@ def get_demomap(metadata: pd.DataFrame, files: List[os.PathLike], window: int) -
                     data = hf["data"]
                     for demo, demo_group in data.items():
                         n_steps = int(demo_group["actions"].shape[0])
-                        demos.append((str(file), str(demo), n_steps)) 
-                        min_horizon = min(min_horizon, n_steps)
+                        demos.append((file_str, str(demo), n_steps)) 
+                        min_horizon = min(min_horizon, n_steps)        
             except Exception as e: 
-                raise FileNotFoundError(f"Could not open file: {file}") from e
+                raise FileNotFoundError(colored(f"Could not open file: {file}", "red")) from e
                 
-        demo_map[key] = demos
+        demo_dict[key] = demos
                    
     if min_horizon < window: 
-        print(f"The chosen size of the window is bigger than the smallest episode length!\n"
-              f"Therefore, the size of the window gets changed from {window} to {int(min_horizon)}.")
+        print(f"The chosen size of the window is bigger than the smallest episode length! \n \
+            Therefore, the size of the window gets changed from {window} to {int(min_horizon)}.")
         window = int(min_horizon)
     
-    return demo_map, window
+    return demo_dict, window
