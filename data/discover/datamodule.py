@@ -1,12 +1,14 @@
 import os 
+import math
 import pandas as pd
+from pathlib import Path
 from typing import List, Optional, Union
 
 import torch
 from torch.utils.data import DataLoader, ConcatDataset, random_split
 import lightning.pytorch as pl 
 
-from data.utils.load_files import get_files, get_metadata, get_demo_list
+from data.utils.load_files import get_files, get_metadata, get_demo_dict
 from data.discover.dataset import MimicGenRobotDataset
 from data.utils.collate import collate_discover
 
@@ -17,6 +19,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         meta_dir: Union[str, os.PathLike], # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
         robots: Optional[Union[str, List[str]]], 
         tasks: Optional[Union[str, List[str]]], 
+        n_ds: int,
         depth: bool, 
         crop_factor: float,        
         noise_level: float, 
@@ -27,22 +30,34 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         num_workers: int, 
         pin_memory: bool, 
         persistent_workers: bool,
-        dataset_lengths: List[int], 
+        dataset_lengths: List[float], 
+        seed: int,
         transforms: List[str], 
         ) -> None:
         super().__init__()
+         
+        if not 0 < crop_factor < 1: 
+            raise ValueError(f"crop_factor has to be in (0,1), got {crop_factor}.")
+        if not 0 < noise_level < 1: 
+            raise ValueError(f"noise_level has to be in (0,1), got {noise_level}.")
+        if window < 1: 
+            raise ValueError(f"Window size must be >= 1, got {window}.")
+        if chunk < 1: 
+            raise ValueError(f"Chunk size must be >=1,  got {chunk}.")
         
-        if not 0 < noise_level < 1: raise ValueError(f"noise_level has to be in (0,1), got {noise_level}.")
-        if num_workers > os.cpu_count(): raise ValueError(f"num_workers is bigger than actual limit, got {num_workers}.")
-        if sum(dataset_lengths) != 1: raise ValueError(f"Sum of dataset lengths do not sum up to 1, got {sum(dataset_lengths)}.")
-        if window < 1: raise ValueError(f"Window size has to be bigger than 1, got {window}.")
-        if chunk < 1: raise ValueError(f"Chunk size has to be bigger than 1, got {chunk}.")
-        
+        cpu_count = os.cpu_count() or 1
+        if num_workers > cpu_count: 
+            raise ValueError(f"num_workers {num_workers} exceeds system limit {cpu_count}.")
+        if not math.isclose(sum(dataset_lengths), 1.0, rel_tol=1e-5):
+            raise ValueError(f"Sum of dataset lengths must be 1.0, got {sum(dataset_lengths)}.")
+       
         # Data kwargs
-        self.data_dir = data_dir
-        self.meta_dir = meta_dir
-        self.robots = list(robots) if isinstance(robots, str) else robots
-        self.tasks = list(tasks) if isinstance(tasks, str) else tasks
+        self.data_dir = Path(data_dir)
+        self.meta_dir = Path(meta_dir)
+        self.robots = [robots] if isinstance(robots, str) else robots if isinstance(robots, list) else []
+        self.tasks = [tasks] if isinstance(tasks, str) else tasks if isinstance(tasks, list) else []
+        
+        self.n_ds = n_ds
         self.depth = depth
         self.crop_factor = crop_factor
         self.noise_level = noise_level
@@ -54,18 +69,18 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.shuffle = shuffle
         self.num_workers = num_workers
         self.pin_memory = pin_memory
-        # self.multiprocessing_context = multiprocessing_context
         self.persistent_workers = persistent_workers
         self.dataset_lengths = dataset_lengths
-        
-        # Image augmenation pipeline
+        self.seed = seed
+
+        # Image transformations/ augmenations
         self.transforms = transforms
 
         # File handling 
         self.files = get_files(self.data_dir, self.depth, self.robots, self.tasks) # all hdf5 files containg given robot(s) and task(s)
-        self.meta_data = get_metadata(self.meta_dir, self.files)
-        self.df_gripper = pd.read_csv(os.path.join(self.meta_dir, "gripper_state_robot.csv"))
-        self.demo_map, self.window = get_demo_list(self.meta_data, self.files, self.window)
+        self.metadata = get_metadata(self.meta_dir, self.files)
+        self.df_gripper = pd.read_csv(self.meta_dir / "gripper_state_robot.csv") # TODO: Change!
+        self.demo_map, self.window = get_demo_dict(self.metadata, self.files, self.window)  # Tuple[Dict[str, List[Tuple[str, str, int]]], int]
             
         self.dataset_ = None
         self.train_dataset = None
@@ -76,9 +91,23 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         if getattr(self, "dataset_", None) is not None: 
             self.teardown(stage=stage)
             
+        demo_map = {} 
+        for robot in self.robots: 
+            for task in self.tasks: 
+                d0_key = f"{task}_d0_{robot}"
+                d1_key = f"{task}_d1_{robot}"
+                map_key = f"{task}{robot}"
+                
+                if self.n_ds == 1: 
+                    demo_map[map_key] = self.demo_map[d0_key] 
+                elif self.n_ds == 2: 
+                    demo_map[map_key] = self.demo_map[d0_key] + self.demo_map[d1_key] 
+                else: 
+                    raise ValueError(f"n_ds must 1 or 2, got {self.n_ds}")
+
         datasets = [
             MimicGenRobotDataset(
-            demo_map=self.demo_map[f"{str(task)}_{str(robot)}"],
+            demo_map=demo_map[f"{task}{robot}"],
             df_gripper=self.df_gripper, 
             window=self.window,
             chunk=self.chunk, 
@@ -89,6 +118,9 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             for task in self.tasks 
             for robot in self.robots
         ]
+        
+        if not datasets: 
+            raise RuntimeError("No datasets were constructed")
         
         generator = torch.Generator().manual_seed(getattr(self, "seed", 42))
                 
@@ -115,49 +147,36 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     def __del__(self):
         try:
             self.teardown()
-        except:
-            pass  
+        except Exception:
+            pass
         
-    def train_dataloader(self):
+    def _make_dataloader(self, dataset, shuffle: bool=False) -> DataLoader: 
         return DataLoader(
-            dataset=self.train_dataset, 
+            dataset=dataset, 
             batch_size=self.batch_size, 
-            shuffle=self.shuffle,    
+            shuffle=shuffle,    
             num_workers=self.num_workers,  
             pin_memory=self.pin_memory, 
-            # multiprocessing_context=self.multiprocessing_context, 
-            persistent_workers=self.persistent_workers, 
+            persistent_workers=self.persistent_workers if self.num_workers > 0 else False, 
             collate_fn=collate_discover  
             )
     
-    def val_dataloader(self):
-        return DataLoader(
-            dataset=self.val_dataset, 
-            batch_size=self.batch_size, 
-            num_workers=self.num_workers, 
-            pin_memory=self.pin_memory, 
-            # multiprocessing_context=self.multiprocessing_context, 
-            persistent_workers=self.persistent_workers, 
-            collate_fn=collate_discover 
-            )
+    def train_dataloader(self) -> DataLoader:
+        return self._make_dataloader(self.train_dataset, shuffle=self.shuffle)
     
-    def test_dataloader(self):
-        return DataLoader(
-            dataset=self.test_dataset, 
-            batch_size=self.batch_size, 
-            num_workers=self.num_workers, 
-            pin_memory=self.pin_memory, 
-            # multiprocessing_context=self.multiprocessing_context, 
-            persistent_workers=self.persistent_workers, 
-            collate_fn=collate_discover,    
-            )
+    def val_dataloader(self) -> DataLoader:
+        return self._make_dataloader(self.val_dataset, shuffle=False)
+
+    def test_dataloader(self) -> DataLoader:
+        return self._make_dataloader(self.test_dataset, shuffle=False)
+
         
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}("
-            f"robots={self.robots}, "
-            f"tasks={self.tasks}, "
-            f"depth={self.depth}, "
-            f"batch_size={self.batch_size}, "
+            f"robots={self.robots},"
+            f"tasks={self.tasks},"
+            f"depth={self.depth},"
+            f"batch_size={self.batch_size},"
             f"dataset_lengths={self.dataset_lengths})"
         )
