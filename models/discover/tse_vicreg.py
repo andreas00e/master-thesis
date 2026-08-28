@@ -71,7 +71,7 @@ class TSE(pl.LightningModule):
         one_emb = self(rgb_one, rgb_shape, idxs) # [n=batch*chunk, d_model]
         two_emb = self(rgb_two, rgb_shape, idxs) # [n=batch*chunk, d_model]
                 
-        one_emb = self.skillHead(one_emb) # [n, k]
+        one_emb = self.skillHead(one_emb)  # [n, k]
         two_emb = self.skillHead(two_emb) # [n, k]
         
         alignment_loss = self.vicReg(one_emb, two_emb) # align embedding spaces 
@@ -79,19 +79,19 @@ class TSE(pl.LightningModule):
         label_one = self.distributed_sinkhorn(two_emb) # [n, k]
         label_two = self.distributed_sinkhorn(one_emb) # [n, k]
         
-        gold_one = F.softmax(one_emb, dim=-1) # [n, k]
-        gold_two = F.softmax(two_emb, dim=-1) # [n, k]
+        prediction_one = F.log_softmax(one_emb, dim=-1) # [n, k]
+        prediction_two = F.log_softmax(two_emb, dim=-1) # [n, k]
         
-        loss_one = F.kl_div(torch.log(gold_one), label_one, reduction="batchmean")
-        loss_two = F.kl_div(torch.log(gold_two), label_two, reduction="batchmean")
+        loss_one = F.kl_div(label_one, prediction_one, reduction="batchmean")
+        loss_two = F.kl_div(label_two, prediction_two, reduction="batchmean")
         
         prediction_loss = 1/2 * (loss_one + loss_two) 
         loss = alignment_loss + prediction_loss
         
         self.log_dict(
-            {f"{stage}_prediction_loss": prediction_loss}, 
-            {f"{stage}_alignment_loss": alignment_loss}, 
-            {f"{stage}_loss": loss}
+            {f"{stage}_prediction_loss": prediction_loss, 
+            f"{stage}_alignment_loss": alignment_loss, 
+            f"{stage}_loss": loss}
         )
         
         return loss 

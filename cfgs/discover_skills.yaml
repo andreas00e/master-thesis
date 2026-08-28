@@ -83,11 +83,11 @@ model:
       max_len: 300
   
   vic_reg_kwargs: 
-    lmb: 25
+    lambda_: 25
     mu: 25
     nu: 1
     gamma: 1
-    eps: 1e-4
+    epsilon: 1e-4
 
   cluster_head_kwargs: 
     in_features: ${d_model}
