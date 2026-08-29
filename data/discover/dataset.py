@@ -6,11 +6,21 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-from torchtyping import TensorType 
 from torch.utils.data import Dataset 
 
 from data.discover.utils.transforms import get_transforms
 
+TASK_DICT = {
+    "square": 0, 
+    "threading": 1
+}
+
+ROBOT_DICT = {
+    "iiwa": 0, 
+    "panda": 1, 
+    "sawyer": 2, 
+    "ur5e": 3 
+}
 
 class MimicGenRobotDataset(Dataset): 
     def __init__(self, 
@@ -75,7 +85,9 @@ class MimicGenRobotDataset(Dataset):
         item = {}
         file_path, demo, _ =  self.demo_map[idx]
         
+        task = Path(file_path).stem.spllit("_")[0]
         robot = Path(file_path).stem.split("_")[-1]
+        
         hf = self._get_hdf5_handle(file_path)
         demo_obs = hf["data"][demo]["obs"]
         
@@ -117,6 +129,8 @@ class MimicGenRobotDataset(Dataset):
         g_qpos = torch.from_numpy(g_qpos).float() # [n]
         g_qpos_plus = torch.clamp(g_qpos + self.noise_level * torch.randn_like(g_qpos), 0.0, 1.0) # [n]
         
+        item["task"] = TASK_DICT[task] 
+        item["robot"] = ROBOT_DICT[robot] 
         item["rgb_one_anc"] = rgb_one_anc[idxs, ...] # [chunk, window, c, h, w]
         item["rgb_one_plus"] = rgb_one_pos[idxs, ...] 
         item["rgb_two_anc"] = rgb_two_anc[idxs, ...]

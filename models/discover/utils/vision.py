@@ -19,65 +19,80 @@ class VisionBackbone(nn.Module):
         self, 
         model: str, 
         weights_path: Union[str, os.PathLike], 
+        lora: bool, 
         layer: Union[int, List[int]], 
         r: int, 
         lora_alpha: int, 
-        lora_drop_out: int
+        lora_drop_out: float
         ) -> None:
         super().__init__()
         
         try: 
-            self.models = models.get_model(model, weights=None)
-        except Exception: 
-            raise ModuleNotFoundError
+            self.model = models.get_model(model, weights=None)
+        except Exception as e: 
+            raise ModuleNotFoundError(f"Model \"{model}\" could not be loaded from torchvision.") from e
         
-        self.weights_path = "r3m" / weights_path / "_weights.pth"
+        if weights_path is not None: 
+            weights_path = Path(weights_path)
+            self.weights_path = "r3m" / weights_path / "_weights.pth"
+        else: 
+            raise ValueError("weights_path cannot be None")
+        
         try: 
             ckpt = torch.load(self.weights_path, map_location="cpu")
         except Exception as e: 
-            raise FileNotFoundError(f"could not be found")
+            raise FileNotFoundError(f"Weights could not be found at {self.weights_path}.") from e
         
-        layer = [layer] if isinstance(layer, int) else list(layer)
-        self.layer = [f"layer{i}" for i in layer]
+        if layer is not None: 
+            layer = [layer] if isinstance(layer, int) else list(layer)
+            self.layer = [f"layer{i}" for i in layer]
+        else: 
+            self.layer = []
+        
         self.r = r 
         self.lora_alpha = lora_alpha
         self.lora_dropout = lora_drop_out
         
         r3m_state_dict = ckpt.get("state_dict", ckpt)
         clean_state_dict = {}
+        model_state = self.model.state_dict()
         for key, value in r3m_state_dict.items():
             new_key = key.replace("module.convnav.", "").replace("model.", "")
-            if new_key in self.model.state_dict():
+            if new_key in model_state:
                 clean_state_dict[new_key] = value
 
         self.model.load_state_dict(clean_state_dict, strict=False)
         self.model.fc = nn.Identity()
-            
-        self._lora()
+          
+        if lora: 
+            self._lora()
+        else: 
+            self.model.requires_grad_(False)
+            self.model.eval()
   
     def _lora(self) -> None: 
         for name_block, block in self.model.named_children(): 
-            if name_block not in self.layer: # ["layer3", "layer4"]
+            if name_block not in self.layer:
                 continue 
             
             for _, layer in block.named_children(): 
                 for child_name, child in layer.named_children(): 
                     if isinstance(child, nn.Conv2d): 
-                        lora_conv = lora.ConvLoRA(
-                            conv_module = nn.Conv2d,
-                            in_channels = child.in_channels, 
-                            out_channels = child.out_channels, 
-                            kernel_size = child.kernel_size[0], 
-                            stride = child.stride,
-                            padding = child.padding, 
-                            bias = child.bias is not None, 
-                            r = self.r, 
-                            lora_alpha = self.lora_alpha, 
-                            lora_dropout = self.lora_dropout
+                        lora_conv = lora.Conv2d(
+                            in_channels=child.in_channels, 
+                            out_channels=child.out_channels, 
+                            kernel_size=child.kernel_size, 
+                            stride=child.stride,
+                            padding=child.padding, 
+                            dilation=child.dilation, 
+                            bias=child.bias is not None, 
+                            r=self.r, 
+                            lora_alpha=self.lora_alpha, 
+                            lora_dropout=self.lora_dropout
                         )
-                        lora_conv.conv.weight.data = child.weight.data.clone()
+                        lora_conv.weight.data = child.weight.data.clone()
                         if child.bias is not None:  
-                            lora_conv.conv.bias.data = child.bias.data.clone()
+                            lora_conv.bias.data = child.bias.data.clone()
                         
                         setattr(layer, child_name, lora_conv)
 
@@ -107,7 +122,7 @@ class VisionEncoder(nn.Module):
             **transformer_encoder_kwargs
         )
         
-        self.down_emb = nn.Linear(down_emb_kwargs["in_features"], down_emb_kwargs["out_features"])
+        self.down_emb = nn.Linear(**down_emb_kwargs)
         
         self.up_emb = nn.Sequential(
             nn.Linear(up_emb_kwargs["in_features"], up_emb_kwargs["hidden_features"]), 
