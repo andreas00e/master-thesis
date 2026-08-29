@@ -14,10 +14,9 @@ datamodule:
   meta_dir: ${meta_dir}
 
   robots: # iiwa, panda, sawyer, ur5e
-    - iiwa
   tasks: # square, threading
-    - threading 
   n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
+  f_ds: 0.1
   depth: False # True: include depth maps  
   crop_factor: 0.75 # (0, 1)
   noise_level: 0.1 # (0, 1)

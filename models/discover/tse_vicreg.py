@@ -54,7 +54,8 @@ class TSE(pl.LightningModule):
         
         x = self.visionBackbone(x) # [batch*chunk*window, d_model]
         x = x.view(x_shape[0]*x_shape[1], x_shape[2], -1) # [batch*chunk, window, d_model]
-        x = self.visionEncoder(x, idxs).squeeze() # [batch*chunk, d_model]
+        x = self.visionEncoder(x, idxs)# [batch*chunk, d_model]
+        x = x.view(-1, x.shape[-1])
         
         return x
     

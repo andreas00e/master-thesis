@@ -13,9 +13,11 @@ def get_files(
     depth: bool=False, 
     robots: Optional[Union[str, List[str]]]=None, 
     tasks: Optional[Union[str, List[str]]]=None, 
-    ) -> List[str]:
+    ) -> Tuple[List[str], List[str], List[str]]:
     
     data_dir = Path(data_dir)
+    robots = [robots] if isinstance(robots, str) else list(robots) if robots is not None else None
+    tasks = [tasks] if isinstance(tasks, str) else list(tasks) if tasks is not None else None
     
     all_files = [f for f in data_dir.iterdir() if f.is_file() and ("depth" in f.name) == depth]
     all_robots = list(set(f.stem.split("_")[-1] for f in all_files)) # no given robot -> all robots
@@ -23,21 +25,22 @@ def get_files(
     
     robots = _filtered_or_all(robots, all_robots)
     tasks  = _filtered_or_all(tasks, all_tasks)
+    
     files = [
         str(f) for f in all_files
-        if any(robot in f.name for robot in robots)
-        and any(task in f.name for task in tasks)
+        if f.stem.split("_")[-1] in robots
+        and f.stem.split("_")[0] in tasks
         ]
+    
+    print(colored(f"robots: {robots}", color="green"))
+    print(colored(f"tasks: {tasks}", color="green"))
      
-    return files 
+    return robots, tasks, files 
 
-def _filtered_or_all(selected: Optional[Union[str, List[str]]], available: List[str]) ->  List[str]: 
-    if selected is None:
+def _filtered_or_all(selected: Optional[List[str]], available: List[str]) ->  List[str]: 
+    if not selected:
         return available
-    
-    if isinstance(selected, str): 
-        selected = [selected]
-    
+
     filtered = [x for x in selected if x in available]
     return filtered if filtered else available
 
