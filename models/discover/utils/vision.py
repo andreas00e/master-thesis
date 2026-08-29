@@ -1,7 +1,7 @@
 import os 
 from pathlib import Path
 from typing import List, Union
-from omegaconf import ListConfig, DictConfig
+from omegaconf import  DictConfig
 
 
 import torch 
@@ -34,7 +34,7 @@ class VisionBackbone(nn.Module):
         
         if weights_path is not None: 
             weights_path = Path(weights_path)
-            self.weights_path = "r3m" / weights_path / "_weights.pth"
+            self.weights_path = weights_path / f"r3m_{model}_weights.pth"
         else: 
             raise ValueError("weights_path cannot be None")
         
@@ -78,21 +78,22 @@ class VisionBackbone(nn.Module):
             for _, layer in block.named_children(): 
                 for child_name, child in layer.named_children(): 
                     if isinstance(child, nn.Conv2d): 
-                        lora_conv = lora.Conv2d(
+                        lora_conv = lora.ConvLoRA(
+                            conv_module=nn.Conv2d, 
                             in_channels=child.in_channels, 
                             out_channels=child.out_channels, 
-                            kernel_size=child.kernel_size, 
+                            kernel_size=child.kernel_size[0], 
+                            r=self.r,
                             stride=child.stride,
                             padding=child.padding, 
                             dilation=child.dilation, 
                             bias=child.bias is not None, 
-                            r=self.r, 
                             lora_alpha=self.lora_alpha, 
                             lora_dropout=self.lora_dropout
                         )
-                        lora_conv.weight.data = child.weight.data.clone()
+                        lora_conv.conv.weight.data = child.weight.data.clone()
                         if child.bias is not None:  
-                            lora_conv.bias.data = child.bias.data.clone()
+                            lora_conv.conv.bias.data = child.bias.data.clone()
                         
                         setattr(layer, child_name, lora_conv)
 
