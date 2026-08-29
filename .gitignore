@@ -13,3 +13,4 @@ import.log
 requirements.txt
 
 **/__pycache__/
+*.ckpt*
