@@ -8,9 +8,9 @@ import torch.nn.functional as F
 from torchtyping import TensorType
 import lightning.pytorch as pl 
 
-from models.discover.utils.cluster import KMeans, RGMM
-from models.discover.utils.visionBackbone import VisionBackbone
-from models.discover.utils.visionEncoder import VisionEncoder
+from models.discover.utils.cluster.cluster import KMeans, RGMM
+from models.discover.utils.vision.visionBackbone import VisionBackbone
+from models.discover.utils.vision.visionEncoder import VisionEncoder
 
 
 class TSE(pl.LightningModule): 

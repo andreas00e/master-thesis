@@ -8,8 +8,8 @@ import torch.nn.functional as F
 from torchtyping import TensorType
 import lightning.pytorch as pl 
 
-from models.discover.utils.visionEncoder import VisionEncoder
-from models.discover.utils.vicreg import VICReg
+from models.discover.utils.vision import VisionBackbone, VisionEncoder
+from models.discover.utils.selfsupervised.vicreg import VICReg
 
 
 class TSE(pl.LightningModule): 

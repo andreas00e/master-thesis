@@ -53,9 +53,16 @@ model:
   #   in_features: 1 
   #   out_features: ${d_model}
 
-  # vision_backbone_kwargs: 
-  #   weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
-    
+  vision_backbone_kwargs: 
+    model: "resnet18"
+    weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_${model}_weights.pth
+    layer: 
+      - 3 
+      - 4 
+    r: 8 
+    lora_alpha: 16
+    lora_drop_out: 0
+
   vision_encoder_kwargs: 
     encoder_layer_kwargs: 
       d_model: ${d_model}
