@@ -103,8 +103,8 @@ class TSE(pl.LightningModule):
         target_one = self.distributed_sinkhorn(two_emb) # [n, k]
         target_two = self.distributed_sinkhorn(one_emb) # [n, k]
         
-        prediction_one = F.log_softmax(one_emb, dim=-1) # [n, k]
-        prediction_two = F.log_softmax(two_emb, dim=-1) # [n, k]
+        prediction_one = F.log_softmax(one_emb / self.sinkhorn_kwargs.tau, dim=-1) # [n, k]
+        prediction_two = F.log_softmax(two_emb / self.sinkhorn_kwargs.tau, dim=-1) # [n, k]
         
         loss_one = F.kl_div(prediction_one, target_one, reduction="batchmean")        
         loss_two = F.kl_div(prediction_two, target_two, reduction="batchmean")  
@@ -153,7 +153,7 @@ class TSE(pl.LightningModule):
          
     @torch.no_grad()
     def distributed_sinkhorn(self, out):
-    # from https://github.com/real-stanford/xskill/blob/main/xskill/model/core.py
+    # Adjusted from https://github.com/real-stanford/xskill/blob/main/xskill/model/core.py
         Q = torch.exp(out / self.sinkhorn_kwargs.epsilon).t(
         )  # Q is K-by-B for consistency with notations from our paper
         B = Q.shape[1]  # number of samples to assign
