@@ -1,3 +1,4 @@
+import wandb
 import numpy as np 
 import pandas as pd 
 import seaborn as sns
@@ -34,7 +35,7 @@ class TSE(pl.LightningModule):
         
         self.sinkhorn_kwargs = sinkhorn_kwargs        
         self.optimizer_kwargs = optimizer_kwargs
-        
+
         self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
         self.vicReg = VICReg(**vic_reg_kwargs)
@@ -42,9 +43,14 @@ class TSE(pl.LightningModule):
         
         self.tsne = TSNE(**tsne_kwargs)
         
-    def configure_optimizers(self):
+    def configure_optimizers(self) -> None:
+        if self.trainer.max_epochs is not None: 
+            self.optimizer_kwargs.lr_scheduler.T_max = self.trainer.estimated_stepping_batches
+        else:
+            self.optimizer_kwargs.lr_scheduler.T_max = 100_000
+            
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
-        scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, **self.optimizer_kwargs.lr_scheduler)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, **self.optimizer_kwargs.lr_scheduler)
         
         return {
             "optimizer": optimizer,
@@ -70,7 +76,7 @@ class TSE(pl.LightningModule):
         ) -> TensorType["batch*chunk", "d_model"]:
         x_shape = x.shape
         
-        x = x.view(-1, *x_shape[-3:]) # [batch*chunk*window, channels=3, height=224, width=224]
+        x = x.view(-1, *x_shape[3:]) # [batch*chunk*window, channels=3, height=224, width=224]
         x = self.visionBackbone(x) # [batch*chunk*window, d_model]
         x = x.view(x_shape[0]*x_shape[1], x_shape[2], -1) # [batch*chunk, window, d_model]
         x = self.visionEncoder(x, idxs)# [batch*chunk, d_model]
@@ -94,26 +100,26 @@ class TSE(pl.LightningModule):
         
         alignment_loss = self.vicReg(one_emb, two_emb) # align embedding spaces 
 
-        one_label = self.distributed_sinkhorn(two_emb) # [n, k]
-        two_label = self.distributed_sinkhorn(one_emb) # [n, k]
+        target_one = self.distributed_sinkhorn(two_emb) # [n, k]
+        target_two = self.distributed_sinkhorn(one_emb) # [n, k]
         
         prediction_one = F.log_softmax(one_emb, dim=-1) # [n, k]
         prediction_two = F.log_softmax(two_emb, dim=-1) # [n, k]
         
-        loss_one = F.kl_div(prediction_one, one_label, reduction="batchmean")
-        loss_two = F.kl_div(prediction_two, two_label, reduction="batchmean")
-        
-        if batch_idx == 0 and stage == "train":
-            self.plot_(one_emb, one_label, task=batch["task"], robot=batch["robot"])
-            
+        loss_one = F.kl_div(prediction_one, target_one, reduction="batchmean")        
+        loss_two = F.kl_div(prediction_two, target_two, reduction="batchmean")  
         prediction_loss = 1/2 * (loss_one + loss_two) 
+            
         loss = alignment_loss + prediction_loss
         
         self.log_dict(
-            {f"{stage}_prediction_loss": prediction_loss, 
-            f"{stage}_alignment_loss": alignment_loss, 
-            f"{stage}_loss": loss}
-        )
+                {f"{stage}_prediction_loss": prediction_loss, 
+                f"{stage}_alignment_loss": alignment_loss, 
+                f"{stage}_loss": loss}
+            )
+        
+        if batch_idx == 0 and stage == "val" and self.current_epoch % 5 == 0:
+            self.plot_(one_emb, target_one, task=batch["task"], robot=batch["robot"])
         
         return loss 
     
@@ -140,6 +146,9 @@ class TSE(pl.LightningModule):
         scatterplot = sns.scatterplot(data=df, x="x", y="y", hue="label")
         fig = scatterplot.get_figure() 
         fig.savefig("scatterplot.png")
+        
+        self.log_dict({"tsne_plot": wandb.Image("scatterplot.png")})
+        
         plt.close()
          
     @torch.no_grad()

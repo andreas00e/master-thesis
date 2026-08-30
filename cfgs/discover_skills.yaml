@@ -15,13 +15,13 @@ datamodule:
 
   robots: null # iiwa, panda, sawyer, ur5e
   tasks: null # square, threading
-  n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
-  f_ds: 0.25
+  n_ds: 2 # {1, 2} if d_0 or d_0 & d_1
+  f_ds: 1
   depth: False # True: include depth maps  
   crop_factor: 0.75 # (0, 1)
   noise_level: 0.1 # (0, 1)
   window: 8 # > 0
-  chunk: 16 # > 0
+  chunk: 8 # > 0
 
   batch_size: 32
   shuffle: True
@@ -50,23 +50,23 @@ model:
   
   vision_backbone_kwargs: 
     model: resnet50
-    weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_${model}_weights.pth
+    weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights
     lora: True
     layer: 
-      - 3 
       - 4 
-    r: 8 
-    lora_alpha: 16
-    lora_drop_out: 0
+    r: 8
+    lora_alpha: 1
+    lora_drop_out: 0.0
 
   vision_encoder_kwargs: 
     encoder_layer_kwargs: 
       d_model: ${d_model}
-      nhead: 1 
+      nhead: 4 
       dim_feedforward: 512
+      batch_first: True
 
     transformer_encoder_kwargs:
-      num_layers: 2
+      num_layers: 8
       norm: null
       enable_nested_tensor: False 
       mask_check: False
@@ -101,6 +101,7 @@ model:
     learning_rate: auto 
     init: random 
     perplexity: 3
+    random_state: ${seed}
   
   sinkhorn_kwargs: 
     sinkhorn_iterations: 3 
@@ -110,8 +111,8 @@ model:
     optimizer: 
       lr: 1e-3
     lr_scheduler: 
-      start_factor: 0.5 
-      total_iters: 40 
+      T_max: null
+      eta_min: 0
 
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
