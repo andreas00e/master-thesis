@@ -92,19 +92,19 @@ class TSE(pl.LightningModule):
         ) -> TensorType[""]: 
         idxs = batch["idxs"] # idxs
         
-        one_emb = self(batch["rgb_one_anc"], idxs) # [n=batch*chunk, d_model]
-        two_emb = self(batch["rgb_two_anc"], idxs) # [n=batch*chunk, d_model]
-                
-        one_emb = self.skillHead(one_emb)  # [n, k]
-        two_emb = self.skillHead(two_emb) # [n, k]
-        
-        alignment_loss = self.vicReg(one_emb, two_emb) # align embedding spaces 
+        z_one = self(batch["rgb_one_anc"], idxs) # [n=batch*chunk, d_model]
+        z_two = self(batch["rgb_two_anc"], idxs) # [n=batch*chunk, d_model]
 
-        target_one = self.distributed_sinkhorn(two_emb) # [n, k]
-        target_two = self.distributed_sinkhorn(one_emb) # [n, k]
+        z_one = self.skillHead(F.normalize(z_one))  # [n, k]
+        z_two = self.skillHead(F.normalize(z_two)) # [n, k]
         
-        prediction_one = F.log_softmax(one_emb, dim=-1) # [n, k]
-        prediction_two = F.log_softmax(two_emb, dim=-1) # [n, k]
+        alignment_loss = self.vicReg(z_one, z_two) # align embedding spaces 
+
+        target_one = self.distributed_sinkhorn(z_two) # [n, k]
+        target_two = self.distributed_sinkhorn(z_one) # [n, k]
+        
+        prediction_one = F.log_softmax(z_one / self.sinkhorn_kwargs.tau, dim=-1) # [n, k]
+        prediction_two = F.log_softmax(z_two / self.sinkhorn_kwargs.tau, dim=-1) # [n, k]
         
         loss_one = F.kl_div(prediction_one, target_one, reduction="batchmean")        
         loss_two = F.kl_div(prediction_two, target_two, reduction="batchmean")  
@@ -119,7 +119,7 @@ class TSE(pl.LightningModule):
             )
         
         if batch_idx == 0 and stage == "val" and self.current_epoch % 5 == 0:
-            self.plot_(one_emb, target_one, task=batch["task"], robot=batch["robot"])
+            self.plot_(z_one, target_one, task=batch["task"], robot=batch["robot"])
         
         return loss 
     
