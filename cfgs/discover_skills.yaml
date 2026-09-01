@@ -91,7 +91,7 @@ model:
     gamma: 1
     epsilon: 1e-4
 
-  skill_head_kwargs: 
+  prototype_kwargs: 
     in_features: ${d_model}
     out_features: ${k}
     bias: False
@@ -112,8 +112,16 @@ model:
     optimizer: 
       lr: 1e-3
     lr_scheduler: 
-      T_max: null
-      eta_min: 0
+      one: 
+        start_factor: 0.3 
+        end_factor: 1 
+        total_iters: 20 
+      two: 
+        T_max: null
+        eta_min: 0
+      sequential: 
+        milestones: 
+          - ${optimizer_kwargs.lr_scheduler.one.total_iters}
 
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
