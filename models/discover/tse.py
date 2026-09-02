@@ -3,10 +3,11 @@ import wandb
 import tempfile
 import numpy as np 
 import pandas as pd 
-from umap import UMAP
 import seaborn as sns
+from PIL import Image
 from typing import Dict
 from omegaconf import DictConfig
+from sklearn.manifold import TSNE
 from matplotlib import pyplot as plt
 
 import torch
@@ -44,7 +45,7 @@ class TSE(pl.LightningModule):
         self.C = nn.Linear(**prototype_kwargs) 
         nn.init.orthogonal_(self.C.weight)
 
-        self.tsne = UMAP(**tsne_kwargs)
+        self.tsne = TSNE(**tsne_kwargs)
         
     def configure_optimizers(self) -> Dict:
         if self.trainer.max_epochs is not None: 
@@ -85,7 +86,6 @@ class TSE(pl.LightningModule):
         x = self.visionBackbone(x) # [batch*chunk*window, d_model]
         x = x.view(x_shape[0]*x_shape[1], x_shape[2], -1) # [batch*chunk, window, d_model]
         x = self.visionEncoder(x, idxs)# [batch*chunk, d_model]
-        x = x.view(-1, x.shape[-1])
         
         return x
     
@@ -97,23 +97,19 @@ class TSE(pl.LightningModule):
         ) -> TensorType[""]: 
         idxs = batch["idxs"] # idxs
         
-        z_one = self(batch["rgb_one_anc"], idxs) # [n=batch*chunk, d_model]
-        z_two = self(batch["rgb_two_anc"], idxs) # [n=batch*chunk, d_model]
+        h_one = self(batch["rgb_one_anc"], idxs) # [n=batch*chunk, d_model]
+        h_two = self(batch["rgb_two_anc"], idxs) # [n=batch*chunk, d_model]
 
         # Map to prototypes
-        z_one = self.C(F.normalize(z_one)) # [n, k]
-        z_two = self.C(F.normalize(z_two)) # [n, k]
+        z_one = self.C(F.normalize(h_one)) # [n, k]
+        z_two = self.C(F.normalize(h_two)) # [n, k]
         
         # Find pseudo-labels
         target_one = self.distributed_sinkhorn(z_two) # [n, k]
         target_two = self.distributed_sinkhorn(z_one) # [n, k]
         
-        # Predict class labels 
-        prediction_one = F.log_softmax(z_one / self.sinkhorn_kwargs.tau, dim=-1) # [n, k]
-        prediction_two = F.log_softmax(z_two / self.sinkhorn_kwargs.tau, dim=-1) # [n, k]
-        
-        loss_one = F.cross_entropy(prediction_one, target_one)
-        loss_two = F.cross_entropy(prediction_two, target_two)
+        loss_one = F.cross_entropy(z_one / self.sinkhorn_kwargs.tau, target_one)
+        loss_two = F.cross_entropy(z_two / self.sinkhorn_kwargs.tau, target_two)
         prediction_loss = 1/2 * (loss_one + loss_two) 
             
         alignment_loss = self.vicReg(z_one, z_two) # align embedding spaces 
@@ -130,7 +126,7 @@ class TSE(pl.LightningModule):
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f: 
                     fname = f.name 
                     self.plot_(z_one, target_one, task=batch["task"], robot=batch["robot"], fname=fname)
-                    self.log_dict({"tsne_plot": wandb.Image(fname)})
+                    self.logger.log_image("tsne_plot", [fname])
                     os.remove(fname)
         
         return loss 
@@ -147,9 +143,9 @@ class TSE(pl.LightningModule):
         columns = ["x", "y", "label", "task", "robot"]
         
         x = x.clone().detach().cpu().numpy() # [n, k]
-        label = label.argmax(-1).clone().detach().cpu().numpy() # [n]
-        task = task.clone().detach().cpu().numpy() # [n]
-        robot = robot.clone().detach().cpu().numpy() # [n]
+        label = label.argmax(-1).clone().detach().cpu().numpy() # [n, ]
+        task = task.clone().detach().cpu().numpy().reshape(-1, ) # [n, ]
+        robot = robot.clone().detach().cpu().numpy().reshape(-1, ) # [n, ]
         
         x = self.tsne.fit_transform(x) # [n, 2]
         data = np.stack(arrays=[x[:, 0], x[:, 1], label, task, robot], axis=-1)

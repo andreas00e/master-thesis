@@ -139,8 +139,8 @@ class MimicGenRobotDataset(Dataset):
         g_qpos_anc = torch.from_numpy(g_qpos).float() # anchor sammple
         g_qpos_plus = torch.clamp(g_qpos_anc + self.noise_level * torch.randn_like(g_qpos_anc), 0.0, 1.0) # positive sample
         
-        item["task"] = torch.full(size=(*rgb_one_anc.shape[:2], 1), fill_value=TASK_DICT[task], dtype=torch.long)
-        item["robot"] = torch.full(size=(*rgb_one_anc.shape[:2], 1), fill_value=ROBOT_DICT[robot], dtype=torch.long)
+        item["task"] = torch.full(size=(rgb_one_anc.shape[0], ), fill_value=TASK_DICT[task], dtype=torch.long) # [chunk]
+        item["robot"] = torch.full(size=(rgb_one_anc.shape[0], ), fill_value=ROBOT_DICT[robot], dtype=torch.long) # [chunk]
         item["rgb_one_anc"] = rgb_one_anc # [chunk, window, c, h, w]
         item["rgb_one_plus"] = rgb_one_pos
         item["rgb_two_anc"] = rgb_two_anc

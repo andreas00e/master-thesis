@@ -2,7 +2,7 @@ seed: 42
 
 d_model: 256 
 d_emb: 8 
-k: 16
+k: 10
 
 data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
 meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
@@ -15,16 +15,15 @@ datamodule:
 
   robots: null # iiwa, panda, sawyer, ur5e
   tasks: null # square, threading
-  n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
-  f_ds: 0.1
+  n_ds: 2 # {1, 2} if d_0 or d_0 & d_1
+  f_ds: 1
   depth: False # True: include depth maps  
   crop_factor: 0.75 # (0, 1)
   noise_level: 0.1 # (0, 1)
   window: 8 # > 0
-  chunk: 1 # > 0
+  chunk: 4 # > 0
 
-  batch_size: 2
-  batch_size: 2
+  batch_size: 32
   shuffle: True
   num_workers: 0
   pin_memory: True
@@ -106,7 +105,6 @@ model:
   
   sinkhorn_kwargs: 
     tau: 0.1
-    tau: 0.1
     sinkhorn_iterations: 3 
     epsilon: 0.05
   
@@ -123,7 +121,7 @@ model:
         eta_min: 0
       sequential: 
         milestones: 
-          - ${optimizer_kwargs.lr_scheduler.one.total_iters}
+          - ${model.optimizer_kwargs.lr_scheduler.one.total_iters}
 
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
