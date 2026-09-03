@@ -19,11 +19,12 @@ from torchtyping import TensorType
 
 from models.discover.utils.vision import VisionBackbone, VisionEncoder
 from models.discover.utils.selfsupervised.vicreg import VICReg
-
+from models.discover.utils.queue import FIFOQueue
 
 class TSE(pl.LightningModule): 
     def __init__(
         self, 
+        queue_kwargs: DictConfig, 
         vision_backbone_kwargs: DictConfig, 
         vision_encoder_kwargs: DictConfig,
         vic_reg_kwargs: DictConfig, 
@@ -38,7 +39,8 @@ class TSE(pl.LightningModule):
         
         self.sinkhorn_kwargs = sinkhorn_kwargs        
         self.optimizer_kwargs = optimizer_kwargs
-
+        
+        self.queue = FIFOQueue(**queue_kwargs)
         self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
         self.vicReg = VICReg(**vic_reg_kwargs)
