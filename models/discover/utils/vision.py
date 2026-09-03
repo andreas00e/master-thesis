@@ -69,36 +69,49 @@ class VisionBackbone(nn.Module):
         else: 
             self.model.requires_grad_(False)
             self.model.eval()
-  
-    def _lora(self) -> None: 
-        for name_block, block in self.model.named_children(): 
-            if name_block not in self.layer:
+
+    def _lora(self) -> None:             
+        for block_name, block in self.model.named_children(): 
+            if block_name not in self.layer:
                 continue 
             
             for _, layer in block.named_children(): 
-                for child_name, child in layer.named_children(): 
+                for child_name, child in layer.named_children():
+                     
                     if isinstance(child, nn.Conv2d): 
-                        lora_conv = lora.ConvLoRA(
-                            conv_module=nn.Conv2d, 
-                            in_channels=child.in_channels, 
-                            out_channels=child.out_channels, 
-                            kernel_size=child.kernel_size[0], 
-                            r=self.r,
-                            stride=child.stride,
-                            padding=child.padding, 
-                            dilation=child.dilation, 
-                            bias=child.bias is not None, 
-                            lora_alpha=self.lora_alpha, 
-                            lora_dropout=self.lora_dropout
-                        )
-                        lora_conv.conv.weight.data = child.weight.data.clone()
-                        if child.bias is not None:  
-                            lora_conv.conv.bias.data = child.bias.data.clone()
-                        
+                        lora_conv = self._create_lora_conv(child)
                         setattr(layer, child_name, lora_conv)
 
+                    if isinstance(child, nn.Sequential): 
+                        for grand_child_name, grand_child in child.named_children(): 
+                            if isinstance(grand_child, nn.Conv2d): 
+                                lora_conv = self._create_lora_conv(grand_child)
+                                setattr(child, grand_child_name, lora_conv)
+
         lora.mark_only_lora_as_trainable(self.model) 
-    
+        
+    def _create_lora_conv(self, conv_module: nn.Conv2d) -> lora.ConvLoRA:
+        lora_conv = lora.ConvLoRA(
+            conv_module=nn.Conv2d, 
+            in_channels=conv_module.in_channels, 
+            out_channels=conv_module.out_channels, 
+            kernel_size=conv_module.kernel_size[0], 
+            r=self.r,
+            stride=conv_module.stride,
+            padding=conv_module.padding, 
+            dilation=conv_module.dilation, 
+            bias=conv_module.bias is not None, 
+            lora_alpha=self.lora_alpha, 
+            lora_dropout=self.lora_dropout
+        )
+        
+        with torch.no_grad(): 
+            lora_conv.conv.weight.copy_(conv_module.weight)
+            if conv_module.bias is not None:  
+                lora_conv.conv.bias.copy_(conv_module.bias)
+        
+        return lora_conv    
+        
     def forward(self, x: TensorType["*"]) -> TensorType["*"]:
         return self.model(x)  
 
@@ -117,9 +130,9 @@ class VisionEncoder(nn.Module):
         
         d_model = encoder_layer_kwargs["d_model"]
         
-        self.encoder_layer = nn.TransformerEncoderLayer(**encoder_layer_kwargs)
+        encoder_layer = nn.TransformerEncoderLayer(**encoder_layer_kwargs)
         self.encoder_transformer = nn.TransformerEncoder(
-            encoder_layer=self.encoder_layer, 
+            encoder_layer=encoder_layer, 
             **transformer_encoder_kwargs
         )
         
@@ -144,5 +157,7 @@ class VisionEncoder(nn.Module):
         x = self.pe(x, idxs) # [batch*chunk, 1+window, d_model]
         x = self.encoder_transformer(x) # [batch*chunk, 1+window, d_model]
         x = x[:, 0, :] # [batch*chunk, d_model]
+        
+        x = self.up_emb(x)
         
         return x

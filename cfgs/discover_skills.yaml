@@ -13,10 +13,10 @@ datamodule:
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
 
-  robots: iiwa # iiwa, panda, sawyer, ur5e
-  tasks: iiwa # square, threading
-  n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
-  f_ds: 0.05
+  robots: null # iiwa, panda, sawyer, ur5e
+  tasks: null # square, threading
+  n_ds: 2 # {1, 2} if d_0 or d_0 & d_1
+  f_ds: 1
   depth: False # True: include depth maps  
   crop_factor: 0.75 # (0, 1)
   noise_level: 0.1 # (0, 1)
@@ -49,6 +49,7 @@ model:
   _target_: models.discover.tse.TSE
   
   queue_kwargs: 
+    num_modalities: 2
     capacity: 3840
     feature_dim: ${d_model}
 
@@ -82,7 +83,7 @@ model:
     up_emb_kwargs:
       in_features: ${d_model}
       hidden_features: 32
-      out_features: ${d_emb} 
+      out_features: ${d_model} 
       
     pe_kwargs: 
       d_model: ${d_model}
@@ -137,7 +138,8 @@ trainer:
   _target_: lightning.pytorch.Trainer
 
   accelerator: gpu   
-  strategy: ddp # delete to run on single gpu
+  # strategy: ddp # delete to run on single gpu
+  strategy: ddp_find_unused_parameters_true
   devices: -1 # for ddp: -1 
   # - 0 # single gpu 
   max_epochs: 400 

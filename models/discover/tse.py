@@ -9,6 +9,8 @@ from omegaconf import DictConfig
 from sklearn.manifold import TSNE
 from matplotlib import pyplot as plt
 
+from termcolor import colored
+
 import torch
 import torch.nn as nn 
 import torch.nn.functional as F
@@ -66,6 +68,11 @@ class TSE(pl.LightningModule):
                 "interval": "step"
             }
         }
+        
+    def on_after_backward(self):
+            for name, param in self.named_parameters():
+                if param.requires_grad and param.grad is None:
+                    print(colored(f"Unused parameter: {name}", "red"))
 
     def training_step(self, batch, batch_idx) -> torch.Tensor:  
         return self._shared_step(batch=batch, batch_idx=batch_idx, stage="train")
@@ -177,7 +184,7 @@ class TSE(pl.LightningModule):
         df = pd.DataFrame(data=data, columns=columns)
          
         plt.figure(figsize=(8, 6))
-        scatterplot = sns.scatterplot(data=df, x="x", y="y", hue="label")
+        scatterplot = sns.scatterplot(data=df, x="x", y="y", hue="label", style="task", size="robot")
         fig = scatterplot.get_figure() 
         fig.savefig(fname)
         plt.close()

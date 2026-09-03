@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn 
 from torchtyping import TensorType
 
-
+# Circular FIFO Queue
 class FIFOQueue(nn.Module): 
     def __init__(
         self, 
@@ -30,7 +30,6 @@ class FIFOQueue(nn.Module):
         self.register_buffer("queue", torch.zeros(size=(self.num_modalities, self.capacity, feature_dim), dtype=dtype, device=device))
         self.write_idx = 0 
         self.queue_elements = 0 
-        self._is_full = False 
     
     @torch.no_grad()
     def enqueue(self, x: TensorType["num_modalities", "num_elements", "feature_dim"]) -> None:        
@@ -49,25 +48,23 @@ class FIFOQueue(nn.Module):
             return
         
         # Input fits into queue entirely 
-        if self.write_idx + num_elements < self.capacity and  self.queue_elements < self.capacity: 
+        if self.write_idx + num_elements <= self.capacity : 
             self.queue[:, self.write_idx:self.write_idx+num_elements].copy_(x)
-            self.write_idx = (self.write_idx + num_elements) % self.capacity
-            self.queue_elements += num_elements 
         # Overflow 
         else: 
-            overflow = (self.queue_elements + num_elements) - self.capacity # how many elements must go 
-            queue_buf = self.queue.clone()[overflow:] 
-            self.queue[:, -num_elements:] = x 
-            self.queue[:, :overflow] = queue_buf
+            first_part = self.capacity - self.write_idx
+            second_part = num_elements - first_part
+
+            self.queue[:, self.write_idx:self.capacity].copy_(x[:, :first_part]) 
+            self.queue[:, :second_part].copy_(x[:, first_part:])
             
-            self.write_idx = self.capacity
-            self.queue_elements = self.capacity  
-            self._is_full = True
+            self.write_idx = (self.write_idx + num_elements) % self.capacity
+            self.queue_elements = min(self.capacity, self.queue_elements + num_elements)
     
     @torch.no_grad()
     def dequeue(self) -> torch.Tensor: 
-        return self.queue
+        return self.queue[:, :self.queue_elements]
     
     @property
     def is_full(self) -> bool: 
-        return self._is_full
+        return self.queue_elements == self.capacity
