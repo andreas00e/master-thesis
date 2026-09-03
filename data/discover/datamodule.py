@@ -175,7 +175,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             pin_memory=self.pin_memory, 
             persistent_workers=self.persistent_workers if self.num_workers > 0 else False, 
             collate_fn=collate_discover, 
-            multiprocessing_context="spawn"
+            multiprocessing_context="fork"  
             )
     
     def train_dataloader(self) -> DataLoader:

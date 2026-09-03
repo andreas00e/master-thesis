@@ -4,7 +4,6 @@ import tempfile
 import numpy as np 
 import pandas as pd 
 import seaborn as sns
-from PIL import Image
 from typing import Dict
 from omegaconf import DictConfig
 from sklearn.manifold import TSNE
@@ -19,11 +18,12 @@ from torchtyping import TensorType
 
 from models.discover.utils.vision import VisionBackbone, VisionEncoder
 from models.discover.utils.selfsupervised.vicreg import VICReg
-
+from models.discover.utils.queue import FIFOQueue
 
 class TSE(pl.LightningModule): 
     def __init__(
         self, 
+        queue_kwargs: DictConfig, 
         vision_backbone_kwargs: DictConfig, 
         vision_encoder_kwargs: DictConfig,
         vic_reg_kwargs: DictConfig, 
@@ -38,7 +38,8 @@ class TSE(pl.LightningModule):
         
         self.sinkhorn_kwargs = sinkhorn_kwargs        
         self.optimizer_kwargs = optimizer_kwargs
-
+        
+        self.queue = FIFOQueue(**queue_kwargs)
         self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
         self.vicReg = VICReg(**vic_reg_kwargs)
@@ -80,11 +81,11 @@ class TSE(pl.LightningModule):
         x: TensorType["batch*chunk*window", "channels", "height", "width"],
         idxs: TensorType["batch", "chunk", "window"]
         ) -> TensorType["batch*chunk", "d_model"]:
-        x_shape = x.shape
+        bs, ck, wd, c, h, w = x.shape
         
-        x = x.view(-1, *x_shape[3:]) # [batch*chunk*window, channels=3, height=224, width=224]
+        x = x.view(-1, c, h, w) # [batch*chunk*window, channels=3, height=224, width=224]
         x = self.visionBackbone(x) # [batch*chunk*window, d_model]
-        x = x.view(x_shape[0]*x_shape[1], x_shape[2], -1) # [batch*chunk, window, d_model]
+        x = x.view(bs*ck, wd, -1) # [batch*chunk, window, d_model]
         x = self.visionEncoder(x, idxs)# [batch*chunk, d_model]
         
         return x
@@ -94,29 +95,43 @@ class TSE(pl.LightningModule):
         batch: Dict[str, TensorType["batch", "chunk", "window", "*"]],
         batch_idx: int, 
         stage: str
-        ) -> TensorType[""]: 
+        ) -> torch.Tensor: 
         idxs = batch["idxs"] # idxs
         
-        h_one = self(batch["rgb_one_anc"], idxs) # [n=batch*chunk, d_model]
-        h_two = self(batch["rgb_two_anc"], idxs) # [n=batch*chunk, d_model]
-
+        h_one_batch = F.normalize(self(batch["rgb_one_anc"], idxs), dim=-1) # [n=batch*chunk, d_model]
+        h_two_batch = F.normalize(self(batch["rgb_two_anc"], idxs), dim=-1) # [n=batch*chunk, d_model]
+        
+        n = h_one_batch.shape[0] 
+       
+        if self.queue is not None and self.queue.is_full: 
+                queue_features = self.queue.dequeue() 
+                h_one_assign = torch.cat([h_one_batch, queue_features[0]], dim=0)
+                h_two_assign = torch.cat([h_two_batch, queue_features[1]], dim=0)
+        else: 
+            h_one_assign = h_one_batch
+            h_two_assign = h_two_batch
+            
+        if self.queue is not None:   
+            self.queue.enqueue(torch.stack([h_one_batch, h_two_batch], dim=0))
+   
         # Map to prototypes
-        z_one = self.C(F.normalize(h_one)) # [n, k]
-        z_two = self.C(F.normalize(h_two)) # [n, k]
+        z_one = self.C(h_one_assign) # [n, k]
+        z_two = self.C(h_two_assign) # [n, k]
         
         # Find pseudo-labels
-        target_one = self.distributed_sinkhorn(z_two) # [n, k]
-        target_two = self.distributed_sinkhorn(z_one) # [n, k]
+        with torch.no_grad(): 
+            target_one = self.distributed_sinkhorn(z_two) # [n, k]
+            target_two = self.distributed_sinkhorn(z_one) # [n, k]
         
-        loss_one = F.cross_entropy(z_one / self.sinkhorn_kwargs.tau, target_one)
-        loss_two = F.cross_entropy(z_two / self.sinkhorn_kwargs.tau, target_two)
+        loss_one = F.cross_entropy(z_one[:n] / self.sinkhorn_kwargs.tau, target_one[:n])
+        loss_two = F.cross_entropy(z_two[:n] / self.sinkhorn_kwargs.tau, target_two[:n])
         prediction_loss = 1/2 * (loss_one + loss_two) 
             
-        alignment_loss = self.vicReg(z_one, z_two) # align embedding spaces 
+        alignment_loss = self.vicReg(h_one_batch, h_two_batch) # align embedding spaces 
         loss = alignment_loss + prediction_loss
         
-        self.log_dict(
-                {f"{stage}_prediction_loss": prediction_loss, 
+        self.log_dict({
+                f"{stage}_prediction_loss": prediction_loss, 
                 f"{stage}_alignment_loss": alignment_loss, 
                 f"{stage}_loss": loss}, 
                 sync_dist=True
@@ -126,8 +141,17 @@ class TSE(pl.LightningModule):
             if self.global_rank == 0: 
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f: 
                     fname = f.name 
-                    self.plot_(z_one, target_one, task=batch["task"], robot=batch["robot"], fname=fname)
-                    self.logger.log_image("tsne_plot", [fname])
+                    self.plot_(
+                        z_one[:n].detach(),
+                        target_one[:n].detach(),
+                        task=batch["task"], 
+                        robot=batch["robot"],
+                        fname=fname
+                        )
+                    
+                    if isinstance(self.logger, pl.loggers.WandbLogger): 
+                        self.logger.experiment.log({"tsne_plot": wandb.Image(fname)})
+                     
                     os.remove(fname)
         
         return loss 
@@ -143,10 +167,10 @@ class TSE(pl.LightningModule):
         
         columns = ["x", "y", "label", "task", "robot"]
         
-        x = x.clone().detach().cpu().numpy() # [n, k]
-        label = label.argmax(-1).clone().detach().cpu().numpy() # [n, ]
-        task = task.clone().detach().cpu().numpy().reshape(-1, ) # [n, ]
-        robot = robot.clone().detach().cpu().numpy().reshape(-1, ) # [n, ]
+        x = x.cpu().numpy() # [n, k]
+        label = label.argmax(-1).cpu().numpy() # [n, ]
+        task = task.cpu().numpy().reshape(-1, ) # [n, ]
+        robot = robot.cpu().numpy().reshape(-1, ) # [n, ]
         
         x = self.tsne.fit_transform(x) # [n, 2]
         data = np.stack(arrays=[x[:, 0], x[:, 1], label, task, robot], axis=-1)
@@ -159,8 +183,13 @@ class TSE(pl.LightningModule):
         plt.close()
          
     @torch.no_grad()
-    def distributed_sinkhorn(self, out):
+    def distributed_sinkhorn(self, out: TensorType["n", "k"]) -> TensorType["n", "k"]:
     # from https://github.com/real-stanford/xskill/blob/main/xskill/model/core.py
+    
+        if self.trainer.world_size > 1: 
+            out_gathered = self.all_gather(out, sync_grads=False)
+            out = out_gathered.view(-1, out.shape[-1])
+     
         Q = torch.exp(out / self.sinkhorn_kwargs.epsilon).T # [K, B]
         K, B = Q.shape # number of prototypes, number of samples to assign
 
@@ -179,4 +208,12 @@ class TSE(pl.LightningModule):
             Q /= B
 
         Q *= B  # the colomns must sum to 1 so that Q is an assignment
-        return Q.T
+        Q = Q.T 
+        
+        if self.trainer.world_size > 1: 
+            batch_size_per_rank = out.shape[0] // self.trainer.world_size
+            start_idx = self.global_rank * batch_size_per_rank
+            end_idx = start_idx + batch_size_per_rank
+            Q = Q[start_idx:end_idx]
+            
+        return Q
