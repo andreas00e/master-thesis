@@ -49,7 +49,7 @@ model:
   _target_: models.discover.tse.TSE
   
   queue_kwargs: 
-    capacity: 3000 
+    capacity: 3840
     feature_dim: ${d_model}
 
   vision_backbone_kwargs: 
