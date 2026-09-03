@@ -13,10 +13,10 @@ datamodule:
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
 
-  robots: null # iiwa, panda, sawyer, ur5e
-  tasks: null # square, threading
+  robots: iiwa # iiwa, panda, sawyer, ur5e
+  tasks: iiwa # square, threading
   n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
-  f_ds: 0.1
+  f_ds: 0.05
   depth: False # True: include depth maps  
   crop_factor: 0.75 # (0, 1)
   noise_level: 0.1 # (0, 1)
@@ -125,9 +125,9 @@ trainer:
   _target_: lightning.pytorch.Trainer
 
   accelerator: gpu   
-  # strategy: ddp # delete to run on single gpu
-  devices: # for ddp: -1 
-    - 0 # single gpu 
+  strategy: ddp # delete to run on single gpu
+  devices: -1 # for ddp: -1 
+  # - 0 # single gpu 
   max_epochs: 400 
   num_sanity_val_steps: 2
   enable_progress_bar: True

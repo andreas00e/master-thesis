@@ -54,7 +54,9 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         
         cpu_count = os.cpu_count() or 1
         if num_workers > cpu_count: 
-            raise ValueError(f"num_workers {num_workers} exceeds system limit {cpu_count}.")
+            self.num_workers = cpu_count
+        else: 
+            self.num_workers = num_workers
         if not math.isclose(sum(dataset_lengths), 1.0, rel_tol=1e-5):
             raise ValueError(f"Sum of dataset lengths must be 1.0, got {sum(dataset_lengths)}.")
        
@@ -73,7 +75,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         # Dataloading kwargs
         self.batch_size = batch_size
         self.shuffle = shuffle
-        self.num_workers = num_workers
         self.pin_memory = pin_memory
         self.persistent_workers = persistent_workers
         self.dataset_lengths = dataset_lengths
@@ -173,7 +174,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,  
             pin_memory=self.pin_memory, 
             persistent_workers=self.persistent_workers if self.num_workers > 0 else False, 
-            collate_fn=collate_discover  
+            collate_fn=collate_discover, 
+            multiprocessing_context="fork"  
             )
     
     def train_dataloader(self) -> DataLoader:
