@@ -48,7 +48,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         if not 0 < noise_level < 1: 
             raise ValueError(f"noise_level has to be in (0, 1), got {noise_level}.")
         if window < 1: 
-            raise ValueError(f"Window size must be >= 1, got {window}.")
+            raise ValueError(f"Size of window must be >= 1, got {window}.")
         if chunk < 1: 
             raise ValueError(f"Chunk size must be >=1,  got {chunk}.")
         

@@ -15,9 +15,8 @@ warnings.filterwarnings("ignore", category=UserWarning, module="lightning.pytorc
 
 
 @hydra.main(config_path="cfgs/", config_name="discover_skills", version_base=None)
-def main(cfg): 
+def main(cfg):     
     multiprocessing.set_start_method("spawn", force=True)
-    
     pl.seed_everything(cfg.seed)
 
     datamodule = instantiate(cfg.datamodule)
@@ -28,5 +27,5 @@ def main(cfg):
     trainer.fit(model=model, datamodule=datamodule)
     
 
-if __name__ == "__main__": 
+if __name__ == "__main__":     
     main()

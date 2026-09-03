@@ -1,7 +1,10 @@
+import os 
 import wandb
+import tempfile
 import numpy as np 
 import pandas as pd 
 import seaborn as sns
+from PIL import Image
 from typing import Dict
 from omegaconf import DictConfig
 from sklearn.manifold import TSNE
@@ -24,7 +27,7 @@ class TSE(pl.LightningModule):
         vision_backbone_kwargs: DictConfig, 
         vision_encoder_kwargs: DictConfig,
         vic_reg_kwargs: DictConfig, 
-        skill_head_kwargs: DictConfig,  
+        prototype_kwargs: DictConfig,  
         tsne_kwargs: DictConfig, 
         sinkhorn_kwargs: DictConfig, 
         optimizer_kwargs: DictConfig, 
@@ -39,18 +42,21 @@ class TSE(pl.LightningModule):
         self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
         self.vicReg = VICReg(**vic_reg_kwargs)
-        self.skillHead = nn.Linear(**skill_head_kwargs) 
-        
+        self.C = nn.Linear(**prototype_kwargs) 
+        nn.init.orthogonal_(self.C.weight)
+
         self.tsne = TSNE(**tsne_kwargs)
         
-    def configure_optimizers(self) -> None:
+    def configure_optimizers(self) -> Dict:
         if self.trainer.max_epochs is not None: 
-            self.optimizer_kwargs.lr_scheduler.T_max = self.trainer.estimated_stepping_batches
+            self.optimizer_kwargs.lr_scheduler.two.T_max = self.trainer.estimated_stepping_batches
         else:
-            self.optimizer_kwargs.lr_scheduler.T_max = 100_000
+            self.optimizer_kwargs.lr_scheduler.two.T_max = 100_000
             
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, **self.optimizer_kwargs.lr_scheduler)
+        scheduler_one = torch.optim.lr_scheduler.LinearLR(optimizer, **self.optimizer_kwargs.lr_scheduler.one)
+        scheduler_two = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, **self.optimizer_kwargs.lr_scheduler.two)
+        scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[scheduler_one, scheduler_two], **self.optimizer_kwargs.lr_scheduler.sequential)
         
         return {
             "optimizer": optimizer,
@@ -60,13 +66,13 @@ class TSE(pl.LightningModule):
             }
         }
 
-    def training_step(self, batch, batch_idx) -> TensorType[""]:  
+    def training_step(self, batch, batch_idx) -> torch.Tensor:  
         return self._shared_step(batch=batch, batch_idx=batch_idx, stage="train")
         
-    def validation_step(self, batch, batch_idx) -> TensorType[""]:  
+    def validation_step(self, batch, batch_idx) -> torch.Tensor:  
         return self._shared_step(batch=batch, batch_idx=batch_idx, stage="val")
 
-    def test_step(self, batch, batch_idx) -> TensorType[""]:        
+    def test_step(self, batch, batch_idx) -> torch.Tensor:        
         return self._shared_step(batch=batch, batch_idx=batch_idx, stage="test")
     
     def forward(
@@ -80,7 +86,6 @@ class TSE(pl.LightningModule):
         x = self.visionBackbone(x) # [batch*chunk*window, d_model]
         x = x.view(x_shape[0]*x_shape[1], x_shape[2], -1) # [batch*chunk, window, d_model]
         x = self.visionEncoder(x, idxs)# [batch*chunk, d_model]
-        x = x.view(-1, x.shape[-1])
         
         return x
     
@@ -92,24 +97,22 @@ class TSE(pl.LightningModule):
         ) -> TensorType[""]: 
         idxs = batch["idxs"] # idxs
         
-        one_emb = self(batch["rgb_one_anc"], idxs) # [n=batch*chunk, d_model]
-        two_emb = self(batch["rgb_two_anc"], idxs) # [n=batch*chunk, d_model]
-                
-        one_emb = self.skillHead(one_emb)  # [n, k]
-        two_emb = self.skillHead(two_emb) # [n, k]
-        
-        alignment_loss = self.vicReg(one_emb, two_emb) # align embedding spaces 
+        h_one = self(batch["rgb_one_anc"], idxs) # [n=batch*chunk, d_model]
+        h_two = self(batch["rgb_two_anc"], idxs) # [n=batch*chunk, d_model]
 
-        target_one = self.distributed_sinkhorn(two_emb) # [n, k]
-        target_two = self.distributed_sinkhorn(one_emb) # [n, k]
+        # Map to prototypes
+        z_one = self.C(F.normalize(h_one)) # [n, k]
+        z_two = self.C(F.normalize(h_two)) # [n, k]
         
-        prediction_one = F.log_softmax(one_emb / self.sinkhorn_kwargs.tau, dim=-1) # [n, k]
-        prediction_two = F.log_softmax(two_emb / self.sinkhorn_kwargs.tau, dim=-1) # [n, k]
+        # Find pseudo-labels
+        target_one = self.distributed_sinkhorn(z_two) # [n, k]
+        target_two = self.distributed_sinkhorn(z_one) # [n, k]
         
-        loss_one = F.kl_div(prediction_one, target_one, reduction="batchmean")        
-        loss_two = F.kl_div(prediction_two, target_two, reduction="batchmean")  
+        loss_one = F.cross_entropy(z_one / self.sinkhorn_kwargs.tau, target_one)
+        loss_two = F.cross_entropy(z_two / self.sinkhorn_kwargs.tau, target_two)
         prediction_loss = 1/2 * (loss_one + loss_two) 
             
+        alignment_loss = self.vicReg(z_one, z_two) # align embedding spaces 
         loss = alignment_loss + prediction_loss
         
         self.log_dict(
@@ -119,7 +122,12 @@ class TSE(pl.LightningModule):
             )
         
         if batch_idx == 0 and stage == "val" and self.current_epoch % 5 == 0:
-            self.plot_(one_emb, target_one, task=batch["task"], robot=batch["robot"])
+            if self.global_rank == 0: 
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f: 
+                    fname = f.name 
+                    self.plot_(z_one, target_one, task=batch["task"], robot=batch["robot"], fname=fname)
+                    self.logger.log_image("tsne_plot", [fname])
+                    os.remove(fname)
         
         return loss 
     
@@ -128,15 +136,16 @@ class TSE(pl.LightningModule):
         x: TensorType["n", "k"],
         label: TensorType["n"], 
         task: TensorType["n"], 
-        robot: TensorType["n"]
+        robot: TensorType["n"], 
+        fname: str
         ) -> None:
         
         columns = ["x", "y", "label", "task", "robot"]
         
         x = x.clone().detach().cpu().numpy() # [n, k]
-        label = label.argmax(-1).clone().detach().cpu().numpy() # [n]
-        task = task.clone().detach().cpu().numpy() # [n]
-        robot = robot.clone().detach().cpu().numpy() # [n]
+        label = label.argmax(-1).clone().detach().cpu().numpy() # [n, ]
+        task = task.clone().detach().cpu().numpy().reshape(-1, ) # [n, ]
+        robot = robot.clone().detach().cpu().numpy().reshape(-1, ) # [n, ]
         
         x = self.tsne.fit_transform(x) # [n, 2]
         data = np.stack(arrays=[x[:, 0], x[:, 1], label, task, robot], axis=-1)
@@ -145,33 +154,28 @@ class TSE(pl.LightningModule):
         plt.figure(figsize=(8, 6))
         scatterplot = sns.scatterplot(data=df, x="x", y="y", hue="label")
         fig = scatterplot.get_figure() 
-        fig.savefig("scatterplot.png")
-        
-        self.log_dict({"tsne_plot": wandb.Image("scatterplot.png")})
-        
+        fig.savefig(fname)
         plt.close()
          
     @torch.no_grad()
     def distributed_sinkhorn(self, out):
-    # Adjusted from https://github.com/real-stanford/xskill/blob/main/xskill/model/core.py
-        Q = torch.exp(out / self.sinkhorn_kwargs.epsilon).t(
-        )  # Q is K-by-B for consistency with notations from our paper
-        B = Q.shape[1]  # number of samples to assign
-        K = Q.shape[0]  # how many prototypes
+    # from https://github.com/real-stanford/xskill/blob/main/xskill/model/core.py
+        Q = torch.exp(out / self.sinkhorn_kwargs.epsilon).T # [K, B]
+        K, B = Q.shape # number of prototypes, number of samples to assign
 
-        # make the matrix sums to 1
-        sum_Q = torch.sum(Q)
+        # matrix has to sum to 1
+        sum_Q = torch.sum(Q) + 1e-8
         Q /= sum_Q
 
         for _ in range(self.sinkhorn_kwargs.sinkhorn_iterations):
             # normalize each row: total weight per prototype must be 1/K
-            sum_of_rows = torch.sum(Q, dim=1, keepdim=True)
-            Q /= sum_of_rows
+            sum_of_rows = torch.sum(Q, dim=1, keepdim=True) + 1e-8 # [K, 1]
+            Q /= sum_of_rows 
             Q /= K
 
             # normalize each column: total weight per sample must be 1/B
-            Q /= torch.sum(Q, dim=0, keepdim=True)
+            Q /= torch.sum(Q, dim=0, keepdim=True) + 1e-8 # [1, B]
             Q /= B
 
         Q *= B  # the colomns must sum to 1 so that Q is an assignment
-        return Q.t()
+        return Q.T

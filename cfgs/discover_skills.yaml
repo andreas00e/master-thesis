@@ -2,7 +2,7 @@ seed: 42
 
 d_model: 256 
 d_emb: 8 
-k: 16
+k: 10
 
 data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
 meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
@@ -21,11 +21,11 @@ datamodule:
   crop_factor: 0.75 # (0, 1)
   noise_level: 0.1 # (0, 1)
   window: 8 # > 0
-  chunk: 1 # > 0
+  chunk: 4 # > 0
 
-  batch_size: 2
+  batch_size: 32
   shuffle: True
-  num_workers: 31
+  num_workers: 0
   pin_memory: True
   persistent_workers: True 
   dataset_lengths: 
@@ -72,7 +72,7 @@ model:
       mask_check: False
 
     down_emb_kwargs: 
-      in_features: 1000 
+      in_features: 2048 
       out_features: ${d_model}
     
     up_emb_kwargs:
@@ -91,7 +91,7 @@ model:
     gamma: 1
     epsilon: 1e-4
 
-  skill_head_kwargs: 
+  prototype_kwargs: 
     in_features: ${d_model}
     out_features: ${k}
     bias: False
@@ -106,14 +106,22 @@ model:
   sinkhorn_kwargs: 
     tau: 0.1
     sinkhorn_iterations: 3 
-    epsilon: 0.1
+    epsilon: 0.05
   
   optimizer_kwargs: 
     optimizer: 
       lr: 1e-3
     lr_scheduler: 
-      T_max: null
-      eta_min: 0
+      one: 
+        start_factor: 0.3 
+        end_factor: 1 
+        total_iters: 20 
+      two: 
+        T_max: null
+        eta_min: 0
+      sequential: 
+        milestones: 
+          - ${model.optimizer_kwargs.lr_scheduler.one.total_iters}
 
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
