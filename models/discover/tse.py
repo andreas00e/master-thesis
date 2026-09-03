@@ -118,7 +118,8 @@ class TSE(pl.LightningModule):
         self.log_dict(
                 {f"{stage}_prediction_loss": prediction_loss, 
                 f"{stage}_alignment_loss": alignment_loss, 
-                f"{stage}_loss": loss}
+                f"{stage}_loss": loss}, 
+                sync_dist=True
             )
         
         if batch_idx == 0 and stage == "val" and self.current_epoch % 5 == 0:
