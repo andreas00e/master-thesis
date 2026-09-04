@@ -35,6 +35,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         persistent_workers: bool,
         dataset_lengths: List[float], 
         seed: int,
+        ctr_transforms: bool, 
         transforms: List[str], 
         ) -> None:
         super().__init__()
@@ -81,6 +82,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.seed = seed
 
         # Image transformations/ augmenations
+        self.ctr_transforms = ctr_transforms
         self.transforms = transforms
 
         # File handling 
@@ -129,6 +131,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             chunk=self.chunk, 
             crop_factor=self.crop_factor,
             noise_level=self.noise_level,
+            ctr_transforms=self.ctr_transforms, 
             transforms=self.transforms
             ) 
             for task in self.tasks 

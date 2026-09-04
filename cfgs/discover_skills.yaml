@@ -49,10 +49,25 @@ datamodule:
 model: 
   _target_: models.discover.tse.TSE
   
-  queue_kwargs: 
-    num_modalities: 2
-    capacity: 3840
-    feature_dim: ${d_model}
+  sinkhorn_kwargs: 
+    tau: 0.1
+    sinkhorn_iterations: 3 
+    epsilon: 0.05
+  
+  optimizer_kwargs: 
+    optimizer: 
+      lr: 1e-3
+    lr_scheduler: 
+      one: 
+        start_factor: 0.3 
+        end_factor: 1 
+        total_iters: 20 
+      two: 
+        T_max: null
+        eta_min: 0
+      sequential: 
+        milestones: 
+          - ${model.optimizer_kwargs.lr_scheduler.one.total_iters}
 
   vision_backbone_kwargs: 
     model: resnet50
@@ -90,6 +105,14 @@ model:
       d_model: ${d_model}
       max_len: 300
   
+  gripper_kwargs: 
+    in_features: 1 
+    out_features: ${d_model}
+
+  prototype_kwargs: 
+    in_features: ${d_model}
+    out_features: ${k}
+    bias: False
   vic_reg_kwargs: 
     lambda_: 25
     mu: 25
@@ -97,11 +120,11 @@ model:
     gamma: 1
     epsilon: 1e-4
 
-  prototype_kwargs: 
-    in_features: ${d_model}
-    out_features: ${k}
-    bias: False
-  
+  queue_kwargs: 
+    num_modalities: 3
+    capacity: 3840
+    feature_dim: ${d_model}
+
   tsne_kwargs: 
     n_components: 2 
     learning_rate: auto 
@@ -109,26 +132,6 @@ model:
     perplexity: 3
     random_state: ${seed}
   
-  sinkhorn_kwargs: 
-    tau: 0.1
-    sinkhorn_iterations: 3 
-    epsilon: 0.05
-  
-  optimizer_kwargs: 
-    optimizer: 
-      lr: 1e-3
-    lr_scheduler: 
-      one: 
-        start_factor: 0.3 
-        end_factor: 1 
-        total_iters: 20 
-      two: 
-        T_max: null
-        eta_min: 0
-      sequential: 
-        milestones: 
-          - ${model.optimizer_kwargs.lr_scheduler.one.total_iters}
-
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
   name: train

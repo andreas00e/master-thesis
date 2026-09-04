@@ -25,14 +25,15 @@ from models.discover.utils.queue import FIFOQueue
 class TSE(pl.LightningModule): 
     def __init__(
         self, 
-        queue_kwargs: DictConfig, 
-        vision_backbone_kwargs: DictConfig, 
-        vision_encoder_kwargs: DictConfig,
-        vic_reg_kwargs: DictConfig, 
-        prototype_kwargs: DictConfig,  
-        tsne_kwargs: DictConfig, 
         sinkhorn_kwargs: DictConfig, 
         optimizer_kwargs: DictConfig, 
+        vision_backbone_kwargs: DictConfig, 
+        vision_encoder_kwargs: DictConfig,
+        gripper_kwargs: DictConfig, 
+        prototype_kwargs: DictConfig,  
+        vic_reg_kwargs: DictConfig,         
+        queue_kwargs: DictConfig, 
+        tsne_kwargs: DictConfig, 
         ) -> None: 
         
         super().__init__()
@@ -41,13 +42,15 @@ class TSE(pl.LightningModule):
         self.sinkhorn_kwargs = sinkhorn_kwargs        
         self.optimizer_kwargs = optimizer_kwargs
         
-        self.queue = FIFOQueue(**queue_kwargs)
         self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
         self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
+        self.gripper_emb = nn.Linear(**gripper_kwargs)
+        self.prototype_emb = nn.Linear(**prototype_kwargs) 
+        nn.init.orthogonal_(self.prototype_emb.weight)
+    
         self.vicReg = VICReg(**vic_reg_kwargs)
-        self.C = nn.Linear(**prototype_kwargs) 
-        nn.init.orthogonal_(self.C.weight)
-
+        self.queue = FIFOQueue(**queue_kwargs)
+        
         self.tsne = TSNE(**tsne_kwargs)
         
     def configure_optimizers(self) -> Dict:
@@ -103,38 +106,50 @@ class TSE(pl.LightningModule):
         batch_idx: int, 
         stage: str
         ) -> torch.Tensor: 
+        
         idxs = batch["idxs"] # idxs
         
-        h_one_batch = F.normalize(self(batch["rgb_one_anc"], idxs), dim=-1) # [n=batch*chunk, d_model]
-        h_two_batch = F.normalize(self(batch["rgb_two_anc"], idxs), dim=-1) # [n=batch*chunk, d_model]
+        h_one = self(batch["rgb_one"], idxs) # [n=batch*chunk, d_model]: robot0_eye_in_hand_view
+        h_two = self(batch["rgb_two"], idxs) # [n=batch*chunk, d_model]: agentview_image
+        h_gripper = self.gripper_emb(batch["g_qpos"]) # [n=batch*chunk, d_model]: gripper states
         
-        n = h_one_batch.shape[0] 
-       
+        alignment_loss = self.vicReg(h_one, h_two) + self.vicReg(h_one, h_gripper) + self.vicReg(h_two, h_gripper) # align modalities 
+        
+        n = h_one.shape[0] 
+        
+        h_one_batch = F.normalize(h_one, dim=-1)
+        h_two_batch = F.normalize(h_two, dim=-1)
+        h_gripper_batch = F.normalize(h_gripper, dim=-1)
+
         if self.queue is not None and self.queue.is_full: 
                 queue_features = self.queue.dequeue() 
                 h_one_assign = torch.cat([h_one_batch, queue_features[0]], dim=0)
                 h_two_assign = torch.cat([h_two_batch, queue_features[1]], dim=0)
+                h_gripper_assign = torch.cat([h_gripper_batch, queue_features[2]], dim=0)
         else: 
             h_one_assign = h_one_batch
             h_two_assign = h_two_batch
+            h_gripper_assign = h_gripper_batch
             
         if self.queue is not None:   
-            self.queue.enqueue(torch.stack([h_one_batch, h_two_batch], dim=0))
+            self.queue.enqueue(torch.stack([h_one_batch, h_two_batch, h_gripper_batch], dim=0))
    
         # Map to prototypes
-        z_one = self.C(h_one_assign) # [n, k]
-        z_two = self.C(h_two_assign) # [n, k]
+        z_one = self.prototype_emb(h_one_assign) # [n, k]
+        z_two = self.prototype_emb(h_two_assign) # [n, k]
+        z_gripper = self.prototype_emb(h_gripper_assign)
         
         # Find pseudo-labels
         with torch.no_grad(): 
-            target_one = self.distributed_sinkhorn(z_two) # [n, k]
+            target_one = self.distributed_sinkhorn(z_gripper) # [n, k]
             target_two = self.distributed_sinkhorn(z_one) # [n, k]
+            target_three = self.distributed_sinkhorn(z_two) # [n, k]
         
-        loss_one = F.cross_entropy(z_one[:n] / self.sinkhorn_kwargs.tau, target_one[:n])
-        loss_two = F.cross_entropy(z_two[:n] / self.sinkhorn_kwargs.tau, target_two[:n])
-        prediction_loss = 1/2 * (loss_one + loss_two) 
+        loss_one = F.cross_entropy(z_gripper[:n] / self.sinkhorn_kwargs.tau, target_one[:n])
+        loss_two = F.cross_entropy(z_one[:n] / self.sinkhorn_kwargs.tau, target_two[:n])
+        loss_gripper = F.cross_entropy(z_two[:n] / self.sinkhorn_kwargs.tau, target_three[:n])
+        prediction_loss = 1/3 * (loss_one + loss_two + loss_gripper)
             
-        alignment_loss = self.vicReg(h_one_batch, h_two_batch) # align embedding spaces 
         loss = alignment_loss + prediction_loss
         
         self.log_dict({
