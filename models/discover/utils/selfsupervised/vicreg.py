@@ -22,20 +22,23 @@ class VICReg(nn.Module):
         self.gamma = gamma
         self.epsilon = epsilon 
         
-    
     def _variance_loss(self, x: TensorType["n", "d"]) -> TensorType[""]: 
-         
         gamma = torch.tensor(self.gamma, dtype=x.dtype, device=x.device)
 
-        s = torch.sqrt(torch.var(x, dim=-1) + self.epsilon) # [n]. 
-        out = 1 / x.shape[-1] * torch.sum(F.relu(gamma - s)) # []
+        s = torch.sqrt(torch.var(x, dim=0, correction=1) + self.epsilon) # [d]. 
+        out = torch.mean(F.relu(gamma - s)) # []
         
         return out 
     
     def _covariance_loss(self, x: TensorType["n", "d"]) -> TensorType[""]: 
-        cov = torch.cov(x.T, correction=1) # [d, n]: sample variance
-        off_diag = ~torch.eye(cov.shape[0], dtype=torch.bool, device=cov.device)
-        out = torch.sum(cov[off_diag])
+        n, d = x.shape 
+        if n <= 1: 
+            raise ValueError(f"Calculating the sample variance requires more than one sample, got {n} sample(s)")
+        
+        x_centered = x - x.mean(dim=0)
+        cov = (x_centered.T @ x_centered) / (n - 1) # [d, d]: sample variance
+        off_diag = ~torch.eye(cov.shape[0], dtype=torch.bool, device=x.device)
+        out = torch.sum(cov[off_diag] ** 2) / d
         
         return out 
     
