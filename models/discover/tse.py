@@ -18,9 +18,11 @@ import torch.nn.functional as F
 import lightning.pytorch as pl 
 from torchtyping import TensorType
 
-from models.discover.utils.vision import VisionBackbone, VisionEncoder
-from models.discover.utils.selfsupervised.vicreg import VICReg
 from models.discover.utils.queue import FIFOQueue
+from models.utils.loss import UncertaintyWeighting
+from models.discover.utils.selfsupervised.vicreg import VICReg
+from models.discover.utils.vision import VisionBackbone, VisionEncoder
+
 
 class TSE(pl.LightningModule): 
     def __init__(
@@ -50,8 +52,9 @@ class TSE(pl.LightningModule):
     
         self.vicReg = VICReg(**vic_reg_kwargs)
         self.queue = FIFOQueue(**queue_kwargs)
-        
         self.tsne = TSNE(**tsne_kwargs)
+
+        self.weighted_loss = UncertaintyWeighting(num_losses=queue_kwargs.num_modalities)
         
     def configure_optimizers(self) -> Dict:
         if self.trainer.max_epochs is not None: 
@@ -151,7 +154,7 @@ class TSE(pl.LightningModule):
         loss_gripper = F.cross_entropy(z_two[:n] / self.sinkhorn_kwargs.tau, target_three[:n])
         prediction_loss = 1/3 * (loss_one + loss_two + loss_gripper)
             
-        loss = alignment_loss + prediction_loss
+        loss = self.weighted_loss([alignment_loss, prediction_loss])
         
         self.log_dict({
                 f"{stage}_prediction_loss": prediction_loss, 
