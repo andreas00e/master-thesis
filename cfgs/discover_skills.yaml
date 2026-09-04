@@ -34,15 +34,16 @@ datamodule:
   - 0.1
 
   seed: ${seed}
-
+  
+  ctr_transforms: False
   transforms: 
     - to_image
     - resize
-    - gaussian_blur
-    - color_jitter 
-    - rotate 
+    # - gaussian_blur
+    # - color_jitter 
+    # - rotate 
     - to_dtype
-    - solarize
+    # - solarize
     - normalize
 
 model: 

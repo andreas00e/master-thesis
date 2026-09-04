@@ -29,10 +29,12 @@ class MimicGenRobotDataset(Dataset):
         window: int,
         chunk: int,
         crop_factor: Optional[float], 
-        noise_level: float, 
+        noise_level: float,
+        ctr_transforms: bool,  
         transforms: List[str],
         ) -> None:
         super().__init__()
+        
                 
         self.demo_map = demo_map
         self.df_gripper = df_gripper
@@ -40,10 +42,12 @@ class MimicGenRobotDataset(Dataset):
         self.chunk = chunk
         self.crop_factor = crop_factor
         self.noise_level = noise_level
-        self.transforms = transforms
-
-        self.anchor_transforms = get_transforms(self.transforms)
-        self.positive_transforms = get_transforms(self.transforms)
+        
+        if ctr_transforms: 
+            self.anchor_transforms = get_transforms(transforms)
+            self.positive_transforms = get_transforms(transforms)
+        else: 
+            self.transforms = get_transforms(transforms)
                 
         self._file_cache: Dict[str, h5py.File] = {}  
         self._pid: Optional[int] = None
@@ -98,9 +102,9 @@ class MimicGenRobotDataset(Dataset):
             offsets = torch.randint(0, max_offset, size=(self.chunk, )) # indexing, not slicing
             idxs = offsets[:, None] + torch.arange(self.window) # [chunk, window]
         else: 
-            idxs = torch.arange(n_steps) # [whole trajectory]
+            idxs = torch.arange(n_steps) # [whole trajectory] 
  
-        flat = idxs.reshape(-1)
+        flat = idxs.flatten()
         uniq, inv = np.unique(flat, return_inverse=True)
         
         # 1. Perspective 1: robot_0_eye_in_hand_image
@@ -108,45 +112,57 @@ class MimicGenRobotDataset(Dataset):
         if self.crop_factor is not None: 
             crop_h = int(rgb_one.shape[1]*self.crop_factor)
             rgb_one = rgb_one[:, :crop_h, ...]
-            
-        rgb_one = torch.from_numpy(rgb_one).permute(0, 3, 1, 2) # [chunk, window, c=3, h=224, w=224]    
-        rgb_one_pos = self.positive_transforms(rgb_one) # positive sample 
-        rgb_one_anc = self.anchor_transforms(rgb_one) # anchor sample
+        rgb_one = torch.from_numpy(rgb_one).permute(0, 3, 1, 2) # [uniq, channels=3, height=224, width=224] 
         
-        rgb_one_anc = rgb_one_anc[inv].view(*idxs.shape, *rgb_one_anc.shape[1:])
-        rgb_one_pos = rgb_one_pos[inv].view(*idxs.shape, *rgb_one_pos.shape[1:])
-
         # 2. Perspective 2: agentview_image 
         rgb_two = demo_obs["agentview_image"][uniq]        
-        rgb_two = torch.from_numpy(rgb_two).permute(0, 3, 1, 2) # [chunk, window, c=3, h=224, w=224]       
-        rgb_two_pos = self.positive_transforms(rgb_two) # positive sample 
-        rgb_two_anc = self.anchor_transforms(rgb_two) # anchor sample
-        
-        rgb_two_anc = rgb_two_anc[inv].reshape(*idxs.shape, *rgb_two_anc.shape[1:])
-        rgb_two_pos = rgb_two_pos[inv].reshape(*idxs.shape, *rgb_two_pos.shape[1:])
+        rgb_two = torch.from_numpy(rgb_two).permute(0, 3, 1, 2) # [uniq, channels=3, height=224, width=224]       
         
         # 3. Normalized gripper joint states 
-        g_qpos = demo_obs["robot0_gripper_qpos"][uniq] # [chunk, window, d]: d in {2, 6}
-        g_qpos = g_qpos[inv].reshape(*idxs.shape, *g_qpos.shape[1:])
+        g_qpos = demo_obs["robot0_gripper_qpos"][uniq] # [uniq, d]: d in {2, 6}
         min_col, max_col = f"{robot}_min", f"{robot}_max"
         
         if min_col in self.df_gripper.columns and max_col in self.df_gripper.columns: 
             g_min = self.df_gripper[min_col].values[:g_qpos.shape[-1]] # [1, d]
             g_max = self.df_gripper[max_col].values[:g_qpos.shape[-1]] # [1, d]
-            g_qpos = np.clip((g_qpos - g_min) / (g_max - g_min + 1e-8), 0.0, 1.0) # [chunk, window, d]
+            g_qpos = np.clip((g_qpos - g_min) / ((g_max - g_min) + 1e-8), 0.0, 1.0) # [uniq, d] 
             
-        g_qpos = np.mean(g_qpos, axis=-1) # [chunk, window]
-        g_qpos_anc = torch.from_numpy(g_qpos).float() # anchor sammple
-        g_qpos_plus = torch.clamp(g_qpos_anc + self.noise_level * torch.randn_like(g_qpos_anc), 0.0, 1.0) # positive sample
+        g_qpos = np.mean(g_qpos, axis=-1) # [uniq]
+        g_qpos = g_qpos[inv].reshape(*idxs.shape)
+        g_qpos = torch.from_numpy(g_qpos).float()
         
-        item["task"] = torch.full(size=(rgb_one_anc.shape[0], ), fill_value=TASK_DICT[task], dtype=torch.long) # [chunk]
-        item["robot"] = torch.full(size=(rgb_one_anc.shape[0], ), fill_value=ROBOT_DICT[robot], dtype=torch.long) # [chunk]
-        item["rgb_one_anc"] = rgb_one_anc # [chunk, window, c, h, w]
-        item["rgb_one_plus"] = rgb_one_pos
-        item["rgb_two_anc"] = rgb_two_anc
-        item["rgb_two_plus"] = rgb_two_pos
-        item["g_qpos_anc"] = g_qpos_anc
-        item["g_qpos_plus"] = g_qpos_plus
+        if hasattr(self, "anchor_transforms") and hasattr(self, "positive_transforms"): 
+            rgb_one_pos = self.positive_transforms(rgb_one) # positive sample
+            rgb_one = self.anchor_transforms(rgb_one) # anchor sample
+            
+            rgb_one = rgb_one[inv].view(*idxs.shape, *rgb_one.shape[1:]) 
+            rgb_one_pos = rgb_one_pos[inv].view(*idxs.shape, *rgb_one_pos.shape[1:])
+
+            rgb_two_pos = self.positive_transforms(rgb_two) # positive sample
+            rgb_two = self.anchor_transforms(rgb_two) # anchor sample
+
+            rgb_two = rgb_two[inv].view(*idxs.shape, *rgb_two.shape[1:])
+            rgb_two_pos = rgb_two_pos[inv].view(*idxs.shape, *rgb_two_pos.shape[1:]) 
+            
+            g_qpos_plus = torch.clamp(g_qpos + self.noise_level * torch.randn_like(g_qpos), 0.0, 1.0) # positive sample
+            
+            item["rgb_one_pos"] = rgb_one_pos
+            item["rgb_two_pos"] = rgb_two_pos
+            item["g_qpos_plus"] = g_qpos_plus
+
+        elif hasattr(self, "transforms"): 
+            rgb_one = self.transforms(rgb_one)
+            rgb_one = rgb_one[inv].view(*idxs.shape, *rgb_one.shape[1:])
+            
+            rgb_two = self.transforms(rgb_two)
+            rgb_two = rgb_two[inv].view(*idxs.shape, *rgb_two.shape[1:])
+            
+        item["rgb_one"] = rgb_one
+        item["rgb_two"] = rgb_two
+        item["g_qpos"] = g_qpos
+        
+        item["task"] = torch.full(size=(idxs.shape[0], ), fill_value=TASK_DICT[task], dtype=torch.long) # [chunk]
+        item["robot"] = torch.full(size=(idxs.shape[0], ), fill_value=ROBOT_DICT[robot], dtype=torch.long) # [chunk]
         item["idxs"] = idxs
-        
+
         return item 
