@@ -111,7 +111,8 @@ class TSE(pl.LightningModule):
         
         h_one = self(batch["rgb_one"], idxs) # [n=batch*chunk, d_model]: robot0_eye_in_hand_view
         h_two = self(batch["rgb_two"], idxs) # [n=batch*chunk, d_model]: agentview_image
-        h_gripper = self.gripper_emb(batch["g_qpos"]) # [n=batch*chunk, d_model]: gripper states
+        h_gripper = self.gripper_emb(batch["g_qpos"]) # [batch, chunk, window, d_model]: gripper states
+        h_gripper = torch.mean(h_gripper, dim=-2).view(-1, h_one.shape[-1]) # [batch*chunk, d_model]
         
         alignment_loss = self.vicReg(h_one, h_two) + self.vicReg(h_one, h_gripper) + self.vicReg(h_two, h_gripper) # align modalities 
         

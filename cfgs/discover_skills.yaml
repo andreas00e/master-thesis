@@ -142,10 +142,9 @@ trainer:
   _target_: lightning.pytorch.Trainer
 
   accelerator: gpu   
-  # strategy: ddp # delete to run on single gpu
-  strategy: ddp_find_unused_parameters_true
-  devices: -1 # for ddp: -1 
-  # - 0 # single gpu 
+  # strategy: ddp_find_unused_parameters_true # ddp
+  devices: # -1  
+  - 0 # single gpu 
   max_epochs: 400 
   num_sanity_val_steps: 2
   enable_progress_bar: True
