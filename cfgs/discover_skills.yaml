@@ -4,8 +4,8 @@ d_model: 256
 d_emb: 8 
 k: 10
 
-data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
-meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
+data_dir: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/imports/mimicgen/datasets/robot
+meta_dir: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/data/metadata
 
 datamodule: 
   _target_: data.discover.datamodule.MimicGenRobotDataModule
