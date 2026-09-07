@@ -21,7 +21,7 @@ from torchtyping import TensorType
 from models.discover.utils.queue import FIFOQueue
 from models.utils.loss import UncertaintyWeighting
 from models.discover.utils.selfsupervised.vicreg import VICReg
-from models.discover.utils.vision import VisionBackbone, Encoder
+from models.discover.utils.models.vision import VisionBackbone, Encoder
 
 
 class TSE(pl.LightningModule): 

@@ -33,6 +33,7 @@ def main(cfg):
     
     trainer.fit(model=model, datamodule=datamodule)
     
+    print("Finished")
 
 if __name__ == "__main__": 
     try:

@@ -35,7 +35,9 @@ class MimicGenRobotDataset(Dataset):
         ) -> None:
         super().__init__()
         
-                
+        self._file_cache: Dict[str, h5py.File] = {}  
+        self._pid: Optional[int] = None
+   
         self.demo_map = demo_map
         self.df_gripper = df_gripper
         self.window = window
@@ -47,10 +49,7 @@ class MimicGenRobotDataset(Dataset):
             self.anchor_transforms = get_transforms(transforms)
             self.positive_transforms = get_transforms(transforms)
         else: 
-            self.transforms = get_transforms(transforms)
-                
-        self._file_cache: Dict[str, h5py.File] = {}  
-        self._pid: Optional[int] = None
+            self.transforms = get_transforms(transforms)  
                              
     def __len__(self) -> int:
         return len(self.demo_map)

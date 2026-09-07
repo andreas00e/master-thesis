@@ -3,6 +3,7 @@ from typing import List
 import torch 
 import torch.nn as nn 
 import torch.nn.functional as F 
+from torchtyping import TensorType
 
 # https://arxiv.org/abs/1705.07115
 class UncertaintyWeighting(nn.Module): 
@@ -37,3 +38,27 @@ class SoftOptimalUncertaintyWeighting(nn.Module):
         loss = torch.sum(weighted_losses, dim=0)
         
         return loss
+    
+# https://arxiv.org/pdf/1803.10704
+class DynamicWeightAverage(nn.Module): 
+    def __init__(
+        self, 
+        n_losses: int, 
+        T: int, # softmax temperature
+        ) -> None:
+        super().__init__()
+        
+        self.n_losses = n_losses
+        self.temperature = T
+    
+    def forward(self, losses:TensorType["2", "n_losses"]) -> TensorType["n_losses"]:
+        if len(losses) != self.n_losses: 
+            raise ValueError(f"DWA considers last {self.n_losses} losses only, got last {len(losses)} losses.")
+        
+            
+        w_k = losses[:, 0] / losses[:, 1] # [n_losses]
+        w_k = torch.exp(w_k / self.T) # [n_losses]
+        
+        lambda_k = w_k / torch.sum(w_k) # [n_losses]
+
+        return lambda_k 

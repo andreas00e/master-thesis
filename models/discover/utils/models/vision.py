@@ -6,11 +6,58 @@ from typing import List, Optional, Union
 
 import torch 
 import torch.nn as nn 
+import torch.nn.functional as F 
 from torchtyping import TensorType
 import torchvision.models as models
 
 from models.utils.utils import PE
 
+
+class DepthVisionBackBone(nn.Module): 
+    def __init__(
+        self
+        ) -> None:
+        super().__init__()
+
+        self.conv_block_one = nn.Sequential(
+            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1), 
+            nn.BatchNorm2d(32), 
+            nn.ReLU(), 
+            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, padding=1), 
+            nn.BatchNorm2d(32), 
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        
+        self.conv_block_two = nn.Sequential(
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1), 
+            nn.BatchNorm2d(64), 
+            nn.ReLU(), 
+            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, padding=1), 
+            nn.BatchNorm2d(64), 
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        
+        self.fc = nn.Sequential(
+            nn.Flatten(), 
+            nn.Linear(64*21*21, 512),
+            nn.ReLU(), 
+            nn.Linear(512, 256), 
+        )
+    
+    def forward(
+        self,
+        x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
+        ) -> TensorType["batch*chunk*window", "d_model"]:
+        x_shape = x.shape
+        x = x.view(-1, *x.shape[-3:]) # [batch*chunk*window, channels, height, width]
+        
+        x = self.conv_block_one(x)
+        x = self.conv_block_two(x)
+        x = self.fc(x)
+        
+        x = x.view(-1, *x_shape[1:3], x.shape[-1]) # [batch*chunk, window, d_model]
+        
+        return x
 
 class VisionBackbone(nn.Module): 
     def __init__(
@@ -112,7 +159,8 @@ class VisionBackbone(nn.Module):
         x_shape = x.shape
         x = x.view(-1, *x.shape[-3:]) # [batch*chunk*window, channels, height, width]
         x = self.model(x) # [batch*chunk*window, d_model]
-        x = x.view(-1, *x_shape[1:3], x.shape[-1]) # [batch*chunk, window, d_model]
+        x = x.view(x_shape[0]*x_shape[1], x_shape[2], x.shape[-1]) # [batch*chunk, window, d_model]
+        
         return x
 
 
@@ -134,13 +182,13 @@ class Encoder(nn.Module):
             **transformer_encoder_kwargs
         )
         
-        self.down_emb = isinstance(down_emb_kwargs, DictConfig)
-        self.up_emb = isinstance(up_emb_kwargs, DictConfig)
+        self.is_down_emb = isinstance(down_emb_kwargs, DictConfig)
+        self.is_up_emb = isinstance(up_emb_kwargs, DictConfig)
         
-        if self.down_emb: 
+        if self.is_down_emb: 
             self.down_emb = nn.Linear(**down_emb_kwargs)
         
-        if not self.up_emb is not None: 
+        if self.is_up_emb:  
             self.up_emb = nn.Sequential(
                 nn.Linear(up_emb_kwargs["in_features"], up_emb_kwargs["hidden_features"]), 
                 nn.ReLU(), 
@@ -157,17 +205,18 @@ class Encoder(nn.Module):
         idxs: Optional[TensorType["batch", "chunk", "window"]]=None
         ) -> TensorType["*"]: 
         
-        if self.down_emb: 
+        if self.is_down_emb: 
             x = self.down_emb(x) # [batch*chunk, window, d_model] 
             
         cls = self.cls.expand(x.shape[0], -1, -1) # [batch*chunk, 1, d_model]
-        x = torch.concat(tensors=(cls, x), dim=1) # [batch*chunk, 1+window, d_model]
+        
+        x = torch.cat(tensors=(cls, x), dim=1) # [batch*chunk, 1+window, d_model]
         x = self.pe(x, idxs) # [batch*chunk, 1+window, d_model]
         x = self.encoder_transformer(x) # [batch*chunk, 1+window, d_model]
         x = torch.mean(x, dim=1) # [batch*chunk, d_model]
         # x = x[:, 0, :] # [batch*chunk, d_model]
         
-        if self.up_emb: 
+        if self.is_up_emb: 
             x = self.up_emb(x) # [batch*chunk, d_model]
         
         return x

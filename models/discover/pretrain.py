@@ -7,9 +7,9 @@ import torch.nn as nn
 
 import lightning.pytorch as pl
 
-from models.discover.utils.vision import VisionBackbone, Encoder
+from models.discover.utils.models.vision import VisionBackbone, Encoder
 from models.discover.utils.selfsupervised.vicreg import VICReg
-
+from models.utils.loss import DynamicWeightAverage
 
 class Pretrain(pl.LightningModule): 
     def __init__(
@@ -20,7 +20,8 @@ class Pretrain(pl.LightningModule):
         vision_encoder_kwargs: DictConfig, 
         gripper_backbone_kwargs: DictConfig,
         gripper_encoder_kwargs: DictConfig, 
-        vic_reg_kwargs: DictConfig
+        vic_reg_kwargs: DictConfig,
+        dwa_kwargs: DictConfig
         ) -> None: 
         
         super().__init__()
@@ -34,6 +35,10 @@ class Pretrain(pl.LightningModule):
         self.gripperBackbone = nn.Linear(**gripper_backbone_kwargs)
         self.gripperEncoder = Encoder(**gripper_encoder_kwargs)
         self.vicReg = VICReg(**vic_reg_kwargs)
+        self.dwa = DynamicWeightAverage(**dwa_kwargs)
+        
+        
+        self.register_parameter("losses", torch.ones(size=(2, self.dwa_kwargs.n_losses), dtype=torch.float32, device=self.device))        
         
     def configure_optimizers(self) -> Dict:
         optimizer = instantiate(self.optimizer_kwargs, params=self.parameters())
@@ -65,7 +70,11 @@ class Pretrain(pl.LightningModule):
         
         loss_one = self.vicReg(rgb_one_emb, rgb_two_emb) 
         loss_two = self.vicReg(rgb_one_emb, gripper_emb)   
-        loss =  1/2 * (loss_one+loss_two)
+        
+        lambda_ = self.dwa(self.losses)
+        losses = torch.vstack((loss_one, loss_two)) # [2, 1]
+
+        loss = torch.sum(lambda_ * losses)
         
         self.log_dict({
             f"{stage}_loss_one": loss_one, 
