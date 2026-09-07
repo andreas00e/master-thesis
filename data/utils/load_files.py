@@ -190,3 +190,83 @@ def get_demo_dict(metadata: pd.DataFrame, files: List[Union[str, os.PathLike]], 
         window = int(min_horizon)
     
     return demo_dict, window
+
+def get_depth_dict(
+    files: Union[Union[str, os.PathLike], List[Union[str, os.PathLike]]], 
+    meta_file: Optional[Union[str, os.PathLike]]=None
+    ) -> pd.DataFrame:
+    
+    if isinstance(files, (str, os.PathLike)): 
+        files = [Path(files)]
+    else: 
+        files = [Path(f) for f in files]
+        
+    if meta_file is not None: 
+        meta_file = Path(meta_file)
+        if not meta_file.exists(): 
+            meta_file.parent.mkdir(parents=True, exist_ok=True)
+    else: 
+        meta_file = Path.cwd() / "depths.csv"
+    
+    if meta_file.exists(): 
+        df = pd.read_csv(meta_file)
+    else: 
+        df = pd.DataFrame()
+        
+    depth_dict = {}
+    keys = []
+    
+    for file in tqdm(files, desc=colored("Fetching minimal and maximal depth map values"), colour="green"): 
+        key = file.stem
+        if key in df.columns and df[key].notna().all(): 
+                continue 
+        else: 
+            keys.append(key)
+        
+        if depth_dict.get(key, None) is None:
+            depth_dict[key] = {}
+        
+        try: 
+            with h5py.File(file, "r") as hf:    
+                data = hf["data"]     
+                min_dict = {}
+                max_dict = {}   
+                     
+                for demo in hf.keys():
+                    obs = data[demo]["obs"]
+                    views = [v for v in obs.keys() if "depth" in v]
+                    
+                    for view in views: 
+                        depth_map = obs[view][()]
+
+                        if depth_dict[key].get(view, None) is None: 
+                            depth_dict[key][view] = {}
+                            depth_dict[key]["view"]["min"] = float("inf")
+                            depth_dict[key]["view"]["max"] = float("-inf")
+                        if min_dict[key].get(view, None) is None: 
+                            min_dict[key][view] = []
+                        if max_dict[key].get(view, None) is None: 
+                            max_dict[key][view] = []
+                        
+                        min_dict[key][view].append(np.min(depth_map))
+                        max_dict[key][view].append(np.max(depth_map))
+                
+                for view in min_dict[key].keys(): 
+                    min_dict[key][view] = min(min_dict[key][view])    
+                    max_dict[key][view] = max(max_dict[key][view])
+                
+                    if min(min_dict[key][view]) < depth_dict[key][view]["min"]: 
+                        depth_dict[key][view]["min"] = min(min_dict[key][view])
+                    
+                    if max(min_dict[key][view]) > depth_dict[key][view]["max"]: 
+                        depth_dict[key][view]["max"] = max(min_dict[key][view])
+                 
+        except Exception as e: 
+            raise FileNotFoundError(colored(f"Could not open file: {file}", "red")) from e
+    
+    if len(keys) > 0: 
+        df_new = pd.DataFrame(depth_dict, columns=key, index=[k for k in depth_dict[key][view].keys()])
+        df = pd.concat([df, df_new], axis=1)
+        df.to_csv(meta_file, index=True, encoding="utf-8")
+    
+    return df

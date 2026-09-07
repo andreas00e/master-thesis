@@ -39,39 +39,26 @@ datamodule:
   transforms: 
     - to_image
     - resize
-    # - gaussian_blur
-    # - color_jitter 
-    # - rotate 
     - to_dtype
-    # - solarize
     - normalize
 
 model: 
-  _target_: models.discover.tse.TSE
-  
-  sinkhorn_kwargs: 
-    tau: 0.1
-    sinkhorn_iterations: 3 
-    epsilon: 0.05
+  _target_: models.discover.pretrain.Pretrain
+  _recursive_: False
   
   optimizer_kwargs: 
-    optimizer: 
-      lr: 1e-3
-    lr_scheduler: 
-      one: 
-        start_factor: 0.3 
-        end_factor: 1 
-        total_iters: 20 
-      two: 
-        T_max: null
-        eta_min: 0
-      sequential: 
-        milestones: 
-          - ${model.optimizer_kwargs.lr_scheduler.one.total_iters}
+    _target_: torch.optim.SGD
+    _recursive_: False
+    lr: 1e-3
+
+  scheduler_kwargs: 
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    _recursive_: False
+    T_max: 0 # placeholder 
+    eta_min: 0
 
   vision_backbone_kwargs: 
     model: resnet50
-    weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights
     lora: True
     layer: 
       - 4 
@@ -105,32 +92,33 @@ model:
       d_model: ${d_model}
       max_len: 300
   
-  gripper_kwargs: 
+  gripper_backbone_kwargs: 
     in_features: 1 
     out_features: ${d_model}
+  
+  gripper_encoder_kwargs: 
+    encoder_layer_kwargs: 
+      d_model: ${d_model}
+      nhead: 1
+      dim_feedforward: 512
+      batch_first: True
 
-  prototype_kwargs: 
-    in_features: ${d_model}
-    out_features: ${k}
-    bias: False
+    transformer_encoder_kwargs:
+      num_layers: 2
+      norm: null
+      enable_nested_tensor: False 
+      mask_check: False
+      
+    pe_kwargs: 
+      d_model: ${d_model}
+      max_len: 300
+
   vic_reg_kwargs: 
     lambda_: 25
     mu: 25
     nu: 1
     gamma: 1
     epsilon: 1e-4
-
-  queue_kwargs: 
-    num_modalities: 3
-    capacity: 3840
-    feature_dim: ${d_model}
-
-  tsne_kwargs: 
-    n_components: 2 
-    learning_rate: auto 
-    init: random 
-    perplexity: 3
-    random_state: ${seed}
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
@@ -140,11 +128,8 @@ logger:
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-
-  accelerator: gpu   
-  strategy: ddp_find_unused_parameters_true # ddp
-  devices: -1  
-  # - 0 # single gpu 
+  accelerator: cpu   
+  devices: 1 
   max_epochs: 400 
   num_sanity_val_steps: 2
   enable_progress_bar: True
