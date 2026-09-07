@@ -21,7 +21,7 @@ from torchtyping import TensorType
 from models.discover.utils.queue import FIFOQueue
 from models.utils.loss import UncertaintyWeighting
 from models.discover.utils.selfsupervised.vicreg import VICReg
-from models.discover.utils.vision import VisionBackbone, VisionEncoder
+from models.discover.utils.vision import VisionBackbone, Encoder
 
 
 class TSE(pl.LightningModule): 
@@ -45,7 +45,7 @@ class TSE(pl.LightningModule):
         self.optimizer_kwargs = optimizer_kwargs
         
         self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
-        self.visionEncoder = VisionEncoder(**vision_encoder_kwargs)
+        self.visionEncoder = Encoder(**vision_encoder_kwargs)
         self.gripper_emb = nn.Linear(**gripper_kwargs)
         self.prototype_emb = nn.Linear(**prototype_kwargs) 
         nn.init.orthogonal_(self.prototype_emb.weight)

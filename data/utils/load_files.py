@@ -191,63 +191,82 @@ def get_demo_dict(metadata: pd.DataFrame, files: List[Union[str, os.PathLike]], 
     
     return demo_dict, window
 
-def get_depth_dict(files: Union[Union[str, os.PathLike], List[Union[str, os.PathLike]]], meta_file: Optional[Union[str, os.PathLike]]=None) -> None:
-    if isinstance(files, (str, os.PathLike)): 
-        files = [files]
+def get_depth_dict(
+    files: Union[Union[str, os.PathLike], List[Union[str, os.PathLike]]], 
+    meta_file: Optional[Union[str, os.PathLike]]=None
+    ) -> pd.DataFrame:
     
+    if isinstance(files, (str, os.PathLike)): 
+        files = [Path(files)]
+    else: 
+        files = [Path(f) for f in files]
+        
     if meta_file is not None: 
         meta_file = Path(meta_file)
-        
         if not meta_file.exists(): 
             meta_file.parent.mkdir(parents=True, exist_ok=True)
-
     else: 
         meta_file = Path.cwd() / "depths.csv"
     
-    df = pd.read_csv(meta_file)
-    depth_dict = {}
-
-    for file in tqdm(files, desc=colored("Fetching minimal and maximal depth map values"), colour="green"): 
-        key = Path(file).stem 
+    if meta_file.exists(): 
+        df = pd.read_csv(meta_file)
+    else: 
+        df = pd.DataFrame()
         
-        if key in df.columns: 
-            valid_series = df.columns.dropna()
-            if len(valid_series) == 2: # min, max 
-                continue
-            
-        if not hasattr(depth_dict, key, None): 
+    depth_dict = {}
+    keys = []
+    
+    for file in tqdm(files, desc=colored("Fetching minimal and maximal depth map values"), colour="green"): 
+        key = file.stem
+        if key in df.columns and df[key].notna().all(): 
+                continue 
+        else: 
+            keys.append(key)
+        
+        if depth_dict.get(key, None) is None:
             depth_dict[key] = {}
-        if not hasattr(depth_dict[key], "min", None): 
-            depth_dict[key]["min"] = float("inf")
-        if not hasattr(depth_dict[key], "max", None): 
-            depth_dict[key]["max"] = float("-inf")
         
         try: 
-            with h5py.File(file, "r") as hf:      
-                data = hf["data"]           
-                min_list = []
-                max_list = []
-
+            with h5py.File(file, "r") as hf:    
+                data = hf["data"]     
+                min_dict = {}
+                max_dict = {}   
+                     
                 for demo in hf.keys():
                     obs = data[demo]["obs"]
                     views = [v for v in obs.keys() if "depth" in v]
                     
                     for view in views: 
                         depth_map = obs[view][()]
-                        min_list.append(np.min(depth_map))
-                        max_list.append(np.max(depth_map))
+
+                        if depth_dict[key].get(view, None) is None: 
+                            depth_dict[key][view] = {}
+                            depth_dict[key]["view"]["min"] = float("inf")
+                            depth_dict[key]["view"]["max"] = float("-inf")
+                        if min_dict[key].get(view, None) is None: 
+                            min_dict[key][view] = []
+                        if max_dict[key].get(view, None) is None: 
+                            max_dict[key][view] = []
+                        
+                        min_dict[key][view].append(np.min(depth_map))
+                        max_dict[key][view].append(np.max(depth_map))
+                
+                for view in min_dict[key].keys(): 
+                    min_dict[key][view] = min(min_dict[key][view])    
+                    max_dict[key][view] = max(max_dict[key][view])
+                
+                    if min(min_dict[key][view]) < depth_dict[key][view]["min"]: 
+                        depth_dict[key][view]["min"] = min(min_dict[key][view])
+                    
+                    if max(min_dict[key][view]) > depth_dict[key][view]["max"]: 
+                        depth_dict[key][view]["max"] = max(min_dict[key][view])
                  
-                min = np.min(min_list)
-                max = np.max(max_list)
-                
-                if min < depth_dict[key]["min"]: 
-                    depth_dict[key]["min"] = min 
-                if max > depth_dict[key]["max"]: 
-                    depth_dict[key]["max"] = max 
-                
         except Exception as e: 
             raise FileNotFoundError(colored(f"Could not open file: {file}", "red")) from e
     
-
-    df = pd.DataFrame(depth_dict, columns=key)
-    df.to_csv(meta_file, index=False, encoding="utf-8")
+    if len(keys) > 0: 
+        df_new = pd.DataFrame(depth_dict, columns=key, index=[k for k in depth_dict[key][view].keys()])
+        df = pd.concat([df, df_new], axis=1)
+        df.to_csv(meta_file, index=True, encoding="utf-8")
+    
+    return df

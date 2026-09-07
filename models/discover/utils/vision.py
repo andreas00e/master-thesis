@@ -1,15 +1,13 @@
-import os 
+from r3m import load_r3m
+import loralib as lora 
 from pathlib import Path
-from typing import List, Union
 from omegaconf import  DictConfig
-
+from typing import List, Optional, Union
 
 import torch 
 import torch.nn as nn 
 from torchtyping import TensorType
-
 import torchvision.models as models
-import loralib as lora 
 
 from models.utils.utils import PE
 
@@ -18,7 +16,6 @@ class VisionBackbone(nn.Module):
     def __init__(
         self, 
         model: str, 
-        weights_path: Union[str, os.PathLike], 
         lora: bool, 
         layer: Union[int, List[int]], 
         r: int, 
@@ -32,31 +29,26 @@ class VisionBackbone(nn.Module):
         except Exception as e: 
             raise ModuleNotFoundError(f"Model \"{model}\" could not be loaded from torchvision.") from e
         
-        if weights_path is not None: 
-            weights_path = Path(weights_path)
-            self.weights_path = weights_path / f"r3m_{model}_weights.pth"
-        else: 
-            raise ValueError("weights_path cannot be None")
-        
         try: 
-            ckpt = torch.load(self.weights_path, map_location="cpu")
-        except Exception as e: 
-            raise FileNotFoundError(f"Weights could not be found at {self.weights_path}.") from e
-        
+           r3m_model = load_r3m(model)
+        except: 
+            raise ModuleNotFoundError(f"Model \"r3m_{model}\" could not be loaded from r3m.") from e
+
+
         if layer is not None: 
             layer = [layer] if isinstance(layer, int) else list(layer)
             self.layer = [f"layer{i}" for i in layer]
         else: 
             self.layer = []
-        
+                
         self.r = r 
         self.lora_alpha = lora_alpha
         self.lora_dropout = lora_drop_out
         
-        r3m_state_dict = ckpt.get("state_dict", ckpt)
         clean_state_dict = {}
         model_state = self.model.state_dict()
-        for key, value in r3m_state_dict.items():
+        
+        for key, value in r3m_model.state_dict().items():
             new_key = key.replace("module.convnav.", "").replace("model.", "")
             if new_key in model_state:
                 clean_state_dict[new_key] = value
@@ -112,52 +104,70 @@ class VisionBackbone(nn.Module):
         
         return lora_conv    
         
-    def forward(self, x: TensorType["*"]) -> TensorType["*"]:
-        return self.model(x)  
+    def forward(
+        self, 
+        x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
+        ) -> TensorType["batch*chunk*window", "d_model"]:
+        
+        x_shape = x.shape
+        x = x.view(-1, *x.shape[-3:]) # [batch*chunk*window, channels, height, width]
+        x = self.model(x) # [batch*chunk*window, d_model]
+        x = x.view(-1, *x_shape[1:3], x.shape[-1]) # [batch*chunk, window, d_model]
+        return x
 
 
-class VisionEncoder(nn.Module): 
+class Encoder(nn.Module): 
     def __init__(
         self, 
         encoder_layer_kwargs: DictConfig, 
         transformer_encoder_kwargs: DictConfig, 
-        down_emb_kwargs: DictConfig, 
-        up_emb_kwargs: DictConfig, 
-        pe_kwargs: DictConfig
+        pe_kwargs: DictConfig,
+        down_emb_kwargs: Optional[DictConfig]=None, 
+        up_emb_kwargs: Optional[DictConfig]=None
         ) -> None:
         
         super().__init__()
-        
-        d_model = encoder_layer_kwargs["d_model"]
-        
+            
         encoder_layer = nn.TransformerEncoderLayer(**encoder_layer_kwargs)
         self.encoder_transformer = nn.TransformerEncoder(
             encoder_layer=encoder_layer, 
             **transformer_encoder_kwargs
         )
         
-        self.down_emb = nn.Linear(**down_emb_kwargs)
+        self.down_emb = isinstance(down_emb_kwargs, DictConfig)
+        self.up_emb = isinstance(up_emb_kwargs, DictConfig)
         
-        self.up_emb = nn.Sequential(
-            nn.Linear(up_emb_kwargs["in_features"], up_emb_kwargs["hidden_features"]), 
-            nn.ReLU(), 
-            nn.Linear(up_emb_kwargs["hidden_features"], up_emb_kwargs["out_features"])
-        )
+        if self.down_emb: 
+            self.down_emb = nn.Linear(**down_emb_kwargs)
         
-        self.pe: nn.Module = PE(**pe_kwargs)
+        if not self.up_emb is not None: 
+            self.up_emb = nn.Sequential(
+                nn.Linear(up_emb_kwargs["in_features"], up_emb_kwargs["hidden_features"]), 
+                nn.ReLU(), 
+                nn.Linear(up_emb_kwargs["hidden_features"], up_emb_kwargs["out_features"])
+            )
         
-        self.cls = nn.Parameter(data=torch.empty(size=(1, 1, d_model), dtype=torch.float32))
+        self.pe = PE(**pe_kwargs)
+        self.cls = nn.Parameter(data=torch.empty(size=(1, 1, encoder_layer_kwargs.d_model), dtype=torch.float32))
         nn.init.xavier_uniform_(self.cls)
     
-    def forward(self, x: TensorType["batch*chunk", "window", "d_model"], idxs: TensorType["batch", "chunk", "window"]) -> TensorType["*"]: 
-        x = self.down_emb(x) # [batch*chunk, window, d_model] 
+    def forward(
+        self, 
+        x: TensorType["batch*chunk, window", "d_model"], 
+        idxs: Optional[TensorType["batch", "chunk", "window"]]=None
+        ) -> TensorType["*"]: 
         
+        if self.down_emb: 
+            x = self.down_emb(x) # [batch*chunk, window, d_model] 
+            
         cls = self.cls.expand(x.shape[0], -1, -1) # [batch*chunk, 1, d_model]
         x = torch.concat(tensors=(cls, x), dim=1) # [batch*chunk, 1+window, d_model]
         x = self.pe(x, idxs) # [batch*chunk, 1+window, d_model]
         x = self.encoder_transformer(x) # [batch*chunk, 1+window, d_model]
-        x = x[:, 0, :] # [batch*chunk, d_model]
+        x = torch.mean(x, dim=1) # [batch*chunk, d_model]
+        # x = x[:, 0, :] # [batch*chunk, d_model]
         
-        x = self.up_emb(x)
+        if self.up_emb: 
+            x = self.up_emb(x) # [batch*chunk, d_model]
         
         return x

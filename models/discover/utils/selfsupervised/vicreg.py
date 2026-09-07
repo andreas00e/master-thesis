@@ -15,7 +15,6 @@ class VICReg(nn.Module):
         ) -> None:
         super().__init__()
         
-        
         self.lambda_ = lambda_
         self.mu = mu 
         self.nu = nu
