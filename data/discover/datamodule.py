@@ -22,7 +22,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         robots: Optional[Union[str, List[str]]], 
         tasks: Optional[Union[str, List[str]]], 
         n_ds: int, # d0 or d0 and d1
-        f_ds: float, 
+        f_ds: float, # percentage of dataset use
         depth: bool, 
         crop_factor: float,        
         noise_level: float, 
