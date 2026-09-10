@@ -14,3 +14,5 @@ requirements.txt
 
 **/__pycache__/
 *.ckpt*
+*.err*
+*.log*

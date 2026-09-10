@@ -33,7 +33,10 @@ class FineTuner(pl.LightningModule):
         self.dwa_kwargs = dwa_kwargs
         
         self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
-        self.gripperBackbone = nn.Linear(**self.gripper_backbone_kwargs)
+        self.gripperBackbone = nn.Sequential(
+            nn.Flatten(start_dim=0, end_dim=-2),
+            nn.Linear(**self.gripper_backbone_kwargs)
+        )
         self.vicReg = VICReg(**self.vic_reg_kwargs)
         self.dwa = DynamicWeightAverage(**self.dwa_kwargs)
         
@@ -78,6 +81,11 @@ class FineTuner(pl.LightningModule):
             f"{stage}_loss_one": loss_one, 
             f"{stage}_loss_two": loss_two, 
             f"{stage}_loss": loss
-        })
-        
+            }, 
+            prog_bar=True,
+            on_step=True, 
+            on_epoch=True, 
+            sync_dist=True 
+        )
+
         return loss 

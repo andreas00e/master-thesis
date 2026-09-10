@@ -49,7 +49,7 @@ class DynamicWeightAverage(nn.Module):
         super().__init__()
         
         self.n_losses = n_losses
-        self.temperature = T
+        self.T = T
     
     def forward(self, losses:TensorType["2", "n_losses"]) -> TensorType["n_losses"]:
         if len(losses) != self.n_losses: 
