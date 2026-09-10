@@ -15,7 +15,7 @@ datamodule:
 
   robots: null # iiwa, panda, sawyer, ur5e
   tasks: null # square, threading
-  n_ds: 2 # {1, 2} if d_0 or d_0 & d_1
+  n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
   f_ds: 1
   depth: False # True: include depth maps  
   crop_factor: 0.75 # (0, 1)
@@ -43,75 +43,38 @@ datamodule:
     - normalize
 
 model: 
-  _target_: models.discover.pretrain.Pretrain
+  _target_: models.01_fine_tune.fine_tuner.FineTuner
   _recursive_: False
   
   optimizer_kwargs: 
     _target_: torch.optim.SGD
     _recursive_: False
     lr: 1e-3
+    momentum: 0.9
+    weight_decay: 1e-4
 
   scheduler_kwargs: 
     _target_: torch.optim.lr_scheduler.CosineAnnealingLR
     _recursive_: False
-    T_max: 0 # placeholder 
-    eta_min: 0
+    T_max: 0 # placeholder -> all steps  
+    eta_min: 1e-6
 
   vision_backbone_kwargs: 
     model: resnet50
     lora: True
     layer: 
       - 4 
-    r: 8
-    lora_alpha: 1
-    lora_drop_out: 0.0
+    r: 16
+    lora_alpha: 16
+    lora_drop_out: 0.05
 
-  vision_encoder_kwargs: 
-    encoder_layer_kwargs: 
-      d_model: ${d_model}
-      nhead: 4 
-      dim_feedforward: 512
-      batch_first: True
-
-    transformer_encoder_kwargs:
-      num_layers: 8
-      norm: null
-      enable_nested_tensor: False 
-      mask_check: False
-
-    down_emb_kwargs: 
+    out_emb_kwargs: 
       in_features: 2048 
       out_features: ${d_model}
-    
-    up_emb_kwargs:
-      in_features: ${d_model}
-      hidden_features: 32
-      out_features: ${d_model} 
-      
-    pe_kwargs: 
-      d_model: ${d_model}
-      max_len: 300
-  
+
   gripper_backbone_kwargs: 
     in_features: 1 
     out_features: ${d_model}
-  
-  gripper_encoder_kwargs: 
-    encoder_layer_kwargs: 
-      d_model: ${d_model}
-      nhead: 1
-      dim_feedforward: 512
-      batch_first: True
-
-    transformer_encoder_kwargs:
-      num_layers: 2
-      norm: null
-      enable_nested_tensor: False 
-      mask_check: False
-      
-    pe_kwargs: 
-      d_model: ${d_model}
-      max_len: 300
 
   vic_reg_kwargs: 
     lambda_: 25

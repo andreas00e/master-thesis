@@ -18,13 +18,18 @@ os.environ["NCCL_P2P_DISABLE"]="1"
 os.environ["NCCL_IB_DISABLE"]="1"
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
+warnings.filterwarnings("ignore", category=UserWarning, module="r3m")
 warnings.filterwarnings("ignore", category=UserWarning, module="lightning")
 warnings.filterwarnings("ignore", category=UserWarning, module="lightning.pytorch.utilities._pytree")
 warnings.filterwarnings("ignore", message=".*incompatible copy of pydevd already imported.*")
 
-@hydra.main(config_path="cfgs/", config_name="pretrain", version_base=None)
+@hydra.main(config_path="cfgs/", config_name="fine_tune", version_base=None)
 def main(cfg):     
     pl.seed_everything(cfg.seed, workers=True)
+    
+    print("##############################################################")
+    print("Starting training")
+    print("##############################################################")
 
     datamodule = instantiate(cfg.datamodule)
     model = instantiate(cfg.model)

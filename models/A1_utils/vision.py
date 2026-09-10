@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torchtyping import TensorType
 import torchvision.models as models
 
-from models.utils.utils import PE
+from models.A1_utils.utils import PE
 
 
 class DepthVisionBackBone(nn.Module): 
@@ -67,7 +67,8 @@ class VisionBackbone(nn.Module):
         layer: Union[int, List[int]], 
         r: int, 
         lora_alpha: int, 
-        lora_drop_out: float
+        lora_drop_out: float, 
+        out_emb_kwargs: DictConfig
         ) -> None:
         super().__init__()
         
@@ -102,9 +103,10 @@ class VisionBackbone(nn.Module):
 
         self.model.load_state_dict(clean_state_dict, strict=False)
         self.model.fc = nn.Identity()
-          
+        
         if lora: 
             self._lora()
+            self.out_emb = nn.Linear(**out_emb_kwargs)
         else: 
             self.model.requires_grad_(False)
             self.model.eval()
@@ -158,8 +160,9 @@ class VisionBackbone(nn.Module):
         
         x_shape = x.shape
         x = x.view(-1, *x.shape[-3:]) # [batch*chunk*window, channels, height, width]
-        x = self.model(x) # [batch*chunk*window, d_model]
-        x = x.view(x_shape[0]*x_shape[1], x_shape[2], x.shape[-1]) # [batch*chunk, window, d_model]
+        x = self.model(x) # [batch*chunk*window, feature_dim]
+        x = x.view(-1, x.shape[-1]) # [batch*chunk*window, feature_dim]
+        x = self.out_emb(x) # [batch*chunk*window, d_model]
         
         return x
 

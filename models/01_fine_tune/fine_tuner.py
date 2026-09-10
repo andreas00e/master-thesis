@@ -7,28 +7,19 @@ import torch.nn as nn
 
 import lightning.pytorch as pl
 
-<<<<<<< HEAD:models/discover/pretrain.py
-from models.discover.utils.models.vision import VisionBackbone, Encoder
-=======
-from models.discover.utils.vision import VisionBackbone
->>>>>>> 5585e1126b754c97f2417153e2013a434bc9e025:models/pretrain/pretrain.py
-from models.discover.utils.selfsupervised.vicreg import VICReg
-from models.utils.loss import DynamicWeightAverage
+from models.A1_utils.vision import VisionBackbone
+from models.A1_utils.vicreg import VICReg
+from models.A1_utils.loss import DynamicWeightAverage
 
-class Pretrain(pl.LightningModule): 
+class FineTuner(pl.LightningModule): 
     def __init__(
         self, 
         optimizer_kwargs: DictConfig, 
         scheduler_kwargs: DictConfig, 
         vision_backbone_kwargs: DictConfig, 
         gripper_backbone_kwargs: DictConfig,
-<<<<<<< HEAD:models/discover/pretrain.py
-        gripper_encoder_kwargs: DictConfig, 
         vic_reg_kwargs: DictConfig,
         dwa_kwargs: DictConfig
-=======
-        vic_reg_kwargs: DictConfig
->>>>>>> 5585e1126b754c97f2417153e2013a434bc9e025:models/pretrain/pretrain.py
         ) -> None: 
         
         super().__init__()
@@ -36,14 +27,17 @@ class Pretrain(pl.LightningModule):
         
         self.optimizer_kwargs = optimizer_kwargs
         self.scheduler_kwargs = scheduler_kwargs
+        self.vision_backbone_kwargs = vision_backbone_kwargs
+        self.gripper_backbone_kwargs = gripper_backbone_kwargs
+        self.vic_reg_kwargs = vic_reg_kwargs
+        self.dwa_kwargs = dwa_kwargs
         
-        self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
-        self.gripperBackbone = nn.Linear(**gripper_backbone_kwargs)
-        self.vicReg = VICReg(**vic_reg_kwargs)
-        self.dwa = DynamicWeightAverage(**dwa_kwargs)
+        self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
+        self.gripperBackbone = nn.Linear(**self.gripper_backbone_kwargs)
+        self.vicReg = VICReg(**self.vic_reg_kwargs)
+        self.dwa = DynamicWeightAverage(**self.dwa_kwargs)
         
-        
-        self.register_parameter("losses", torch.ones(size=(2, self.dwa_kwargs.n_losses), dtype=torch.float32, device=self.device))        
+        self.register_buffer("losses", torch.ones(size=(2, self.dwa_kwargs.n_losses), dtype=torch.float32, device=self.device)) # XXX: '2' could be move to config
         
     def configure_optimizers(self) -> Dict:
         optimizer = instantiate(self.optimizer_kwargs, params=self.parameters())
