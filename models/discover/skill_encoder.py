@@ -20,11 +20,11 @@ from torchtyping import TensorType
 
 from models.discover.utils.queue import FIFOQueue
 from models.utils.loss import UncertaintyWeighting
-from models.discover.utils.selfsupervised.vicreg import VICReg
-from models.discover.utils.models.vision import VisionBackbone, Encoder
+from models.utils.vicreg import VICReg
+from models.fine_tune.fine_tuner.FineTuner
 
 
-class TSE(pl.LightningModule): 
+class SkillEncoder(pl.LightningModule): 
     def __init__(
         self, 
         sinkhorn_kwargs: DictConfig, 

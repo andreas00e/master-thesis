@@ -59,7 +59,7 @@ class DepthVisionBackBone(nn.Module):
         
         return x
 
-class VisonEncoder(nn.Module): 
+class VisionEncoder(nn.Module): 
     def __init__(
         self, 
         model: str, 
@@ -217,34 +217,34 @@ class Encoder(nn.Module):
         x = self.pe(x, idxs) # [batch*chunk, 1+window, d_model]
         x = self.encoder_transformer(x) # [batch*chunk, 1+window, d_model]
         x = torch.mean(x, dim=1) # [batch*chunk, d_model]
-        # x = x[:, 0, :] # [batch*chunk, d_model]
+        x = x[:, 0, :] # [batch*chunk, d_model]
         
         if self.is_up_emb: 
             x = self.up_emb(x) # [batch*chunk, d_model]
         
         return x
 
-    def Expander(nn.Module): 
-        def __init__(
-            self, 
-            in_dim: int, 
-            h1_dim: int, 
-            h2_dim: int, 
-            out_dim:int
-            ) -> None
-            super().__init__() 
+class Expander(nn.Module): 
+    def __init__(
+        self, 
+        in_dim: int, 
+        h1_dim: int, 
+        h2_dim: int, 
+        out_dim: int
+        ) -> None:
+        super().__init__() 
+        
+        self.model = nn.Sequential(
+            nn.Linear(in_dim, h1_dim), 
+            nn.LayerNorm(h1_dim), 
+            nn.GELU(), 
             
-            self.model = nn.Sequential(
-                nn.Linear(in_dim, h1_dim), 
-                nn.LayerNorm(h1_dim), 
-                nn.GELU(), 
-                
-                nn.Linear(h1_dim, h2_dim), 
-                nn.LayerNorm(h2_dim), 
-                nn.GELU(), 
-                
-                nn.Linear(h2_dim, out_dim)
-            ) 
+            nn.Linear(h1_dim, h2_dim), 
+            nn.LayerNorm(h2_dim), 
+            nn.GELU(), 
             
-        def forward(self, x: TensorType["*"]) -> TensorType["*"]: 
-            return self.model(x()            
+            nn.Linear(h2_dim, out_dim)
+        ) 
+        
+    def forward(self, x: TensorType["*"]) -> TensorType["*"]: 
+        return self.model(x)          

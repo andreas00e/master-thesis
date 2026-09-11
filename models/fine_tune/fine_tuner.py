@@ -19,22 +19,23 @@ class FineTuner(pl.LightningModule):
         scheduler_kwargs: DictConfig, 
         vision_encoder_kwargs: DictConfig, 
         gripper_encoder_kwargs: DictConfig,
+        expander_kwargs: DictConfig, 
         vic_reg_kwargs: DictConfig,
         dwa_kwargs: DictConfig
         ) -> None: 
         
         super().__init__()
         self.save_hyperparameters() 
-        
+                
         self.optimizer_kwargs = optimizer_kwargs
         self.scheduler_kwargs = scheduler_kwargs
-        self.vision_encoder_kwargs = vision_encoder_kwargs, 
+        self.vision_encoder_kwargs = vision_encoder_kwargs 
         self.gripper_encoder_kwargs = gripper_encoder_kwargs
-        self.expander_kwargs = gripper_expander_kwargs
+        self.expander_kwargs = expander_kwargs
         self.vic_reg_kwargs = vic_reg_kwargs
         self.dwa_kwargs = dwa_kwargs
         
-        self.visionEncoder = VisonEncoder(**self.vision_encoder_kwargs)
+        self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
         self.visionExpander = Expander(**self.expander_kwargs)
         self.gripperEncoder = nn.Linear(**self.gripper_encoder_kwargs)
         self.gripperExpander = Expander(**self.expander_kwargs)
@@ -68,9 +69,11 @@ class FineTuner(pl.LightningModule):
         return self(batch, batch_idx, stage="test")
     
     def forward(self, batch, batch_idx, stage) -> torch.Tensor: 
-        rgb_one_emb = self.visionEncoder(batch["rgb_one"]) 
-        rgb_two_emb = self.visionEncoder(batch["rgb_two"]) 
-        gripper_emb = self.gripperBackbone(batch["g_qpos"])
+        rgb_one_emb = self.visionEncoder(batch["rgb_one"]) # [n, d_model] robot0_eye_in_hand_image 
+        rgb_two_emb = self.visionEncoder(batch["rgb_two"]) # [n, d_model] agentview_image 
+        
+        gripper_x = batch["g_qpos"].flatten().unsqueeze(-1) # [n, 1]
+        gripper_emb = self.gripperEncoder(self.sinusoidalEmbedding(gripper_x)) # [n, d_model]
         
         loss_one, logs_one = self.vicReg(rgb_two_emb, rgb_one_emb) 
         loss_two, logs_two = self.vicReg(rgb_two_emb, gripper_emb)   
@@ -82,14 +85,14 @@ class FineTuner(pl.LightningModule):
         is_train = stage == "train"
         
         self.log_dict(
-            {f"{stage}/loss_one/{k}": v for k, v in log_one.items()}, 
+            {f"{stage}/loss_one/{k}": v for k, v in logs_one.items()}, 
             prog_bar=True,
             on_step=is_train, 
             on_epoch=True, 
             sync_dist=True 
         )
         self.log_dict(
-            {f"{stage}/loss_two/{k}": v for k, v in loss_two.items()}, 
+            {f"{stage}/loss_two/{k}": v for k, v in logs_two.items()}, 
             prog_bar=False,
             on_step=is_train, 
             on_epoch=True, 
