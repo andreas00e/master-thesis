@@ -69,23 +69,34 @@ class FineTuner(pl.LightningModule):
         rgb_two_emb = self.visionBackbone(batch["rgb_two"]) 
         gripper_emb = self.gripperBackbone(batch["g_qpos"])
         
-        loss_one = self.vicReg(rgb_one_emb, rgb_two_emb) 
-        loss_two = self.vicReg(rgb_one_emb, gripper_emb)   
-        
-        lambda_ = self.dwa(self.losses)
+        loss_one, logs_one = self.vicReg(rgb_one_emb, rgb_two_emb) 
+        loss_two, logs_two = self.vicReg(rgb_one_emb, gripper_emb)   
         losses = torch.vstack((loss_one, loss_two)) # [2, 1]
 
+        lambda_ = self.dwa(self.losses)
         loss = torch.sum(lambda_ * losses)
         
-        self.log_dict({
-            f"{stage}_loss_one": loss_one, 
-            f"{stage}_loss_two": loss_two, 
-            f"{stage}_loss": loss
-            }, 
+        is_train = stage == "train"
+        
+        self.log_dict(
+            {f"{stage}/loss_one/{k}": v for k, v in log_one.items()}, 
             prog_bar=True,
-            on_step=True, 
+            on_step=is_train, 
             on_epoch=True, 
             sync_dist=True 
         )
+        self.log_dict(
+            {f"{stage}/loss_two/{k}": v for k, v in loss_two.items()}, 
+            prog_bar=False,
+            on_step=is_train, 
+            on_epoch=True, 
+            sync_dist=True 
+        )
+        self.log_dict({f"{stage}/loss": loss}, 
+            prog_bar=True,
+            on_step=is_train, 
+            on_epoch=True, 
+            sync_dist=True 
+            )
 
         return loss 

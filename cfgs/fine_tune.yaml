@@ -19,7 +19,7 @@ datamodule:
   crop_factor: 0.75 # (0, 1)
   noise_level: 0.1 # (0, 1)
   window: 16 # > 0
-  chunk: 4 # > 0
+  chunk: 1 # > 0
 
   batch_size: 16
   shuffle: True
@@ -75,10 +75,10 @@ model:
     out_features: ${d_model}
 
   vic_reg_kwargs: 
-    lambda_: 25
-    mu: 25
-    nu: 1
-    gamma: 1
+    lambda_: 25.0
+    mu: 25.0
+    nu: 1.0
+    gamma: 1.0
     epsilon: 1e-4
   
   dwa_kwargs: 
