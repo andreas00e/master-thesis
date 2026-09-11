@@ -128,8 +128,8 @@ class MimicGenRobotDataset(Dataset):
             
         g_qpos = np.mean(g_qpos, axis=-1) # [uniq]
         g_qpos = g_qpos[inv].reshape(*idxs.shape, 1) # [chunk, window, 1] or 
-        g_qpos = torch.from_numpy(g_qpos).float()
-        
+        g_qpos = torch.from_numpy(g_qpos).to(torch.float32)
+                
         if hasattr(self, "anchor_transforms") and hasattr(self, "positive_transforms"): 
             rgb_one_pos = self.positive_transforms(rgb_one) # positive sample
             rgb_one = self.anchor_transforms(rgb_one) # anchor sample

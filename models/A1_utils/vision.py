@@ -59,7 +59,7 @@ class DepthVisionBackBone(nn.Module):
         
         return x
 
-class VisionBackbone(nn.Module): 
+class VisonEncoder(nn.Module): 
     def __init__(
         self, 
         model: str, 
@@ -223,3 +223,28 @@ class Encoder(nn.Module):
             x = self.up_emb(x) # [batch*chunk, d_model]
         
         return x
+
+    def Expander(nn.Module): 
+        def __init__(
+            self, 
+            in_dim: int, 
+            h1_dim: int, 
+            h2_dim: int, 
+            out_dim:int
+            ) -> None
+            super().__init__() 
+            
+            self.model = nn.Sequential(
+                nn.Linear(in_dim, h1_dim), 
+                nn.LayerNorm(h1_dim), 
+                nn.GELU(), 
+                
+                nn.Linear(h1_dim, h2_dim), 
+                nn.LayerNorm(h2_dim), 
+                nn.GELU(), 
+                
+                nn.Linear(h2_dim, out_dim)
+            ) 
+            
+        def forward(self, x: TensorType["*"]) -> TensorType["*"]: 
+            return self.model(x()            

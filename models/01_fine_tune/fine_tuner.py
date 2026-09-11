@@ -7,17 +7,18 @@ import torch.nn as nn
 
 import lightning.pytorch as pl
 
-from models.A1_utils.vision import VisionBackbone
+from models.A1_utils.vision import VisionEncoder, Expander
 from models.A1_utils.vicreg import VICReg
 from models.A1_utils.loss import DynamicWeightAverage
+from models.A1_utils.utils import SinusoidalEmbedding
 
 class FineTuner(pl.LightningModule): 
     def __init__(
         self, 
         optimizer_kwargs: DictConfig, 
         scheduler_kwargs: DictConfig, 
-        vision_backbone_kwargs: DictConfig, 
-        gripper_backbone_kwargs: DictConfig,
+        vision_encoder_kwargs: DictConfig, 
+        gripper_encoder_kwargs: DictConfig,
         vic_reg_kwargs: DictConfig,
         dwa_kwargs: DictConfig
         ) -> None: 
@@ -27,18 +28,20 @@ class FineTuner(pl.LightningModule):
         
         self.optimizer_kwargs = optimizer_kwargs
         self.scheduler_kwargs = scheduler_kwargs
-        self.vision_backbone_kwargs = vision_backbone_kwargs
-        self.gripper_backbone_kwargs = gripper_backbone_kwargs
+        self.vision_encoder_kwargs = vision_encoder_kwargs, 
+        self.gripper_encoder_kwargs = gripper_encoder_kwargs
+        self.expander_kwargs = gripper_expander_kwargs
         self.vic_reg_kwargs = vic_reg_kwargs
         self.dwa_kwargs = dwa_kwargs
         
-        self.visionBackbone = VisionBackbone(**self.vision_backbone_kwargs)
-        self.gripperBackbone = nn.Sequential(
-            nn.Flatten(start_dim=0, end_dim=-2),
-            nn.Linear(**self.gripper_backbone_kwargs)
-        )
+        self.visionEncoder = VisonEncoder(**self.vision_encoder_kwargs)
+        self.visionExpander = Expander(**self.expander_kwargs)
+        self.gripperEncoder = nn.Linear(**self.gripper_encoder_kwargs)
+        self.gripperExpander = Expander(**self.expander_kwargs)
+        
         self.vicReg = VICReg(**self.vic_reg_kwargs)
         self.dwa = DynamicWeightAverage(**self.dwa_kwargs)
+        self.sinusoidalEmbedding = SinusoidalEmbedding(self.gripper_encoder_kwargs.out_features // 2)
         
         self.register_buffer("losses", torch.ones(size=(2, self.dwa_kwargs.n_losses), dtype=torch.float32, device=self.device)) # XXX: '2' could be move to config
         
@@ -65,12 +68,12 @@ class FineTuner(pl.LightningModule):
         return self(batch, batch_idx, stage="test")
     
     def forward(self, batch, batch_idx, stage) -> torch.Tensor: 
-        rgb_one_emb = self.visionBackbone(batch["rgb_one"]) 
-        rgb_two_emb = self.visionBackbone(batch["rgb_two"]) 
+        rgb_one_emb = self.visionEncoder(batch["rgb_one"]) 
+        rgb_two_emb = self.visionEncoder(batch["rgb_two"]) 
         gripper_emb = self.gripperBackbone(batch["g_qpos"])
         
-        loss_one, logs_one = self.vicReg(rgb_one_emb, rgb_two_emb) 
-        loss_two, logs_two = self.vicReg(rgb_one_emb, gripper_emb)   
+        loss_one, logs_one = self.vicReg(rgb_two_emb, rgb_one_emb) 
+        loss_two, logs_two = self.vicReg(rgb_two_emb, gripper_emb)   
         losses = torch.vstack((loss_one, loss_two)) # [2, 1]
 
         lambda_ = self.dwa(self.losses)

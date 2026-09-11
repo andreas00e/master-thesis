@@ -43,3 +43,31 @@ class PE(nn.Module):
         pe = self.pe[pe_idxs] # [batch*chunk, 1+window, d_model]
     
         return x + pe # [batch*chunk, 1+window, d_model]
+
+
+class SinusoidalEmbedding(nn.Module): 
+    def __init__(self, new_d: int) -> None:
+        super().__init__()
+        
+        if new_d%2 != 0: 
+            raise ValueError(f"Expanded dimension has to be even, got {new_d}")
+        
+        self.new_d = int(new_d)
+        half_d = self.new_d // 2 
+        
+        freq = torch.exp(torch.arange(half_d, dtype=torch.float32) * -(torch.log(torch.tensor(1e4)) / half_d))
+        self.register_buffer("freq", freq)        
+    
+    def forward(self, x: TensorType["n", "1"]) -> TensorType["n", "new_d"]:
+        if x.ndim != 2: 
+            raise ValueError(f"Expected input to be two-dimensional, got {x.ndim}.") 
+        if x.shape[1] != 1: 
+            raise ValueError(f"Expected feature dimension of input to be one, got {x.shape[1]}") 
+        
+        new_x = torch.empty(size=(x.shape[0], self.new_d), dtype=x.dtype, device=x.device) # [n, d]
+        scaled_x = x * self.freq
+        
+        new_x[:, 0::2] = torch.sin(scaled_x) # [n, new_d // 2]
+        new_x[:, 1::2] = torch.cos(scaled_x) # [n, new_d // 2]
+
+        return new_x
