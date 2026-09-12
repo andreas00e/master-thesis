@@ -26,7 +26,7 @@ class FineTuner(pl.LightningModule):
         
         super().__init__()
         self.save_hyperparameters() 
-                
+                        
         self.optimizer_kwargs = optimizer_kwargs
         self.scheduler_kwargs = scheduler_kwargs
         self.vision_encoder_kwargs = vision_encoder_kwargs 
