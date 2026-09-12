@@ -9,6 +9,5 @@
 #SBATCH --mem=32GB
 
 source /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/sim/bin/activate
-cd /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/scripts/py_scripts
 
-python3 fine_tune.py
+python3 ../py_scripts/fine_tune.py
