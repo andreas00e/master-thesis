@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torchtyping import TensorType
 import torchvision.models as models
 
-from models.A1_utils.utils import PE
+from models.utils.utils import PE
 
 
 class DepthVisionBackBone(nn.Module): 
@@ -233,14 +233,14 @@ class Expander(nn.Module):
         out_dim: int
         ) -> None:
         super().__init__() 
-        
+                
         self.model = nn.Sequential(
             nn.Linear(in_features=in_dim, out_features=h1_dim), 
-            nn.BatchNorm1d(in_featuresh1_dim), 
+            nn.BatchNorm1d(num_features=h1_dim), 
             nn.GELU(), 
             
             nn.Linear(in_features=h1_dim, out_features=h2_dim), 
-            nn.BatchNorm1d(in_featrues=h2_dim), 
+            nn.BatchNorm1d(num_features=h2_dim), 
             nn.GELU(), 
             
             nn.Linear(in_features=h2_dim, out_features=out_dim)
