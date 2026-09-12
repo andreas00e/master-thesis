@@ -1,9 +1,9 @@
 seed: 42
-
 d_model: 256 
+cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
 
-data_dir: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/imports/mimicgen/datasets/robot
-meta_dir: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/data/metadata
+data_dir: ${cwd}/imports/mimicgen/datasets/robot
+meta_dir: ${cwd}/master-thesis/data/metadata
 
 datamodule: 
   _target_: data.discover.datamodule.MimicGenRobotDataModule
@@ -41,7 +41,7 @@ datamodule:
     - normalize
 
 model: 
-  _target_: models.01_fine_tune.fine_tuner.FineTuner
+  _target_: models.fine_tune.fine_tuner.FineTuner
   _recursive_: False
   
   optimizer_kwargs: 
@@ -71,14 +71,14 @@ model:
       out_features: ${d_model}
 
   gripper_encoder_kwargs: 
-    in_features: ${oc.decode:'${d_model} // 2'}
+    in_features: ${eval:"${d_model} // 2"}
     out_features: ${d_model}
 
   expander_kwargs: 
     in_dim: ${d_model}
-    h1_dim: ${oc.decode:'${d_model} * 2'}
-    h2_dim: ${oc.decode:'${d_model} * 2'}
-    out_dim: ${oc.decode:'${d_model} * 4'}
+    h1_dim: ${eval:"${d_model} * 2"}
+    h2_dim: ${eval:"${d_model} * 2"}
+    out_dim: ${eval:"${d_model} * 4"}
 
   vic_reg_kwargs: 
     lambda_: 25.0
