@@ -15,7 +15,7 @@ datamodule:
   tasks: null # square, threading
   n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
   f_ds: 1
-  depth: False # True: include depth maps  
+  depth: false # True: include depth maps  
   crop_factor: 0.75 # (0, 1)
   noise_level: 0.1 # (0, 1)
   window: 16 # > 0
@@ -23,7 +23,7 @@ datamodule:
 
   batch_size: 32
   shuffle: true
-  num_workers: 4
+  num_workers: 0
   pin_memory: true
   persistent_workers: true 
   dataset_lengths: 
@@ -104,6 +104,6 @@ trainer:
     - 0
   max_epochs: 200 
   num_sanity_val_steps: 2
-  enable_progress_bar: True
+  enable_progress_bar: true
   profiler: simple 
-  default_root_dir: logs/${logger.project}/
+  default_root_dir: logs/${logger.project}

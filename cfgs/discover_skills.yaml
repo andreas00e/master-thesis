@@ -1,11 +1,11 @@
 seed: 42
+cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
 
 d_model: 256 
-d_emb: 8 
-k: 10
+prototypes: 10
 
-data_dir: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/imports/mimicgen/datasets/robot
-meta_dir: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/data/metadata
+data_dir: ${cwd}/imports/mimicgen/datasets/robot
+meta_dir: ${cwd}/master-thesis/data/metadata
 
 datamodule: 
   _target_: data.discover.datamodule.MimicGenRobotDataModule
@@ -15,19 +15,19 @@ datamodule:
 
   robots: null # iiwa, panda, sawyer, ur5e
   tasks: null # square, threading
-  n_ds: 2 # {1, 2} if d_0 or d_0 & d_1
+  n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
   f_ds: 1
-  depth: False # True: include depth maps  
+  depth: false # True: include depth maps  
   crop_factor: 0.75 # (0, 1)
   noise_level: 0.1 # (0, 1)
   window: 8 # > 0
   chunk: 8 # > 0
 
   batch_size: 16
-  shuffle: True
-  num_workers: 31
-  pin_memory: True
-  persistent_workers: True 
+  shuffle: true
+  num_workers: 0
+  pin_memory: true
+  persistent_workers: true 
   dataset_lengths: 
   - 0.8
   - 0.1
@@ -35,19 +35,18 @@ datamodule:
 
   seed: ${seed}
   
-  ctr_transforms: False
+  ctr_transforms: false
   transforms: 
     - to_image
     - resize
-    # - gaussian_blur
-    # - color_jitter 
-    # - rotate 
     - to_dtype
-    # - solarize
     - normalize
 
 model: 
-  _target_: models.discover.tse.TSE
+  _target_: models.discover.skill_encoder.SkillEncoder
+  _recursive_: false
+  
+  fine_tuner_ckpt: ${cwd}/master-thesis/fine_tune/2026_09_12_17_27/checkpoints/epoch=7-step=1600.ckpt
   
   sinkhorn_kwargs: 
     tau: 0.1
@@ -69,17 +68,7 @@ model:
         milestones: 
           - ${model.optimizer_kwargs.lr_scheduler.one.total_iters}
 
-  vision_backbone_kwargs: 
-    model: resnet50
-    weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights
-    lora: True
-    layer: 
-      - 4 
-    r: 8
-    lora_alpha: 1
-    lora_drop_out: 0.0
-
-  vision_encoder_kwargs: 
+  vision_sequential_kwargs: 
     encoder_layer_kwargs: 
       d_model: ${d_model}
       nhead: 4 
@@ -91,10 +80,28 @@ model:
       norm: null
       enable_nested_tensor: False 
       mask_check: False
+    
+    up_emb_kwargs:
+      in_features: ${d_model}
+      hidden_features: 32
+      out_features: ${d_model} 
+      
+    pe_kwargs: 
+      d_model: ${d_model}
+      max_len: 300
+    
+  gripper_sequential_kwargs: 
+    encoder_layer_kwargs: 
+      d_model: ${d_model}
+      nhead: 4 
+      dim_feedforward: 512
+      batch_first: True
 
-    down_emb_kwargs: 
-      in_features: 2048 
-      out_features: ${d_model}
+    transformer_encoder_kwargs:
+      num_layers: 8
+      norm: null
+      enable_nested_tensor: False 
+      mask_check: False
     
     up_emb_kwargs:
       in_features: ${d_model}
@@ -105,20 +112,10 @@ model:
       d_model: ${d_model}
       max_len: 300
   
-  gripper_kwargs: 
-    in_features: 1 
-    out_features: ${d_model}
-
   prototype_kwargs: 
     in_features: ${d_model}
-    out_features: ${k}
-    bias: False
-  vic_reg_kwargs: 
-    lambda_: 25
-    mu: 25
-    nu: 1
-    gamma: 1
-    epsilon: 1e-4
+    out_features: ${prototypes}
+    bias: false
 
   queue_kwargs: 
     num_modalities: 3
@@ -134,7 +131,7 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: train
+  name: rgb_2_depth_0_gripper_ds_1
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
@@ -142,11 +139,10 @@ trainer:
   _target_: lightning.pytorch.Trainer
 
   accelerator: gpu   
-  strategy: ddp_find_unused_parameters_true # ddp
-  devices: -1  
-  # - 0 # single gpu 
-  max_epochs: 400 
+  devices: 
+    - 0
+  max_epochs: 200 
   num_sanity_val_steps: 2
-  enable_progress_bar: True
+  enable_progress_bar: true
   profiler: simple 
-  default_root_dir: logs/skill_discovery/
+  default_root_dir: logs/${logger.project}
