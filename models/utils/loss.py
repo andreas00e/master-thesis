@@ -11,7 +11,7 @@ class UncertaintyWeighting(nn.Module):
         super().__init__()
         
         self.num_losses = num_losses
-        self.log_vars = nn.Parameter(torch.zeros(self.num_losses, dtype=torch.flaot32))
+        self.log_vars = nn.Parameter(torch.zeros(self.num_losses, dtype=torch.float32))
         
     def  forward(self, losses: List[torch.Tensor]) -> torch.Tensor: 
         losses = torch.stack(losses, dim=0) # [num_modalities, 1]

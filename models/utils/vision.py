@@ -82,7 +82,6 @@ class VisionEncoder(nn.Module):
         except: 
             raise ModuleNotFoundError(f"Model \"r3m_{model}\" could not be loaded from r3m.") from e
 
-
         if layer is not None: 
             layer = [layer] if isinstance(layer, int) else list(layer)
             self.layer = [f"layer{i}" for i in layer]
@@ -166,14 +165,12 @@ class VisionEncoder(nn.Module):
         
         return x
 
-
-class Encoder(nn.Module): 
+class Transformer(nn.Module): 
     def __init__(
         self, 
         encoder_layer_kwargs: DictConfig, 
         transformer_encoder_kwargs: DictConfig, 
         pe_kwargs: DictConfig,
-        down_emb_kwargs: Optional[DictConfig]=None, 
         up_emb_kwargs: Optional[DictConfig]=None
         ) -> None:
         
@@ -185,11 +182,7 @@ class Encoder(nn.Module):
             **transformer_encoder_kwargs
         )
         
-        self.is_down_emb = isinstance(down_emb_kwargs, DictConfig)
         self.is_up_emb = isinstance(up_emb_kwargs, DictConfig)
-        
-        if self.is_down_emb: 
-            self.down_emb = nn.Linear(**down_emb_kwargs)
         
         if self.is_up_emb:  
             self.up_emb = nn.Sequential(
@@ -208,8 +201,6 @@ class Encoder(nn.Module):
         idxs: Optional[TensorType["batch", "chunk", "window"]]=None
         ) -> TensorType["*"]: 
         
-        if self.is_down_emb: 
-            x = self.down_emb(x) # [batch*chunk, window, d_model] 
             
         cls = self.cls.expand(x.shape[0], -1, -1) # [batch*chunk, 1, d_model]
         
@@ -217,7 +208,7 @@ class Encoder(nn.Module):
         x = self.pe(x, idxs) # [batch*chunk, 1+window, d_model]
         x = self.encoder_transformer(x) # [batch*chunk, 1+window, d_model]
         x = torch.mean(x, dim=1) # [batch*chunk, d_model]
-        x = x[:, 0, :] # [batch*chunk, d_model]
+        # x = x[:, 0, :] # [batch*chunk, d_model]
         
         if self.is_up_emb: 
             x = self.up_emb(x) # [batch*chunk, d_model]
