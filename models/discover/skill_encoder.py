@@ -4,7 +4,7 @@ import tempfile
 import numpy as np 
 import pandas as pd 
 import seaborn as sns
-from typing import Dict
+from typing import Dict, Union
 from omegaconf import DictConfig
 from sklearn.manifold import TSNE
 from matplotlib import pyplot as plt
@@ -21,19 +21,19 @@ from torchtyping import TensorType
 from models.discover.utils.queue import FIFOQueue
 from models.utils.loss import UncertaintyWeighting
 from models.utils.vicreg import VICReg
-from models.fine_tune.fine_tuner.FineTuner
+from models.utils.vision import Transformer
+from models.fine_tune.fine_tuner import FineTuner
 
 
 class SkillEncoder(pl.LightningModule): 
     def __init__(
         self, 
+        fine_tuner_ckpt: Union[str, os.PathLike],  
         sinkhorn_kwargs: DictConfig, 
         optimizer_kwargs: DictConfig, 
-        vision_backbone_kwargs: DictConfig, 
-        vision_encoder_kwargs: DictConfig,
-        gripper_kwargs: DictConfig, 
+        vision_sequential_kwargs: DictConfig, 
+        gripper_sequential_kwargs: DictConfig, 
         prototype_kwargs: DictConfig,  
-        vic_reg_kwargs: DictConfig,         
         queue_kwargs: DictConfig, 
         tsne_kwargs: DictConfig, 
         ) -> None: 
@@ -41,16 +41,30 @@ class SkillEncoder(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters() 
         
+        self.fine_tuner_ckpt = fine_tuner_ckpt
         self.sinkhorn_kwargs = sinkhorn_kwargs        
         self.optimizer_kwargs = optimizer_kwargs
         
-        self.visionBackbone = VisionBackbone(**vision_backbone_kwargs)
-        self.visionEncoder = Encoder(**vision_encoder_kwargs)
-        self.gripper_emb = nn.Linear(**gripper_kwargs)
+        self.fineTuner = FineTuner.load_from_checkpoint(fine_tuner_ckpt)
+        self.visionEncoder = self.fineTuner.visionEncoder
+        self.gripperEncoder = self.fineTuner.gripperEncoder 
+        self.sinusoidalEmbedding = self.fineTuner.sinusoidalEmbedding
+
+        for param in self.visionEncoder.parameters(): 
+                param.requires_grad = False 
+        
+        for param in self.gripperEncoder.parameters(): 
+            param.requires_grad = False 
+        
+        self.visionEncoder.eval()
+        self.gripperEncoder.eval() 
+        
+        self.visionSequential = Transformer(**vision_sequential_kwargs) 
+        self.gripperSequential = Transformer(**gripper_sequential_kwargs) 
+        
         self.prototype_emb = nn.Linear(**prototype_kwargs) 
         nn.init.orthogonal_(self.prototype_emb.weight)
     
-        self.vicReg = VICReg(**vic_reg_kwargs)
         self.queue = FIFOQueue(**queue_kwargs)
         self.tsne = TSNE(**tsne_kwargs)
 
@@ -81,46 +95,34 @@ class SkillEncoder(pl.LightningModule):
                     print(colored(f"Unused parameter: {name}", "red"))
 
     def training_step(self, batch, batch_idx) -> torch.Tensor:  
-        return self._shared_step(batch=batch, batch_idx=batch_idx, stage="train")
+        return self(batch=batch, batch_idx=batch_idx, stage="train")
         
     def validation_step(self, batch, batch_idx) -> torch.Tensor:  
-        return self._shared_step(batch=batch, batch_idx=batch_idx, stage="val")
+        return self(batch=batch, batch_idx=batch_idx, stage="val")
 
     def test_step(self, batch, batch_idx) -> torch.Tensor:        
-        return self._shared_step(batch=batch, batch_idx=batch_idx, stage="test")
+        return self(batch=batch, batch_idx=batch_idx, stage="test")
     
     def forward(
-        self, 
-        x: TensorType["batch*chunk*window", "channels", "height", "width"],
-        idxs: TensorType["batch", "chunk", "window"]
-        ) -> TensorType["batch*chunk", "d_model"]:
-        bs, ck, wd, c, h, w = x.shape
-        
-        x = x.view(-1, c, h, w) # [batch*chunk*window, channels=3, height=224, width=224]
-        x = self.visionBackbone(x) # [batch*chunk*window, d_model]
-        x = x.view(bs*ck, wd, -1) # [batch*chunk, window, d_model]
-        x = self.visionEncoder(x, idxs)# [batch*chunk, d_model]
-        
-        return x
-    
-    def _shared_step(
         self, 
         batch: Dict[str, TensorType["batch", "chunk", "window", "*"]],
         batch_idx: int, 
         stage: str
-        ) -> torch.Tensor: 
+        ) -> torch.Tensor:
+        batch_size, chunk, window = batch["rgb_one"].shape[:3]
+        n = batch_size*chunk*window
         
-        idxs = batch["idxs"] # idxs
+        rgb_one_emb = self.visionEncoder(batch["rgb_one"]) # [n, d_model]
+        rgb_two_emb = self.visionEncoder(batch["rgb_two"]) # [n, d_model]
+         
+        gripper_x = batch["g_qpos"].flatten().unsqueeze(-1) # [n, 1]
+        gripper_emb = self.gripperEncoder(self.sinusoidalEmbedding(gripper_x)) # [n, d_model]
         
-        h_one = self(batch["rgb_one"], idxs) # [n=batch*chunk, d_model]: robot0_eye_in_hand_view
-        h_two = self(batch["rgb_two"], idxs) # [n=batch*chunk, d_model]: agentview_image
-        h_gripper = self.gripper_emb(batch["g_qpos"]) # [batch, chunk, window, d_model]: gripper states
-        h_gripper = torch.mean(h_gripper, dim=-2).view(-1, h_one.shape[-1]) # [batch*chunk, d_model]
+        h_one = self.visionSequential(rgb_one_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: robot0_eye_in_hand_view
+        h_two =  self.visionSequential(rgb_two_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: agentview_image
+        h_gripper = self.gripperSequential(gripper_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: gripper states
         
-        alignment_loss = self.vicReg(h_one, h_two) + self.vicReg(h_one, h_gripper) + self.vicReg(h_two, h_gripper) # align modalities 
-        
-        n = h_one.shape[0] 
-        
+        # Normalize features to lie on unit sphere 
         h_one_batch = F.normalize(h_one, dim=-1)
         h_two_batch = F.normalize(h_two, dim=-1)
         h_gripper_batch = F.normalize(h_gripper, dim=-1)
@@ -141,7 +143,7 @@ class SkillEncoder(pl.LightningModule):
         # Map to prototypes
         z_one = self.prototype_emb(h_one_assign) # [n, k]
         z_two = self.prototype_emb(h_two_assign) # [n, k]
-        z_gripper = self.prototype_emb(h_gripper_assign)
+        z_gripper = self.prototype_emb(h_gripper_assign) # [n, k]
         
         # Find pseudo-labels
         with torch.no_grad(): 
@@ -152,14 +154,12 @@ class SkillEncoder(pl.LightningModule):
         loss_one = F.cross_entropy(z_gripper[:n] / self.sinkhorn_kwargs.tau, target_one[:n])
         loss_two = F.cross_entropy(z_one[:n] / self.sinkhorn_kwargs.tau, target_two[:n])
         loss_gripper = F.cross_entropy(z_two[:n] / self.sinkhorn_kwargs.tau, target_three[:n])
-        prediction_loss = 1/3 * (loss_one + loss_two + loss_gripper)
-            
-        loss = self.weighted_loss([alignment_loss, prediction_loss])
+        loss = 1/3 * (loss_one + loss_two + loss_gripper)
         
-        self.log_dict({
-                f"{stage}_prediction_loss": prediction_loss, 
-                f"{stage}_alignment_loss": alignment_loss, 
-                f"{stage}_loss": loss}, 
+        self.log_dict(
+            {
+                f"{stage}_loss": loss
+            },
                 sync_dist=True
             )
         
