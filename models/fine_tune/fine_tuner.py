@@ -7,10 +7,10 @@ import torch.nn as nn
 
 import lightning.pytorch as pl
 
-from models.A1_utils.vision import VisionEncoder, Expander
-from models.A1_utils.vicreg import VICReg
-from models.A1_utils.loss import DynamicWeightAverage
-from models.A1_utils.utils import SinusoidalEmbedding
+from models.utils.vision import VisionEncoder, Expander
+from models.utils.vicreg import VICReg
+from models.utils.loss import DynamicWeightAverage
+from models.utils.utils import SinusoidalEmbedding
 
 class FineTuner(pl.LightningModule): 
     def __init__(

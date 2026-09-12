@@ -21,19 +21,19 @@ datamodule:
   window: 16 # > 0
   chunk: 1 # > 0
 
-  batch_size: 16
-  shuffle: True
-  num_workers: 0
-  pin_memory: True
-  persistent_workers: True 
+  batch_size: 32
+  shuffle: true
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true 
   dataset_lengths: 
   - 0.8
-  - 0.1
+  - 0.1 
   - 0.1
 
   seed: ${seed}
   
-  ctr_transforms: False # transforms reuquired for constrastive learning
+  ctr_transforms: false # transforms reuquired for constrastive learning
   transforms: 
     - to_image
     - resize
@@ -59,10 +59,10 @@ model:
 
   vision_encoder_kwargs: 
     model: resnet50
-    lora: True
+    lora: true
     layer: 
       - 4 
-    r: 16
+    r: 8
     lora_alpha: 16
     lora_drop_out: 0.05
 
@@ -71,14 +71,14 @@ model:
       out_features: ${d_model}
 
   gripper_encoder_kwargs: 
-    in_features: 128 
+    in_features: ${oc.decode:'${d_model} // 2'}
     out_features: ${d_model}
 
   expander_kwargs: 
     in_dim: ${d_model}
-    h1_dim: 64
-    h2_dim: 128
-    out_dim: ${d_model}
+    h1_dim: ${oc.decode:'${d_model} * 2'}
+    h2_dim: ${oc.decode:'${d_model} * 2'}
+    out_dim: ${oc.decode:'${d_model} * 4'}
 
   vic_reg_kwargs: 
     lambda_: 25.0
@@ -102,8 +102,8 @@ trainer:
   accelerator: gpu   
   devices: 
     - 0
-  max_epochs: 400 
+  max_epochs: 200 
   num_sanity_val_steps: 2
   enable_progress_bar: True
   profiler: simple 
-  default_root_dir: logs/skill_discovery/
+  default_root_dir: logs/${logger.project}/

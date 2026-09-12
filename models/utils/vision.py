@@ -235,15 +235,15 @@ class Expander(nn.Module):
         super().__init__() 
         
         self.model = nn.Sequential(
-            nn.Linear(in_dim, h1_dim), 
-            nn.LayerNorm(h1_dim), 
+            nn.Linear(in_features=in_dim, out_features=h1_dim), 
+            nn.BatchNorm1d(in_featuresh1_dim), 
             nn.GELU(), 
             
-            nn.Linear(h1_dim, h2_dim), 
-            nn.LayerNorm(h2_dim), 
+            nn.Linear(in_features=h1_dim, out_features=h2_dim), 
+            nn.BatchNorm1d(in_featrues=h2_dim), 
             nn.GELU(), 
             
-            nn.Linear(h2_dim, out_dim)
+            nn.Linear(in_features=h2_dim, out_features=out_dim)
         ) 
         
     def forward(self, x: TensorType["*"]) -> TensorType["*"]: 
