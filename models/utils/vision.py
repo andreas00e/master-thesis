@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn 
 import torch.nn.functional as F 
 from torchtyping import TensorType
-0
+
 from models.utils.utils import PE
 
 
@@ -77,7 +77,7 @@ class VisionEncoder(nn.Module):
         backbone = r3m_model.module  
         
         target_modules = [
-            f"convnet.layer4{k}.{l}.conv{m}" 
+            f"convnet.layer{k}.{l}.conv{m}" 
             for k in range(4, 5)
             for l in range(1, 2) 
             for m in range(1, 4)

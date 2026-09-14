@@ -1,4 +1,3 @@
-from r3m import load_r3m
 from typing import Any, Dict, Optional
 from omegaconf import DictConfig
 from hydra.utils import instantiate
@@ -58,7 +57,7 @@ class FineTuner(pl.LightningModule):
 
         checkpoint["state_dict"] = filtered_state_dict
     
-    def on_load_checkpoint(self, checkpoint: Dict[str, A]) -> None:
+    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         self.strict_loading = False
         
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
@@ -71,21 +70,24 @@ class FineTuner(pl.LightningModule):
         return self(batch, batch_idx, stage="test")
     
     def forward(self, batch: Any, batch_idx: int, stage: str) -> torch.Tensor: 
-        rgb_one_emb = self.visionEncoder(batch["rgb_one"]) # [n, d_model] robot0_eye_in_hand_image 
-        rgb_two_emb = self.visionEncoder(batch["rgb_two"]) # [n, d_model] agentview_image 
-
-        loss, logs_ = self.vicReg(rgb_two_emb, rgb_one_emb)
+        rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model] robot0_eye_in_hand_image 
+        rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model] agentview_image 
         
-        is_train = self.trainer.training
+        rgb_one_z = self.visionExpander(rgb_one_y) # [n, d_model*4]
+        rgb_two_z = self.visionExpander(rgb_two_y) # [n, d_model*4]
+
+        loss, logs_ = self.vicReg(rgb_one_z, rgb_two_z)
+        
         self.log_dict(
             {
                 f"{stage}/inv_loss": logs_["inv_loss"], 
                 f"{stage}/var_loss": logs_["var_loss"],
                 f"{stage}/cov_loss": logs_["cov_loss"],
-                f"{stage}/tot_loss": logs_["tot_loss"]
+                f"{stage}/tot_loss": loss
             }, 
+            logger=True,
             prog_bar=True, 
-            on_step=is_train, 
+            on_step=stage == "train", 
             on_epoch=True, 
             sync_dist=True, 
         )

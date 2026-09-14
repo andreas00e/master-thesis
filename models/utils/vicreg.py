@@ -68,8 +68,7 @@ class VICReg(nn.Module):
         logs_ = {
             "inv_loss": inv_loss.detach(), 
             "var_loss": var_loss.detach(), 
-            "cov_loss": cov_loss.detach(), 
-            "tot_loss": tot_loss.detach()    
+            "cov_loss": cov_loss.detach() 
         }
      
         return tot_loss, logs_
