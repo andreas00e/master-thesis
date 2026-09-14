@@ -31,7 +31,7 @@ class FineTuner(pl.LightningModule):
         
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
         self.visionExpander = Expander(**self.expander_kwargs)
-        self.vicReg = VICReg(**self.vic_reg_kwargs)
+        self.vicReg = VICReg(parent_module=self, **self.vic_reg_kwargs)
                         
     def configure_optimizers(self) -> Dict:
         trainable_parameters = filter(lambda p: p.requires_grad, self.parameters())        
@@ -70,22 +70,6 @@ class FineTuner(pl.LightningModule):
         rgb_one_emb = self.visionEncoder(batch["rgb_one"]) # [n, d_model] robot0_eye_in_hand_image 
         rgb_two_emb = self.visionEncoder(batch["rgb_two"]) # [n, d_model] agentview_image 
 
-        loss, logs = self.vicReg(rgb_two_emb, rgb_one_emb) 
-        
-        is_train = stage == "train"
-        self.log_dict(
-            {f"{stage}/loss/{k}": v for k, v in logs.items()}, 
-            prog_bar=True,
-            on_step=is_train, 
-            on_epoch=True, 
-            sync_dist=True 
-        )
-
-        self.log_dict({f"{stage}/loss": loss}, 
-            prog_bar=True,
-            on_step=is_train, 
-            on_epoch=True, 
-            sync_dist=True 
-            )
+        loss = self.vicReg(rgb_two_emb, rgb_one_emb)
 
         return loss 
