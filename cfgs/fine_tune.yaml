@@ -1,5 +1,6 @@
 seed: 42
-d_model: 256 
+d_model: 512 
+
 cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
 
 data_dir: ${cwd}/imports/mimicgen/datasets/robot
@@ -58,21 +59,18 @@ model:
     eta_min: 1e-6
 
   vision_encoder_kwargs: 
-    model: resnet50
-    lora: true
-    layer: 
-      - 4 
-    r: 8
-    lora_alpha: 16
-    lora_drop_out: 0.05
+    model_name: resnet50
+    d_model: ${d_model}
 
-    out_emb_kwargs: 
-      in_features: 2048 
-      out_features: ${d_model}
+    lora_config_kwargs: 
+      r: 8
+      lora_alpha: 16
+      lora_dropout: 0.05
+      bias: none
 
-  gripper_encoder_kwargs: 
-    in_features: ${eval:"${d_model} // 2"}
-    out_features: ${d_model}
+  # gripper_encoder_kwargs: 
+  #   in_features: ${eval:"${d_model} // 2"}
+  #   out_features: ${d_model}
 
   expander_kwargs: 
     in_dim: ${d_model}
@@ -86,11 +84,7 @@ model:
     nu: 1.0
     gamma: 1.0
     eps: 1e-4
-  
-  dwa_kwargs: 
-    n_losses: 2
-    T: 2
-  
+
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
   name: rgb_2_depth_0_gripper_ds_1
