@@ -79,6 +79,8 @@ model:
     out_dim: ${eval:"${d_model} * 4"}
 
   vic_reg_kwargs: 
+    log_every_n_steps: 50 
+
     lambda_: 25.0
     mu: 25.0
     nu: 1.0

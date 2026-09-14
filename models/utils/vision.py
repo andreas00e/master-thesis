@@ -76,7 +76,12 @@ class VisionEncoder(nn.Module):
         r3m_model = load_r3m(self.model_name)
         backbone = r3m_model.module  
         
-        target_modules = [f"convnet.layer4.{i}.conv{j}" for i in range(1, 2) for j in range(1, 4)]        
+        target_modules = [
+            f"convnet.layer4{k}.{l}.conv{m}" 
+            for k in range(4, 5)
+            for l in range(1, 2) 
+            for m in range(1, 4)
+        ]     
         lora_config = LoraConfig(target_modules=target_modules, **lora_config_kwargs)
         
         self.model = get_peft_model(backbone, lora_config)
@@ -84,6 +89,7 @@ class VisionEncoder(nn.Module):
         self.out_emb = nn.Linear(2048, self.d_model)
         
     def train(self, mode: bool=True): 
+        # keep BatchNorm2d in eval mode 
         super().train(mode)
         
         if mode: 

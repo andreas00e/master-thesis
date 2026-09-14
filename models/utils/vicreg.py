@@ -1,6 +1,5 @@
 import wandb 
 from typing import Optional
-
 import torch 
 import torch.nn as nn 
 import torch.nn.functional as F
@@ -13,31 +12,38 @@ import lightning.pytorch as pl
 class VICReg(nn.Module): 
     def __init__(
         self, 
-        parent_module: Optional[pl.LightningModule], 
+        logger: Optional[pl.loggers.WandbLogger], 
+        log_every_n_steps: int, 
         lambda_: float, 
         mu: float, 
         nu: float, 
         gamma: float,
-        eps: float
+        eps: float, 
         ) -> None:
         super().__init__()
         
-        self.parent_module = parent_module
+        self.logger = logger
+        self.log_every_n_steps = log_every_n_steps
+        self._global_step = 0
+        
         self.lambda_ = lambda_
         self.mu = mu 
         self.nu = nu
         self.gamma = gamma
-        self.eps= eps
+        self.eps = eps
         
     def _variance_loss(self, x: TensorType["n", "d"]) -> torch.Tensor: 
         var = torch.var(x, dim=0) # [d]
         std = torch.sqrt(var + self.eps) # [d]
         out = torch.mean(F.relu(self.gamma - std)) # []
         
-        if self.parent_module is not None and self.parent_module.trainer.training: 
-            self.parent_module.logger.experiment.log({
-                "train/var_histogram": wandb.Histogram(var.detach().cpu().numpy())
-            })
+        if self.logger is not None: 
+            if self._global_step % self.log_every_n_steps == 0: 
+                self.logger.experiment.log({
+                    "train/var_histogram": wandb.Histogram(var.detach().cpu().numpy())
+                })
+        
+        self._global_step += 1 
         
         return out
     
@@ -59,22 +65,11 @@ class VICReg(nn.Module):
         cov_loss = self._covariance_loss(z) + self._covariance_loss(z_) # []
         tot_loss = self.lambda_ * inv_loss + self.mu * var_loss + self.nu * cov_loss # []
         
-
-        if self.parent_module is not None:
-            is_training = self.parent_module.trainer.training
-            stage = "train" if is_training else "val"
-            
-            self.parent_module.log_dict(
-            {
-                f"{stage}/inv_loss": inv_loss.detach(), 
-                f"{stage}/var_loss": var_loss.detach(), 
-                f"{stage}/cov_loss": cov_loss.detach(), 
-                f"{stage}/tot_loss": tot_loss.detach()
-            },          
-            prog_bar=True,
-            on_step=is_training, 
-            on_epoch=True, 
-            sync_dist=True 
-            )        
-            
-        return tot_loss
+        logs_ = {
+            "inv_loss": inv_loss.detach(), 
+            "var_loss": var_loss.detach(), 
+            "cov_loss": cov_loss.detach(), 
+            "tot_loss": tot_loss.detach()    
+        }
+     
+        return tot_loss, logs_
