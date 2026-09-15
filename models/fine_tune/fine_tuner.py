@@ -15,19 +15,20 @@ from models.utils.vision import VisionEncoder, Expander
 class FineTunerGripper(pl.LightningModule): 
     def __init__(
         self, 
-        optimizer_kwargs: DictConfig, 
-        lr_scheduler_kwargs: DictConfig, 
         d_model: int, 
-        fine_tuner_visual_ckpt: str
+        fine_tuner_visual_ckpt: str,
+        optimizer_kwargs: DictConfig, 
+        lr_scheduler_kwargs: DictConfig 
         ) -> None:
         
         super().__init__()
         self.save_hyperparameters() 
       
-        self.optimizer_kwargs = optimizer_kwargs
-        self.lr_scheduler_kwargs = lr_scheduler_kwargs
         self.d_model = d_model
         self.fine_tuner_visual_ckpt = fine_tuner_visual_ckpt
+
+        self.optimizer_kwargs = optimizer_kwargs
+        self.lr_scheduler_kwargs = lr_scheduler_kwargs
         
         self.fineTunerVisual = FineTunerVisual.load_from_checkpoint(fine_tuner_visual_ckpt) 
         self.fineTunerVisual.eval() 

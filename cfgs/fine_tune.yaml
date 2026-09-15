@@ -41,7 +41,7 @@ datamodule:
     - to_dtype
 
 model_vision: 
-  _target_: models.fine_tune.fine_tuner.FineTuner
+  _target_: models.fine_tune.fine_tuner.FineTunerVisual
   _recursive_: False
   
   optimizer_kwargs: 
@@ -89,7 +89,31 @@ model_vision:
     eps: 1e-4
 
 model_gripper: 
+  _target_: models.fine_tune.fine_tuner.FineTunerGripper
+  _recursive_: False
 
+  d_model: ${d_model}
+
+  fine_tuner_visual_ckpt: fine_tune/2026_09_15_14_35/checkpoints/epoch=4-step=125.ckpt
+  
+  optimizer_kwargs: 
+    _target_: torch.optim.AdamW
+    _recursive_: False
+
+    lr: 1e-3
+    weight_decay: 1e-4
+
+  lr_scheduler_kwargs: 
+    warmup_percentage: 0.1
+
+    linear:  
+      start_factor: 1e-3
+      end_factor: 1.0 
+      total_iters: 100 # adapted dynamically  
+
+    cosine_annealing: 
+      T_max: 1000 # adapted dynamically 
+      eta_min: 1e-6
 
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger

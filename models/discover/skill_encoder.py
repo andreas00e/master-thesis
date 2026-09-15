@@ -22,13 +22,14 @@ from models.discover.utils.queue import FIFOQueue
 from models.utils.loss import UncertaintyWeighting
 from models.utils.vicreg import VICReg
 from models.utils.vision import Transformer
-from models.fine_tune.fine_tuner import FineTuner
+from models.fine_tune.fine_tuner import FineTunerVisual, FineTunerGripper
 
 
 class SkillEncoder(pl.LightningModule): 
     def __init__(
         self, 
-        fine_tuner_ckpt: Union[str, os.PathLike],  
+        fine_tuner_visual_ckpt: Union[str, os.PathLike],  
+        fine_tuner_gripper_ckpt: Union[str, os.PathLike], 
         sinkhorn_kwargs: DictConfig, 
         optimizer_kwargs: DictConfig, 
         vision_sequential_kwargs: DictConfig, 
@@ -41,34 +42,31 @@ class SkillEncoder(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters() 
         
-        self.fine_tuner_ckpt = fine_tuner_ckpt
+        self.fine_tuner_visual_ckpt = fine_tuner_visual_ckpt
+        self.fine_tuner_gripper_ckpt = fine_tuner_gripper_ckpt
         self.sinkhorn_kwargs = sinkhorn_kwargs        
         self.optimizer_kwargs = optimizer_kwargs
+        self.vision_sequential_kwargs = vision_sequential_kwargs
+        self.gripper_sequential_kwargs = gripper_sequential_kwargs
+        self.prototype_kwargs = prototype_kwargs
+        self.queue_kwargs = queue_kwargs
+        self.tsne_kwargs = tsne_kwargs
         
-        self.fineTuner = FineTuner.load_from_checkpoint(fine_tuner_ckpt)
-        self.visionEncoder = self.fineTuner.visionEncoder
-        self.gripperEncoder = self.fineTuner.gripperEncoder 
-        self.sinusoidalEmbedding = self.fineTuner.sinusoidalEmbedding
-
-        for param in self.visionEncoder.parameters(): 
-                param.requires_grad = False 
+        self.fineTunerVisual = FineTunerVisual.load_from_checkpoint(self.fine_tuner_visual_ckpt)
+        self.fineTunerGripper = FineTunerGripper.load_from_checkpoint(self.fine_tuner_gripper_ckpt)
+        self.fineTunerVisual.eval().freeze()
+        self.fineTunerGripper.eval().freeze() 
         
-        for param in self.gripperEncoder.parameters(): 
-            param.requires_grad = False 
+        self.visionSequential = Transformer(**self.vision_sequential_kwargs) 
+        self.gripperSequential = Transformer(**self.gripper_sequential_kwargs) 
         
-        self.visionEncoder.eval()
-        self.gripperEncoder.eval() 
-        
-        self.visionSequential = Transformer(**vision_sequential_kwargs) 
-        self.gripperSequential = Transformer(**gripper_sequential_kwargs) 
-        
-        self.prototype_emb = nn.Linear(**prototype_kwargs) 
+        self.prototype_emb = nn.Linear(**self.prototype_kwargs) 
         nn.init.orthogonal_(self.prototype_emb.weight)
     
-        self.queue = FIFOQueue(**queue_kwargs)
-        self.tsne = TSNE(**tsne_kwargs)
+        self.queue = FIFOQueue(**self.queue_kwargs)
+        self.tsne = TSNE(**self.tsne_kwargs)
 
-        self.weighted_loss = UncertaintyWeighting(num_losses=queue_kwargs.num_modalities)
+        self.weighted_loss = UncertaintyWeighting(num_losses=self.queue_kwargs.num_modalities)
         
     def configure_optimizers(self) -> Dict:
         if self.trainer.max_epochs is not None: 
@@ -104,7 +102,6 @@ class SkillEncoder(pl.LightningModule):
         batch_idx: int, 
         stage: str
         ) -> torch.Tensor:
-        
         
         batch_size, chunk, window = batch["rgb_one"].shape[:3]
         n = batch_size*chunk*window
