@@ -4,7 +4,7 @@ import tempfile
 import numpy as np 
 import pandas as pd 
 import seaborn as sns
-from typing import Dict, Union
+from typing import Any, Dict, Union
 from omegaconf import DictConfig
 from sklearn.manifold import TSNE
 from matplotlib import pyplot as plt
@@ -88,20 +88,15 @@ class SkillEncoder(pl.LightningModule):
                 "interval": "step"
             }
         }
-        
-    def on_after_backward(self):
-            for name, param in self.named_parameters():
-                if param.requires_grad and param.grad is None:
-                    print(colored(f"Unused parameter: {name}", "red"))
 
-    def training_step(self, batch, batch_idx) -> torch.Tensor:  
-        return self(batch=batch, batch_idx=batch_idx, stage="train")
+    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
+        return self(batch, batch_idx, stage="train")
         
-    def validation_step(self, batch, batch_idx) -> torch.Tensor:  
-        return self(batch=batch, batch_idx=batch_idx, stage="val")
+    def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
+        return self(batch, batch_idx, stage="val")
 
-    def test_step(self, batch, batch_idx) -> torch.Tensor:        
-        return self(batch=batch, batch_idx=batch_idx, stage="test")
+    def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:        
+        return self(batch, batch_idx, stage="test")
     
     def forward(
         self, 
@@ -109,6 +104,8 @@ class SkillEncoder(pl.LightningModule):
         batch_idx: int, 
         stage: str
         ) -> torch.Tensor:
+        
+        
         batch_size, chunk, window = batch["rgb_one"].shape[:3]
         n = batch_size*chunk*window
         

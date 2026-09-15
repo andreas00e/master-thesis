@@ -62,7 +62,7 @@ class VICReg(nn.Module):
     def forward(self, z: TensorType["n", "d"], z_: TensorType["n", "d"]) -> torch.Tensor: 
         inv_loss = self._invariance_loss(z, z_) # []
         
-        var_loss_z , var= self._variance_loss(z)
+        var_loss_z, var = self._variance_loss(z)
         var_loss_z_, _ = self._variance_loss(z_)
         var_loss = var_loss_z + var_loss_z_ # []
         

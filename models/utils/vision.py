@@ -58,7 +58,7 @@ class DepthVisionBackBone(nn.Module):
         x = x.view(-1, *x_shape[1:3], x.shape[-1]) # [batch*chunk, window, d_model]
         
         return x
-    
+
 
 class VisionEncoder(nn.Module): 
     def __init__(
@@ -73,31 +73,23 @@ class VisionEncoder(nn.Module):
         self.d_model = d_model  
         self.lora_config_kwargs = lora_config_kwargs
     
-        r3m_model = load_r3m(self.model_name)
-        backbone = r3m_model.module  
+        self.backbone = load_r3m(self.model_name)
+        backbone = self.backbone.module  
         
         target_modules = [
             f"convnet.layer{k}.{l}.conv{m}" 
             for k in range(4, 5)
             for l in range(1, 2) 
-            for m in range(1, 4)
+            for m in range(1, 3)
         ]     
-        lora_config = LoraConfig(target_modules=target_modules, **lora_config_kwargs)
         
+        lora_config = LoraConfig(target_modules=target_modules, **lora_config_kwargs)
         self.model = get_peft_model(backbone, lora_config)
         
-        self.out_emb = nn.Linear(2048, self.d_model)
-        
-    def train(self, mode: bool=True): 
-        # keep BatchNorm2d in eval mode 
-        super().train(mode)
-        
-        if mode: 
-            for m in self.model.modules(): 
-                if isinstance(m, nn.BatchNorm2d): 
-                    m.eval()
-                    
-        return self
+        # self.out_emb = nn.Linear(2048, self.d_model)
+        # nn.init.orthogonal_(self.out_emb.weight)
+        # if self.out_emb.bias is not None:
+        #     nn.init.constant_(self.out_emb.bias, 0.0)
         
     def forward(
         self, 
@@ -106,7 +98,7 @@ class VisionEncoder(nn.Module):
         
         x = x.view(-1, *x.shape[-3:]) # [batch*chunk*window, channels, height, width]
         x = self.model(x) # [batch*chunk*window, feature_dim]
-        x = self.out_emb(x) # [batch*chunk*window, d_model]
+        # x = self.out_emb(x) # [batch*chunk*window, d_model]
         
         return x
     
@@ -160,6 +152,7 @@ class Transformer(nn.Module):
             x = self.up_emb(x) # [batch*chunk, d_model]
         
         return x
+
 
 class Expander(nn.Module): 
     def __init__(

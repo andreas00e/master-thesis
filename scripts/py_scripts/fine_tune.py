@@ -17,11 +17,16 @@ def main(cfg):
     pl.seed_everything(cfg.seed, workers=True)
     
     datamodule = instantiate(cfg.datamodule)
-    model = instantiate(cfg.model)
+    model = instantiate(cfg.model_rgb)
     logger = instantiate(cfg.logger)
     trainer = instantiate(cfg.trainer, logger=logger)
     
     trainer.fit(model=model, datamodule=datamodule)
+    
+    model = instantiate(cfg.model_gripper)
+    
+    trainer.fit(model=model, datamodule=datamodule)
+    
     
 if __name__ == "__main__": 
     try:
