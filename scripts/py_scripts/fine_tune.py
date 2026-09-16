@@ -1,9 +1,5 @@
-import os
 import hydra
-import warnings
 import multiprocessing
-from termcolor import colored, cprint
-from omegaconf import OmegaConf
 from hydra.utils import instantiate
 
 import lightning.pytorch as pl
@@ -17,16 +13,13 @@ def main(cfg):
     pl.seed_everything(cfg.seed, workers=True)
     
     datamodule = instantiate(cfg.datamodule)
-    model = instantiate(cfg.model_rgb)
+    model = instantiate(cfg.model_vision)
     logger = instantiate(cfg.logger)
-    trainer = instantiate(cfg.trainer, logger=logger)
+    
+    callbacks = [instantiate(callback_cfg) for callback_cfg in cfg.callbacks.values()]
+    trainer = instantiate(cfg.trainer, logger=logger, callbacks=callbacks)
     
     trainer.fit(model=model, datamodule=datamodule)
-    
-    model = instantiate(cfg.model_gripper)
-    
-    trainer.fit(model=model, datamodule=datamodule)
-    
     
 if __name__ == "__main__": 
     try:

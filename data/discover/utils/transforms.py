@@ -35,7 +35,7 @@ TRANSFORMS = {
     "to_dtype": 
         lambda: v2.ToDtype(
             dtype=torch.float32, 
-            scale=True
+            scale=False
         ),
     
     "solarize": 

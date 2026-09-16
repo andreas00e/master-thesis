@@ -9,8 +9,6 @@ from omegaconf import DictConfig
 from sklearn.manifold import TSNE
 from matplotlib import pyplot as plt
 
-from termcolor import colored
-
 import torch
 import torch.nn as nn 
 import torch.nn.functional as F
@@ -20,7 +18,6 @@ from torchtyping import TensorType
 
 from models.discover.utils.queue import FIFOQueue
 from models.utils.loss import UncertaintyWeighting
-from models.utils.vicreg import VICReg
 from models.utils.vision import Transformer
 from models.fine_tune.fine_tuner import FineTunerVisual, FineTunerGripper
 
@@ -32,8 +29,7 @@ class SkillEncoder(pl.LightningModule):
         fine_tuner_gripper_ckpt: Union[str, os.PathLike], 
         sinkhorn_kwargs: DictConfig, 
         optimizer_kwargs: DictConfig, 
-        vision_sequential_kwargs: DictConfig, 
-        gripper_sequential_kwargs: DictConfig, 
+        sequential_kwargs: DictConfig, 
         prototype_kwargs: DictConfig,  
         queue_kwargs: DictConfig, 
         tsne_kwargs: DictConfig, 
@@ -46,27 +42,23 @@ class SkillEncoder(pl.LightningModule):
         self.fine_tuner_gripper_ckpt = fine_tuner_gripper_ckpt
         self.sinkhorn_kwargs = sinkhorn_kwargs        
         self.optimizer_kwargs = optimizer_kwargs
-        self.vision_sequential_kwargs = vision_sequential_kwargs
-        self.gripper_sequential_kwargs = gripper_sequential_kwargs
+        self.sequential_kwargs = sequential_kwargs
         self.prototype_kwargs = prototype_kwargs
         self.queue_kwargs = queue_kwargs
         self.tsne_kwargs = tsne_kwargs
         
-        self.fineTunerVisual = FineTunerVisual.load_from_checkpoint(self.fine_tuner_visual_ckpt)
-        self.fineTunerGripper = FineTunerGripper.load_from_checkpoint(self.fine_tuner_gripper_ckpt)
-        self.fineTunerVisual.eval().freeze()
-        self.fineTunerGripper.eval().freeze() 
+        self.visionEncoder = FineTunerVisual.load_from_checkpoint(self.fine_tuner_visual_ckpt)
+        self.gripperEncoder = FineTunerGripper.load_from_checkpoint(self.fine_tuner_gripper_ckpt)
+        self.visionEncoder.eval().freeze()
+        self.gripperEncoder.eval().freeze() 
         
-        self.visionSequential = Transformer(**self.vision_sequential_kwargs) 
-        self.gripperSequential = Transformer(**self.gripper_sequential_kwargs) 
+        self.sequential = Transformer(**self.sequential_kwargs) 
         
         self.prototype_emb = nn.Linear(**self.prototype_kwargs) 
         nn.init.orthogonal_(self.prototype_emb.weight)
     
         self.queue = FIFOQueue(**self.queue_kwargs)
         self.tsne = TSNE(**self.tsne_kwargs)
-
-        self.weighted_loss = UncertaintyWeighting(num_losses=self.queue_kwargs.num_modalities)
         
     def configure_optimizers(self) -> Dict:
         if self.trainer.max_epochs is not None: 
@@ -96,6 +88,28 @@ class SkillEncoder(pl.LightningModule):
     def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:        
         return self(batch, batch_idx, stage="test")
     
+    def on_validation_epoch_end(self) -> None:
+        z_one = None 
+        target_one = None 
+        task = None 
+        robot = None
+        batch = None 
+            if self.global_rank == 0: 
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f: 
+                    fname = f.name 
+                    self.plot_(
+                        z_one[:n].detach(),
+                        target_one[:n].detach(),
+                        task=batch["task"], 
+                        robot=batch["robot"],
+                        fname=fname
+                        )
+                    
+                    if isinstance(self.logger, pl.loggers.WandbLogger): 
+                        self.logger.experiment.log({"tsne_plot": wandb.Image(fname)})
+                     
+                    os.remove(fname)
+    
     def forward(
         self, 
         batch: Dict[str, TensorType["batch", "chunk", "window", "*"]],
@@ -109,12 +123,12 @@ class SkillEncoder(pl.LightningModule):
         rgb_one_emb = self.visionEncoder(batch["rgb_one"]) # [n, d_model]
         rgb_two_emb = self.visionEncoder(batch["rgb_two"]) # [n, d_model]
          
-        gripper_x = batch["g_qpos"].flatten().unsqueeze(-1) # [n, 1]
-        gripper_emb = self.gripperEncoder(self.sinusoidalEmbedding(gripper_x)) # [n, d_model]
+        g_qpos = batch["g_qpos"].flatten().unsqueeze(-1) # [n, 1]
+        gripper_emb = self.gripperEncoder(g_qpos) # [n, d_model]
         
-        h_one = self.visionSequential(rgb_one_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: robot0_eye_in_hand_view
-        h_two =  self.visionSequential(rgb_two_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: agentview_image
-        h_gripper = self.gripperSequential(gripper_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: gripper states
+        h_one = self.sequential(rgb_one_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: robot0_eye_in_hand_view
+        h_two =  self.sequential(rgb_two_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: agentview_image
+        h_gripper = self.sequential(gripper_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: gripper states
         
         # Normalize features to lie on unit sphere 
         h_one_batch = F.normalize(h_one, dim=-1)
@@ -132,7 +146,7 @@ class SkillEncoder(pl.LightningModule):
             h_gripper_assign = h_gripper_batch
             
         if self.queue is not None:   
-            self.queue.enqueue(torch.stack([h_one_batch, h_two_batch, h_gripper_batch], dim=0))
+            self.queue.enqueue(torch.stack([h_one_batch.detach(), h_two_batch.detach(), h_gripper_batch.detach()], dim=0))
    
         # Map to prototypes
         z_one = self.prototype_emb(h_one_assign) # [n, k]
@@ -145,36 +159,17 @@ class SkillEncoder(pl.LightningModule):
             target_two = self.distributed_sinkhorn(z_one) # [n, k]
             target_three = self.distributed_sinkhorn(z_two) # [n, k]
         
-        loss_one = F.cross_entropy(z_gripper[:n] / self.sinkhorn_kwargs.tau, target_one[:n])
-        loss_two = F.cross_entropy(z_one[:n] / self.sinkhorn_kwargs.tau, target_two[:n])
-        loss_gripper = F.cross_entropy(z_two[:n] / self.sinkhorn_kwargs.tau, target_three[:n])
+        loss_one = F.cross_entropy(z_one[:n] / self.sinkhorn_kwargs.tau, target_one[:n])
+        loss_two = F.cross_entropy(z_two[:n] / self.sinkhorn_kwargs.tau, target_two[:n])
+        loss_gripper = F.cross_entropy(z_gripper[:n] / self.sinkhorn_kwargs.tau, target_three[:n])
         loss = 1/3 * (loss_one + loss_two + loss_gripper)
         
         self.log_dict(
-            {
-                f"{stage}_loss": loss
-            },
-                sync_dist=True
+            {f"{stage}_loss": loss},
+            sync_dist=True
             )
         
-        if batch_idx == 0 and stage == "val" and self.current_epoch % 5 == 0:
-            if self.global_rank == 0: 
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f: 
-                    fname = f.name 
-                    self.plot_(
-                        z_one[:n].detach(),
-                        target_one[:n].detach(),
-                        task=batch["task"], 
-                        robot=batch["robot"],
-                        fname=fname
-                        )
-                    
-                    if isinstance(self.logger, pl.loggers.WandbLogger): 
-                        self.logger.experiment.log({"tsne_plot": wandb.Image(fname)})
-                     
-                    os.remove(fname)
-        
-        return loss 
+        return loss
     
     def plot_(
         self, 

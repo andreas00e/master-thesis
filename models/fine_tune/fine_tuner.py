@@ -128,6 +128,7 @@ class FineTunerVisual(pl.LightningModule):
         
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
         self.visionExpander = Expander(**self.expander_kwargs)
+        # self.visionExpanderTwo = Expander(**self.expander_kwargs)
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
                 
         self.cos = nn.CosineSimilarity(dim=1, eps=1e-6)
@@ -210,56 +211,6 @@ class FineTunerVisual(pl.LightningModule):
         rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model] agentview_image 
         
         return rgb_one_y, rgb_two_y
-              
-    def check_bn_stats(self, model, batch, layer_names=None):
-        results = {}
-        hooks = []
-
-        def make_hook(name):
-            def hook(module, input, output):
-                x = input[0]
-                actual_mean = x.mean(dim=(0, 2, 3))
-                actual_var = x.var(dim=(0, 2, 3), unbiased=False)
-                mean_diff = (actual_mean - module.running_mean).abs()
-                var_ratio = actual_var / (module.running_var + 1e-8)
-                results[name] = {
-                    "mean_abs_diff_max": mean_diff.max().item(),
-                    "mean_abs_diff_mean": mean_diff.mean().item(),
-                    "var_ratio_min": var_ratio.min().item(),
-                    "var_ratio_max": var_ratio.max().item(),
-                    "var_ratio_mean": var_ratio.mean().item(),
-                }
-            return hook
-
-        for name, module in model.named_modules():
-            if isinstance(module, nn.BatchNorm2d):
-                if layer_names is None or any(n in name for n in layer_names):
-                    hooks.append(module.register_forward_hook(make_hook(name)))
-
-        was_training = model.training
-        model.eval()
-        with torch.no_grad():
-            model(batch)
-        model.train(was_training)
-
-        for h in hooks:
-            h.remove()
-        return results
-    
-    def on_train_batch_end(self, outputs, batch, batch_idx):
-        if batch_idx % 100 == 0:
-            stats = self.check_bn_stats(self.visionEncoder, batch["rgb_two"])
-            for name, s in stats.items():
-                mean_diff_ratio = s['mean_abs_diff_max'] / s['mean_abs_diff_mean']
-                var_ratio = s['var_ratio_min'] / s['var_ratio_max']
-
-                self.log_dict({
-                    f"{name}/mean_diff_ratio": mean_diff_ratio,
-                    f"{name}/var_ratio": var_ratio,
-                }, on_step=True, on_epoch=False)
-    
-    def on_test_batch_end(self, outputs, batch, batch_idx): 
-        return None
     
     def forward(self, batch: Any, batch_idx: int, stage: str) -> torch.Tensor:       
         rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model] robot0_eye_in_hand_image 

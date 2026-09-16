@@ -78,10 +78,10 @@ class VisionEncoder(nn.Module):
         
         target_modules = [
             f"convnet.layer{k}.{l}.conv{m}" 
-            for k in range(4, 5)
-            for l in range(1, 2) 
+            for k in range(3, 5)
+            for l in range(0, 2) 
             for m in range(1, 3)
-        ]     
+        ] # XXX: Move this to config 
         
         lora_config = LoraConfig(target_modules=target_modules, **lora_config_kwargs)
         self.model = get_peft_model(backbone, lora_config)
@@ -91,6 +91,15 @@ class VisionEncoder(nn.Module):
         # if self.out_emb.bias is not None:
         #     nn.init.constant_(self.out_emb.bias, 0.0)
         
+    def train(self, mode: bool=True): 
+        super().train(mode)
+        
+        if mode: 
+            for module in self.model.modules(): 
+                if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)): 
+                    module.eval() 
+                    module.requires_grad_(False)
+                    
     def forward(
         self, 
         x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
@@ -176,5 +185,5 @@ class Expander(nn.Module):
             nn.Linear(in_features=h2_dim, out_features=out_dim)
         ) 
         
-    def forward(self, x: TensorType["*"]) -> TensorType["*"]: 
+    def forward(self, x: torch.Tensor) -> torch.Tensor: 
         return self.model(x)          

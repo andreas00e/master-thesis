@@ -8,6 +8,9 @@ meta_dir: ${cwd}/master-thesis/data/metadata
 
 datamodule: 
   _target_: data.discover.datamodule.MimicGenRobotDataModule
+  
+  seed: ${seed}
+  ctr_transforms: false # transforms reuquired for constrastive learning
 
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
@@ -26,16 +29,14 @@ datamodule:
   shuffle: true
   num_workers: 0
   pin_memory: true
-  persistent_workers: true 
+  persistent_workers: false
+
   dataset_lengths: 
   - 0.8
   - 0.1 
   - 0.1
-
-  seed: ${seed}
   
-  ctr_transforms: false # transforms reuquired for constrastive learning
-  transforms: 
+  transforms: # r3m model expects unnormalized images with pixel values in [0, 255]
     - to_image
     - resize
     - to_dtype
@@ -48,11 +49,11 @@ model_vision:
     _target_: torch.optim.AdamW
     _recursive_: False
 
-    lr: 1e-3
-    weight_decay: 1e-4
+    lr: 3e-4
+    weight_decay: 1e-6
 
   lr_scheduler_kwargs: 
-    warmup_percentage: 0.1
+    warmup_percentage: 0.2
 
     linear:  
       start_factor: 1e-3
@@ -68,8 +69,8 @@ model_vision:
     d_model: ${d_model}
 
     lora_config_kwargs: 
-      r: 16
-      lora_alpha: 16
+      r: 64
+      lora_alpha: 128
       lora_dropout: 0.05
       bias: none
 
@@ -82,8 +83,8 @@ model_vision:
   vic_reg_kwargs: 
     log_every_n_steps: 50 
 
-    lambda_: 1.0
-    mu: 1.0
+    lambda_: 25.0
+    mu: 25.0
     nu: 1.0
     gamma: 1.0
     eps: 1e-4
@@ -117,12 +118,13 @@ model_gripper:
 
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: rgb_2_depth_0_gripper_ds_1
+  name: rgb_2_depth_0_gripper_ds_1_002
   version: ${now:%Y_%m_%d_%H_%M}
   project: fine_tune
 
 trainer: 
   _target_: lightning.pytorch.Trainer
+  # overfit_batches: 1
   log_every_n_steps: 1 
   accelerator: gpu   
   devices: 
@@ -132,3 +134,17 @@ trainer:
   enable_progress_bar: true
   profiler: simple 
   default_root_dir: outputs/logs/${logger.project}
+
+callbacks: 
+  learning_rate_monitor: 
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor 
+    logging_interval: step 
+
+  model_checkpoint: 
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint 
+    monitor: val/tot_loss
+    dirpath: outputs/checkpoints/
+    filename: 'best-checkpoint-{epoch:02d}-{val_loss:.2f}'
+    save_top_k: 1 
+    mode: min 
+    save_last: true
