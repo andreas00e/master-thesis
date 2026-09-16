@@ -49,14 +49,14 @@ model_vision:
     _target_: torch.optim.AdamW
     _recursive_: False
 
-    lr: 3e-4
+    lr: 1e-5
     weight_decay: 1e-6
 
   lr_scheduler_kwargs: 
-    warmup_percentage: 0.2
+    warmup_percentage: 0.1
 
     linear:  
-      start_factor: 1e-3
+      start_factor: 1e-4
       end_factor: 1.0 
       total_iters: 100 # adapted dynamically  
 
@@ -67,24 +67,23 @@ model_vision:
   vision_encoder_kwargs: 
     model_name: resnet18
     d_model: ${d_model}
-
+    
     lora_config_kwargs: 
       r: 64
-      lora_alpha: 128
+      lora_alpha: 64
       lora_dropout: 0.05
-      bias: none
+      bias: lora_only
 
   expander_kwargs: 
     in_dim: ${d_model}
-    h1_dim: ${eval:"${d_model} * 2"}
-    h2_dim: ${eval:"${d_model} * 2"}
-    out_dim: ${eval:"${d_model} * 4"}
+    h_dim: ${eval:"${d_model} * 1"}
+    out_dim: ${eval:"${d_model} * 1.5"}
 
   vic_reg_kwargs: 
     log_every_n_steps: 50 
 
-    lambda_: 25.0
-    mu: 25.0
+    lambda_: 20.0
+    mu: 30.0
     nu: 1.0
     gamma: 1.0
     eps: 1e-4

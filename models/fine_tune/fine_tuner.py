@@ -128,7 +128,6 @@ class FineTunerVisual(pl.LightningModule):
         
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
         self.visionExpander = Expander(**self.expander_kwargs)
-        # self.visionExpanderTwo = Expander(**self.expander_kwargs)
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
                 
         self.cos = nn.CosineSimilarity(dim=1, eps=1e-6)

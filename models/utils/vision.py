@@ -64,13 +64,13 @@ class VisionEncoder(nn.Module):
     def __init__(
         self, 
         model_name: str, 
-        d_model: int,
-        lora_config_kwargs: DictConfig, 
+        d_model: int, 
+        lora_config_kwargs: DictConfig
         ) -> None:
         super().__init__()
         
         self.model_name = model_name 
-        self.d_model = d_model  
+        self.d_model = d_model
         self.lora_config_kwargs = lora_config_kwargs
     
         self.backbone = load_r3m(self.model_name)
@@ -78,18 +78,18 @@ class VisionEncoder(nn.Module):
         
         target_modules = [
             f"convnet.layer{k}.{l}.conv{m}" 
-            for k in range(3, 5)
-            for l in range(0, 2) 
-            for m in range(1, 3)
-        ] # XXX: Move this to config 
+            for k in range(3, 5) # Layers 3 and 4
+            for l in range(0, 2) # Blocks 0 and 1
+            for m in range(1, 3) # Convlutions 1 and 2
+        ]
+        
+        backbone.convnet.fc = nn.Linear(512, self.d_model)
+        nn.init.xavier_uniform_(backbone.convnet.fc.weight)
+        if backbone.convnet.fc.bias is not None: 
+            nn.init.zeros_(backbone.convnet.fc.bias)
         
         lora_config = LoraConfig(target_modules=target_modules, **lora_config_kwargs)
         self.model = get_peft_model(backbone, lora_config)
-        
-        # self.out_emb = nn.Linear(2048, self.d_model)
-        # nn.init.orthogonal_(self.out_emb.weight)
-        # if self.out_emb.bias is not None:
-        #     nn.init.constant_(self.out_emb.bias, 0.0)
         
     def train(self, mode: bool=True): 
         super().train(mode)
@@ -107,7 +107,6 @@ class VisionEncoder(nn.Module):
         
         x = x.view(-1, *x.shape[-3:]) # [batch*chunk*window, channels, height, width]
         x = self.model(x) # [batch*chunk*window, feature_dim]
-        # x = self.out_emb(x) # [batch*chunk*window, d_model]
         
         return x
     
@@ -167,23 +166,30 @@ class Expander(nn.Module):
     def __init__(
         self, 
         in_dim: int, 
-        h1_dim: int, 
-        h2_dim: int, 
+        h_dim: int, 
         out_dim: int
         ) -> None:
         super().__init__() 
+        
+        self.in_dim = int(in_dim)
+        self.h_dim = int(h_dim)
+        self.out_dim = int(out_dim)
                 
         self.model = nn.Sequential(
-            nn.Linear(in_features=in_dim, out_features=h1_dim), 
-            nn.BatchNorm1d(num_features=h1_dim), 
-            nn.GELU(), 
-            
-            nn.Linear(in_features=h1_dim, out_features=h2_dim), 
-            nn.BatchNorm1d(num_features=h2_dim), 
-            nn.GELU(), 
-            
-            nn.Linear(in_features=h2_dim, out_features=out_dim)
+            nn.Linear(in_features=self.in_dim, out_features=self.h_dim), 
+            nn.BatchNorm1d(num_features=self.h_dim), 
+            nn.LeakyReLU(negative_slope=0.01), 
+
+            nn.Linear(in_features=self.h_dim, out_features=self.out_dim)
         ) 
+        
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module): 
+        if isinstance(module, nn.Linear): 
+            nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain("leaky_relu", 0.01))
+            if module.bias is not None: 
+                nn.init.zeros_(module.bias)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor: 
         return self.model(x)          
