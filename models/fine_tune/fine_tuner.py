@@ -9,7 +9,7 @@ import lightning.pytorch as pl
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 
 from models.utils.vicreg import VICReg
-from models.utils.vision import VisionEncoder, Expander
+from models.utils.aux_models import VisionEncoder, Expander
 
 
 class FineTunerGripper(pl.LightningModule): 
@@ -215,8 +215,8 @@ class FineTunerVisual(pl.LightningModule):
         rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model] robot0_eye_in_hand_image 
         rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model] agentview_image 
         
-        rgb_one_z = self.visionExpander(rgb_one_y) # [n, d_model*4]
-        rgb_two_z = self.visionExpander(rgb_two_y) # [n, d_model*4]
+        rgb_one_z = self.visionExpander(rgb_one_y) # [n, d_model*x]
+        rgb_two_z = self.visionExpander(rgb_two_y) # [n, d_model*xc_one]
 
         loss, logs_ = self.vicReg(rgb_one_z, rgb_two_z)
         
@@ -229,7 +229,7 @@ class FineTunerVisual(pl.LightningModule):
             }, 
             logger=True,
             prog_bar=True, 
-            on_step=stage == "train", 
+            on_step=stage=="train", 
             on_epoch=True, 
             sync_dist=True, 
         )
