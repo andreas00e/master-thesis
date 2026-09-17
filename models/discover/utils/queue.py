@@ -27,14 +27,14 @@ class FIFOQueue(nn.Module):
         self.capacity = capacity
         self.feature_dim = feature_dim
         
-        self.register_buffer("queue", torch.zeros(size=(self.num_modalities, self.capacity, feature_dim), dtype=dtype, device=device))
-        self.write_idx = 0 
-        self.queue_elements = 0 
+        self.register_buffer("queue", torch.zeros(size=(self.num_modalities, self.capacity, self.feature_dim), dtype=dtype, device=device))
+        self.register_buffer("write_idx", torch.tensor(0, dtype=torch.long, device=device))
+        self.register_buffer("queue_elements", torch.tensor(0,  dtype=torch.long, device=device))
     
     @torch.no_grad()
     def enqueue(self, x: TensorType["num_modalities", "num_elements", "feature_dim"]) -> None:        
         if x.ndim != 3: 
-            raise ValueError(colored(f"Expected x to have shape [num_modalities, num_elements, feature_dim, but got {tuple(x.shape)}."), "red")
+            raise ValueError(colored(f"Expected x to have shape [num_modalities, num_elements, feature_dim], but got {tuple(x.shape)}."), "red")
         
         num_modalities, num_elements, feature_dim = x.shape
         
@@ -43,28 +43,41 @@ class FIFOQueue(nn.Module):
         if feature_dim != self.feature_dim: 
             raise ValueError(colored(f"Expected feature_dim {self.feature_dim}, got {feature_dim}."), "red")
         if num_elements > self.capacity: 
-            raise ValueError(colored(f"The queue's maximal capacity is {self.capacity}, but got input size {x.shape[0]}.", "red"))
+            raise ValueError(colored(f"The queue's maximal capacity is {self.capacity}, but got input size {x.shape[1]}.", "red"))
         if num_elements == 0: 
             return
         
-        # Input fits into queue entirely 
-        if self.write_idx + num_elements <= self.capacity : 
-            self.queue[:, self.write_idx:self.write_idx+num_elements].copy_(x)
+        write_idx = self.write_idx.item()
+        queue_elements = self.queue_elements.item()
+
+        # Queue is not full yet => input fits into queue entirely 
+        # or
+        # Queue is already full => old elements are overwritten/ "eaten" first
+        if write_idx + num_elements <= self.capacity: 
+            self.queue[:, write_idx:write_idx+num_elements].copy_(x)
         # Overflow 
         else: 
-            first_part = self.capacity - self.write_idx
-            second_part = num_elements - first_part
+            first_part = self.capacity - write_idx # number of elements added at the end of the queue
+            second_part = num_elements - first_part # number of elements added at the beginning of the queue
 
-            self.queue[:, self.write_idx:self.capacity].copy_(x[:, :first_part]) 
+            self.queue[:, write_idx:].copy_(x[:, :first_part]) 
             self.queue[:, :second_part].copy_(x[:, first_part:])
             
-            self.write_idx = (self.write_idx + num_elements) % self.capacity
-            self.queue_elements = min(self.capacity, self.queue_elements + num_elements)
+        self.write_idx.copy_((write_idx + num_elements) % self.capacity)
+        self.queue_elements.copy_(min(self.capacity, queue_elements + num_elements))
     
     @torch.no_grad()
     def dequeue(self) -> torch.Tensor: 
-        return self.queue[:, :self.queue_elements]
+        write_idx = int(self.write_idx.item())
+        queue_elements = int(self.queue_elements.item())
+        
+        if self.is_full: 
+            first_part = self.queue[:, write_idx:]
+            second_part = self.queue[:, :write_idx]
+            return torch.cat((first_part, second_part), dim=1)
+        else:
+            return self.queue[:, :queue_elements].clone()
     
     @property
     def is_full(self) -> bool: 
-        return self.queue_elements == self.capacity
+        return int(self.queue_elements.item()) == self.capacity
