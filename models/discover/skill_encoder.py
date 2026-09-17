@@ -1,10 +1,11 @@
-import os 
+import os
 import wandb
 import tempfile
 import numpy as np 
 import pandas as pd 
 import seaborn as sns
-from typing import Any, Dict, Union
+from hydra.utils import instantiate
+from typing import Any, Dict, Optional
 from omegaconf import DictConfig
 from sklearn.manifold import TSNE
 from matplotlib import pyplot as plt
@@ -12,25 +13,41 @@ from matplotlib import pyplot as plt
 import torch
 import torch.nn as nn 
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 
 import lightning.pytorch as pl 
 from torchtyping import TensorType
 
 from models.discover.utils.queue import FIFOQueue
 from models.utils.loss import UncertaintyWeighting
-from models.utils.vision import Transformer
+from models.utils.aux_models import TransformerEncoder, VisionEncoder
 from models.fine_tune.fine_tuner import FineTunerVisual, FineTunerGripper
 
+TASK_DICT = {
+    0: "square",
+    1: "threading"
+}
+
+ROBOT_DICT = {
+    0: "iiwa", 
+    1: "panda",
+    2: "sawyer", 
+    3: "ur5e"
+}
 
 class SkillEncoder(pl.LightningModule): 
     def __init__(
         self, 
-        fine_tuner_visual_ckpt: Union[str, os.PathLike],  
-        fine_tuner_gripper_ckpt: Union[str, os.PathLike], 
-        sinkhorn_kwargs: DictConfig, 
-        optimizer_kwargs: DictConfig, 
+        d_model: int, 
+        n_plot: int, 
+        vision_encoder_ckpt: Optional[str],  
+        gripper_encoder_ckpt: Optional[str],
         sequential_kwargs: DictConfig, 
         prototype_kwargs: DictConfig,  
+        optimizer_kwargs: DictConfig, 
+        lr_scheduler_kwargs: DictConfig, 
+        uncertainty_weighting_kwargs: DictConfig,
+        sinkhorn_kwargs: DictConfig, 
         queue_kwargs: DictConfig, 
         tsne_kwargs: DictConfig, 
         ) -> None: 
@@ -38,44 +55,78 @@ class SkillEncoder(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters() 
         
-        self.fine_tuner_visual_ckpt = fine_tuner_visual_ckpt
-        self.fine_tuner_gripper_ckpt = fine_tuner_gripper_ckpt
-        self.sinkhorn_kwargs = sinkhorn_kwargs        
-        self.optimizer_kwargs = optimizer_kwargs
+        self.d_model = d_model
+        self.n_plot = n_plot
+        self.vision_encoder_ckpt = vision_encoder_ckpt
+        self.gripper_encoder_ckpt = gripper_encoder_ckpt
         self.sequential_kwargs = sequential_kwargs
         self.prototype_kwargs = prototype_kwargs
+        self.optimizer_kwargs = optimizer_kwargs
+        self.lr_scheduler_kwargs = lr_scheduler_kwargs
+        self.uncertainty_weighting_kwargs = uncertainty_weighting_kwargs
+        self.sinkhorn_kwargs = sinkhorn_kwargs        
         self.queue_kwargs = queue_kwargs
         self.tsne_kwargs = tsne_kwargs
         
-        self.visionEncoder = FineTunerVisual.load_from_checkpoint(self.fine_tuner_visual_ckpt)
-        self.gripperEncoder = FineTunerGripper.load_from_checkpoint(self.fine_tuner_gripper_ckpt)
-        self.visionEncoder.eval().freeze()
-        self.gripperEncoder.eval().freeze() 
+        if vision_encoder_ckpt is not None: 
+            self.visionEncoder = FineTunerVisual.load_from_checkpoint(vision_encoder_ckpt)
+            self.visionEncoder.eval()
+                
+            for p in self.visionEncoder.parameters(): 
+                p.requires_grad_(False)
+        else: 
+            self.visionEncoder = VisionEncoder() 
         
-        self.sequential = Transformer(**self.sequential_kwargs) 
+        if gripper_encoder_ckpt is not None: 
+            self.gripperEncoder = None # TODO: Exchange with fine-tuned gripper encoder 
+        else: 
+            self.gripperEncoder = nn.Sequential(
+                nn.Linear(1, self.d_model // 2), 
+                nn.ReLU(), 
+                nn.Linear(self.d_model // 2, self.d_model)
+            )  
         
-        self.prototype_emb = nn.Linear(**self.prototype_kwargs) 
-        nn.init.orthogonal_(self.prototype_emb.weight)
-    
+        self.sequential = TransformerEncoder(**self.sequential_kwargs)
+        
+        self.C = nn.Linear(**self.prototype_kwargs) 
+        nn.init.xavier_uniform(self.C.weight)
+        with torch.no_grad():
+            self.C.weight.copy_(F.normalize(self.C.weight, dim=0))
+        
+        self.uncertainty_weighting = UncertaintyWeighting(**self.uncertainty_weighting_kwargs)
         self.queue = FIFOQueue(**self.queue_kwargs)
         self.tsne = TSNE(**self.tsne_kwargs)
         
-    def configure_optimizers(self) -> Dict:
-        if self.trainer.max_epochs is not None: 
-            self.optimizer_kwargs.lr_scheduler.two.T_max = self.trainer.estimated_stepping_batches
-        else:
-            self.optimizer_kwargs.lr_scheduler.two.T_max = 100_000
+        self._c_val = []
+        self._target_val = []
+        self._task_val = []
+        self._robot_val = []
+        
+    def configure_optimizers(self) -> Dict[str, Any]:
+        trainable_parameters = filter(lambda p: p.requires_grad, self.parameters())        
+        optimizer = instantiate(self.optimizer_kwargs, params=trainable_parameters)
+        
+        if hasattr(self, "trainer") and self.trainer is not None: 
+            total_steps = self.trainer.estimated_stepping_batches 
             
-        optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
-        scheduler_one = torch.optim.lr_scheduler.LinearLR(optimizer, **self.optimizer_kwargs.lr_scheduler.one)
-        scheduler_two = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, **self.optimizer_kwargs.lr_scheduler.two)
-        scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[scheduler_one, scheduler_two], **self.optimizer_kwargs.lr_scheduler.sequential)
+            warmup_percentage = self.lr_scheduler_kwargs.get("warmup_percentage", 0.1)
+            warmup_steps = int(warmup_percentage * total_steps)
+            decay_steps = total_steps - warmup_steps
+            
+            self.lr_scheduler_kwargs.linear.total_iters = warmup_steps 
+            self.lr_scheduler_kwargs.cosine_annealing.T_max = decay_steps 
+
+        scheduler_one = LinearLR(optimizer, **self.lr_scheduler_kwargs.linear)
+        scheduler_two = CosineAnnealingLR(optimizer, **self.lr_scheduler_kwargs.cosine_annealing)
+
+        scheduler = SequentialLR(optimizer, schedulers=[scheduler_one, scheduler_two],  milestones=[warmup_steps])
         
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler, 
-                "interval": "step"
+                "interval": "step", 
+                "frequency": 1
             }
         }
 
@@ -87,29 +138,41 @@ class SkillEncoder(pl.LightningModule):
 
     def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:        
         return self(batch, batch_idx, stage="test")
+
+    def on_train_batch_end(self, outputs: Any, batch: Any, batch_idx: int) -> None:
+        with torch.no_grad():
+            self.C.weight.copy_(F.normalize(self.C.weight, dim=0))
+    
+    def on_validation_epoch_start(self) -> None:   
+        self._c_val.clear()
+        self._target_val.clear()
+        self._task_val.clear()
+        self._robot_val.clear()
     
     def on_validation_epoch_end(self) -> None:
-        z_one = None 
-        target_one = None 
-        task = None 
-        robot = None
-        batch = None 
-            if self.global_rank == 0: 
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f: 
-                    fname = f.name 
-                    self.plot_(
-                        z_one[:n].detach(),
-                        target_one[:n].detach(),
-                        task=batch["task"], 
-                        robot=batch["robot"],
-                        fname=fname
-                        )
+        if self.global_rank == 0 and len(self._c_val) != 0:
+            c_all = torch.cat(self._c_val)
+            target_all = torch.cat(self._target_val)
+            task_all = torch.cat(self._task_val)
+            robot_all = torch.cat(self._robot_val)
+            
+            n_plot = min(self.n_plot, c_all.shape[0])
+            
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f: 
+                fname = f.name 
+                self.plot_(
+                    x=c_all[:n_plot], 
+                    label=target_all[:n_plot], 
+                    task=task_all[:n_plot], 
+                    robot=robot_all[:n_plot], 
+                    fname=fname
+                    )
+                
+                if isinstance(self.logger, pl.loggers.WandbLogger): 
+                    self.logger.experiment.log({"tsne_plot": wandb.Image(fname)})
                     
-                    if isinstance(self.logger, pl.loggers.WandbLogger): 
-                        self.logger.experiment.log({"tsne_plot": wandb.Image(fname)})
-                     
-                    os.remove(fname)
-    
+            os.remove(fname)
+
     def forward(
         self, 
         batch: Dict[str, TensorType["batch", "chunk", "window", "*"]],
@@ -117,57 +180,75 @@ class SkillEncoder(pl.LightningModule):
         stage: str
         ) -> torch.Tensor:
         
+        with torch.no_grad(): 
+            self.C.weight.copy_(F.normalize(self.C.weight, dim=0))
+    
         batch_size, chunk, window = batch["rgb_one"].shape[:3]
         n = batch_size*chunk*window
         
-        rgb_one_emb = self.visionEncoder(batch["rgb_one"]) # [n, d_model]
-        rgb_two_emb = self.visionEncoder(batch["rgb_two"]) # [n, d_model]
+        emb_one = self.visionEncoder(batch["rgb_one"]) # [n, d_model]
+        emb_two = self.visionEncoder(batch["rgb_two"]) # [n, d_model]
          
-        g_qpos = batch["g_qpos"].flatten().unsqueeze(-1) # [n, 1]
-        gripper_emb = self.gripperEncoder(g_qpos) # [n, d_model]
+        g_qpos = batch["g_qpos"] # [batch, chunk, window, 1]
+        g_qpos = g_qpos.view(-1, 1) # [n, 1]
+        emb_gripper = self.gripperEncoder(g_qpos) # [n, d_model]
         
-        h_one = self.sequential(rgb_one_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: robot0_eye_in_hand_view
-        h_two =  self.sequential(rgb_two_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: agentview_image
-        h_gripper = self.sequential(gripper_emb.view(batch_size*chunk, window, -1)) # [n, d_model]: gripper states
+        # Non-linear mapping 
+        emb_one = self.sequential(emb_one.view(batch_size*chunk, window, -1)) # [n, d_model]: robot0_eye_in_hand_view
+        emb_two =  self.sequential(emb_two.view(batch_size*chunk, window, -1)) # [n, d_model]: agentview_image
+        emb_gripper = self.sequential(emb_gripper.view(batch_size*chunk, window, -1)) # [n, d_model]: gripper states
         
-        # Normalize features to lie on unit sphere 
-        h_one_batch = F.normalize(h_one, dim=-1)
-        h_two_batch = F.normalize(h_two, dim=-1)
-        h_gripper_batch = F.normalize(h_gripper, dim=-1)
-
-        if self.queue is not None and self.queue.is_full: 
-                queue_features = self.queue.dequeue() 
-                h_one_assign = torch.cat([h_one_batch, queue_features[0]], dim=0)
-                h_two_assign = torch.cat([h_two_batch, queue_features[1]], dim=0)
-                h_gripper_assign = torch.cat([h_gripper_batch, queue_features[2]], dim=0)
-        else: 
-            h_one_assign = h_one_batch
-            h_two_assign = h_two_batch
-            h_gripper_assign = h_gripper_batch
-            
-        if self.queue is not None:   
-            self.queue.enqueue(torch.stack([h_one_batch.detach(), h_two_batch.detach(), h_gripper_batch.detach()], dim=0))
+        # Project features to the unit sphere
+        z_one = F.normalize(emb_one, dim=-1) # [n, d_model]
+        z_two = F.normalize(emb_two, dim=-1) # [n, d_model]
+        z_gripper = F.normalize(emb_gripper, dim=-1) # [n, d_model]
+        
+        if self.trainer and self.trainer.training: 
+            if self.queue is not None:
+                if self.queue.is_full:
+                    queue_features = self.queue.dequeue() # all features 
+                    z_one = torch.cat([z_one, queue_features[0]], dim=0)
+                    z_two = torch.cat([z_two, queue_features[1]], dim=0)
+                    z_gripper = torch.cat([z_gripper, queue_features[2]], dim=0)
+                    
+                else: 
+                    self.queue.enqueue(torch.stack([z_one.detach(), z_two.detach(), z_gripper.detach()], dim=0))
    
         # Map to prototypes
-        z_one = self.prototype_emb(h_one_assign) # [n, k]
-        z_two = self.prototype_emb(h_two_assign) # [n, k]
-        z_gripper = self.prototype_emb(h_gripper_assign) # [n, k]
+        c_one = self.C(z_one) # [n, k]
+        c_two = self.C(z_two) # [n, k]
+        c_gripper = self.C(z_gripper) # [n, k]
         
         # Find pseudo-labels
         with torch.no_grad(): 
-            target_one = self.distributed_sinkhorn(z_gripper) # [n, k]
-            target_two = self.distributed_sinkhorn(z_one) # [n, k]
-            target_three = self.distributed_sinkhorn(z_two) # [n, k]
+            q_one = self.distributed_sinkhorn(c_gripper) # [n, k]
+            q_two = self.distributed_sinkhorn(c_one) # [n, k]
+            q_gripper = self.distributed_sinkhorn(c_two) # [n, k]
         
-        loss_one = F.cross_entropy(z_one[:n] / self.sinkhorn_kwargs.tau, target_one[:n])
-        loss_two = F.cross_entropy(z_two[:n] / self.sinkhorn_kwargs.tau, target_two[:n])
-        loss_gripper = F.cross_entropy(z_gripper[:n] / self.sinkhorn_kwargs.tau, target_three[:n])
-        loss = 1/3 * (loss_one + loss_two + loss_gripper)
+        p_one = F.log_softmax(c_one[:n, :] / self.sinkhorn_kwargs.tau, dim=-1)
+        p_two = F.log_softmax(c_two[:n, :] / self.sinkhorn_kwargs.tau, dim=-1)
+        p_gripper = F.log_softmax(c_gripper[:n, :] / self.sinkhorn_kwargs.tau, dim=-1)
+    
+        if self.trainer is not None and self.trainer.validating: 
+            self._c_val.append(c_one[:n, :].detach().cpu())
+            self._target_val.append(q_one.detach().cpu())
+            self._task_val.append(batch["task"].cpu())
+            self._robot_val.append(batch["robot"].cpu())
         
+        loss_one = -torch.mean(torch.sum(q_one[:n] * p_one, dim=-1))
+        loss_two = -torch.mean(torch.sum(q_two[:n] * p_two, dim=-1))
+        loss_gripper = -torch.mean(torch.sum(q_gripper[:n] * p_gripper, dim=-1))
+        
+        loss = self.uncertainty_weighting([loss_one, loss_two, loss_gripper]) # []
+    
         self.log_dict(
             {f"{stage}_loss": loss},
-            sync_dist=True
-            )
+            logger=True,
+            prog_bar=True, 
+            on_step=stage=="train", 
+            on_epoch=True, 
+            sync_dist=True, 
+        )
         
         return loss
     
@@ -179,20 +260,32 @@ class SkillEncoder(pl.LightningModule):
         robot: TensorType["n"], 
         fname: str
         ) -> None:
-        
-        columns = ["x", "y", "label", "task", "robot"]
-        
+                
         x = x.cpu().numpy() # [n, k]
-        label = label.argmax(-1).cpu().numpy() # [n, ]
-        task = task.cpu().numpy().reshape(-1, ) # [n, ]
-        robot = robot.cpu().numpy().reshape(-1, ) # [n, ]
+        label = label.argmax(-1).cpu().numpy() # [n]
+        task = task.cpu().numpy().reshape(-1) # [n]
+        robot = robot.cpu().numpy().reshape(-1) # [n]
         
         x = self.tsne.fit_transform(x) # [n, 2]
-        data = np.stack(arrays=[x[:, 0], x[:, 1], label, task, robot], axis=-1)
-        df = pd.DataFrame(data=data, columns=columns)
+        
+        df = pd.DataFrame({
+            "x": x[:, 0], 
+            "y": x[:, 1], 
+            "label": label, 
+            })
+        
+        df["task"] = task.astype(int).map(TASK_DICT)
+        df["robot"] = robot.astype(int).map(ROBOT_DICT)
          
         plt.figure(figsize=(8, 6))
-        scatterplot = sns.scatterplot(data=df, x="x", y="y", hue="label", style="task", size="robot")
+        scatterplot = sns.scatterplot(
+            data=df, 
+            x="x",
+            y="y", 
+            hue="task", 
+            style="robot"
+            )
+        
         fig = scatterplot.get_figure() 
         fig.savefig(fname)
         plt.close()
@@ -203,7 +296,7 @@ class SkillEncoder(pl.LightningModule):
     
         if self.trainer.world_size > 1: 
             out_gathered = self.all_gather(out, sync_grads=False)
-            out = out_gathered.view(-1, out.shape[-1])
+            out = out_gathered.reshape(-1, out.shape[-1])
      
         Q = torch.exp(out / self.sinkhorn_kwargs.epsilon).T # [K, B]
         K, B = Q.shape # number of prototypes, number of samples to assign

@@ -2,20 +2,22 @@ seed: 42
 cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
 
 d_model: 256 
-prototypes: 10
+d_prototypes: 16
 
 data_dir: ${cwd}/imports/mimicgen/datasets/robot
 meta_dir: ${cwd}/master-thesis/data/metadata
 
 datamodule: 
   _target_: data.discover.datamodule.MimicGenRobotDataModule
+  
+  ctr_transforms: false
 
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
 
   robots: null # iiwa, panda, sawyer, ur5e
   tasks: null # square, threading
-  n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
+  n_ds: 2 # {1, 2} if d_0 or d_0 & d_1
   f_ds: 1
   depth: false # True: include depth maps  
   crop_factor: 0.75 # (0, 1)
@@ -23,99 +25,85 @@ datamodule:
   window: 8 # > 0
   chunk: 8 # > 0
 
-  batch_size: 16
+  batch_size: 32
   shuffle: true
   num_workers: 0
   pin_memory: true
-  persistent_workers: true 
+  persistent_workers: false
+ 
   dataset_lengths: 
   - 0.8
   - 0.1
   - 0.1
-
-  seed: ${seed}
   
-  ctr_transforms: false
   transforms: 
     - to_image
     - resize
     - to_dtype
-    - normalize
 
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
   _recursive_: false
+
+  d_model: ${d_model}
+  n_plot: 1000
   
-  fine_tuner_ckpt: ${cwd}/master-thesis/fine_tune/2026_09_12_17_27/checkpoints/epoch=7-step=1600.ckpt
+  vision_encoder_ckpt: null 
+  gripper_encoder_ckpt: null 
+
+  sequential_kwargs: 
+    encoder_layer_kwargs: 
+      d_model: ${d_model}
+      nhead: 4 
+      dim_feedforward: 512
+      batch_first: True
+
+    transformer_encoder_kwargs:
+      num_layers: 8
+      norm: null
+      enable_nested_tensor: False 
+      mask_check: False
+    
+    up_emb_kwargs:
+      in_features: ${d_model}
+      hidden_features: 32
+      out_features: ${d_model} 
+      
+    pe_kwargs: 
+      d_model: ${d_model}
+      max_len: 300
+
+  prototype_kwargs: 
+      in_features: ${d_model}
+      out_features: ${d_prototypes}
+      bias: false # normalization layer 
+
+  optimizer_kwargs: 
+    _target_: torch.optim.AdamW
+    _recursive_: False
+
+    lr: 1e-5
+    weight_decay: 1e-6
+
+  lr_scheduler_kwargs: 
+    warmup_percentage: 0.1
+
+    linear:  
+      start_factor: 1e-4
+      end_factor: 1.0 
+      total_iters: 100 # adapted dynamically  
+
+    cosine_annealing: 
+      T_max: 1000 # adapted dynamically 
+      eta_min: 1e-6
   
+  uncertainty_weighting_kwargs: 
+    n_losses: 3 
+
   sinkhorn_kwargs: 
     tau: 0.1
     sinkhorn_iterations: 3 
     epsilon: 0.05
-  
-  optimizer_kwargs: 
-    optimizer: 
-      lr: 1e-3
-    lr_scheduler: 
-      one: 
-        start_factor: 0.3 
-        end_factor: 1 
-        total_iters: 20 
-      two: 
-        T_max: null
-        eta_min: 0
-      sequential: 
-        milestones: 
-          - ${model.optimizer_kwargs.lr_scheduler.one.total_iters}
-
-  vision_sequential_kwargs: 
-    encoder_layer_kwargs: 
-      d_model: ${d_model}
-      nhead: 4 
-      dim_feedforward: 512
-      batch_first: True
-
-    transformer_encoder_kwargs:
-      num_layers: 8
-      norm: null
-      enable_nested_tensor: False 
-      mask_check: False
-    
-    up_emb_kwargs:
-      in_features: ${d_model}
-      hidden_features: 32
-      out_features: ${d_model} 
-      
-    pe_kwargs: 
-      d_model: ${d_model}
-      max_len: 300
-    
-  gripper_sequential_kwargs: 
-    encoder_layer_kwargs: 
-      d_model: ${d_model}
-      nhead: 4 
-      dim_feedforward: 512
-      batch_first: True
-
-    transformer_encoder_kwargs:
-      num_layers: 8
-      norm: null
-      enable_nested_tensor: False 
-      mask_check: False
-    
-    up_emb_kwargs:
-      in_features: ${d_model}
-      hidden_features: 32
-      out_features: ${d_model} 
-      
-    pe_kwargs: 
-      d_model: ${d_model}
-      max_len: 300
-  
-  prototype_kwargs: 
-    in_features: ${d_model}
-    out_features: ${prototypes}
-    bias: false
 
   queue_kwargs: 
     num_modalities: 3
