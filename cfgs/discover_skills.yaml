@@ -98,7 +98,7 @@ model:
       eta_min: 1e-6
   
   uncertainty_weighting_kwargs: 
-    n_losses: 3 
+    num_losses: 3 
 
   sinkhorn_kwargs: 
     tau: 0.1

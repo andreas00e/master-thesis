@@ -67,23 +67,24 @@ model_vision:
   vision_encoder_kwargs: 
     model_name: resnet18
     d_model: ${d_model}
-    
-    lora_config_kwargs: 
-      r: 64
-      lora_alpha: 64
-      lora_dropout: 0.05
-      bias: lora_only
+  
+    r: 64
+    lora_alpha: 64
+    lora_dropout: 0.05
+    bias: lora_only
 
   expander_kwargs: 
     in_dim: ${d_model}
-    h_dim: ${eval:"${d_model} * 1"}
-    out_dim: ${eval:"${d_model} * 1.5"}
+    h_dim: ${d_model}
+    out_dim: ${d_model}
+    # h_dim: ${eval:"${d_model} * 1"}
+    # out_dim: ${eval:"${d_model} * 1.5"}
 
   vic_reg_kwargs: 
     log_every_n_steps: 50 
 
-    lambda_: 20.0
-    mu: 30.0
+    lambda_: 15.0
+    mu: 35.0
     nu: 1.0
     gamma: 1.0
     eps: 1e-4
