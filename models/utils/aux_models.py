@@ -59,7 +59,6 @@ class DepthVisionBackBone(nn.Module):
         
         return x
 
-
 class VisionEncoder(nn.Module): 
     def __init__(
         self, 
@@ -124,20 +123,17 @@ class VisionEncoder(nn.Module):
         
         return x
     
-
 class TransformerEncoder(nn.Module): 
     def __init__(
         self, 
         encoder_layer_kwargs: DictConfig, 
         transformer_encoder_kwargs: DictConfig, 
-        head_kwargs: DictConfig,
         pe_kwargs: DictConfig,
         ) -> None:
         super().__init__()
         
         self.encoder_layer_kwargs = encoder_layer_kwargs
         self.transformer_encoder_kwargs = transformer_encoder_kwargs
-        self.head_kwargs = head_kwargs
         self.pe_kwargs = pe_kwargs
         
         self.d_model = int(encoder_layer_kwargs.d_model)
@@ -184,7 +180,6 @@ class TransformerEncoder(nn.Module):
         x = self.head(x) # [batch*chunk, d_model]
         
         return x
-
 
 class Expander(nn.Module): 
     def __init__(

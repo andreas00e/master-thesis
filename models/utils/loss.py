@@ -14,7 +14,7 @@ class UncertaintyWeighting(nn.Module):
         self.log_vars = nn.Parameter(torch.zeros(self.num_losses, dtype=torch.float32))
         
     def  forward(self, losses: List[torch.Tensor]) -> torch.Tensor: 
-        losses = torch.cat(losses, dim=0) # [num_losses]
+        losses = torch.stack(losses) # [num_losses]
         
         precisions = torch.exp(-self.log_vars) # [num_losses]
         weighted_losses = 1/2 * precisions * losses + 1/2 * self.log_vars # [num_losses]
@@ -55,7 +55,6 @@ class DynamicWeightAverage(nn.Module):
         if len(losses) != self.n_losses: 
             raise ValueError(f"DWA considers last {self.n_losses} losses only, got last {len(losses)} losses.")
         
-            
         w_k = losses[:, 0] / losses[:, 1] # [n_losses]
         w_k = torch.exp(w_k / self.T) # [n_losses]
         

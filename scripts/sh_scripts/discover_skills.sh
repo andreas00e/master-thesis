@@ -3,8 +3,8 @@
 #SBATCH --output=outputs/discover_skills/output/training_%j.log
 #SBATCH --error=outputs/discover_skills/error/training_%j.err
 #SBATCH --time=05:00:00
-#SBATCH --partition=lrz-v100x2
-#SBATCH --nodelist=gpu-005
+#SBATCH --partition=lrz-hpe-p100x4
+#SBATCH --nodelist=p100-001
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32GB
 

@@ -89,7 +89,7 @@ class SkillEncoder(pl.LightningModule):
         self.sequential = TransformerEncoder(**self.sequential_kwargs)
         
         self.C = nn.Linear(**self.prototype_kwargs) 
-        nn.init.xavier_uniform(self.C.weight)
+        nn.init.xavier_uniform_(self.C.weight)
         with torch.no_grad():
             self.C.weight.copy_(F.normalize(self.C.weight, dim=0))
         

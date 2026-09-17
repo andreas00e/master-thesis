@@ -33,8 +33,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         num_workers: int, 
         pin_memory: bool, 
         persistent_workers: bool,
-        dataset_lengths: List[float], 
-        seed: int,
+        dataset_lengths: List[float],
+        seed: int, 
         ctr_transforms: bool, 
         transforms: List[str], 
         ) -> None:

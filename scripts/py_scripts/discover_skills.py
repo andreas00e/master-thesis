@@ -13,7 +13,9 @@ def main(cfg):
     datamodule = instantiate(cfg.datamodule)
     model = instantiate(cfg.model)
     logger = instantiate(cfg.logger)
-    trainer = instantiate(cfg.trainer, logger=logger)
+    
+    callbacks = [instantiate(callback_cfg) for callback_cfg in cfg.callbacks.values()]
+    trainer = instantiate(cfg.trainer, logger=logger, callbacks=callbacks)
     
     trainer.fit(model=model, datamodule=datamodule)
     

@@ -1,12 +1,13 @@
-# !!! ADJUSTED FROM !!!: 
-# https://discuss.pytorch.org/t/how-to-modify-the-positional-encoding-in-torch-nn-transformer/104308
-
 import math
 from typing import Optional
 
 import torch 
 import torch.nn as nn 
 from torchtyping import TensorType
+
+
+# !!! ADJUSTED FROM !!!: 
+# https://discuss.pytorch.org/t/how-to-modify-the-positional-encoding-in-torch-nn-transformer/104308
 
 class PE(nn.Module): 
     def __init__(self, d_model: int, max_len: int) -> None:

@@ -1,7 +1,7 @@
 seed: 42
 cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
 
-d_model: 256 
+d_model: 512 
 d_prototypes: 16
 
 data_dir: ${cwd}/imports/mimicgen/datasets/robot
@@ -9,8 +9,6 @@ meta_dir: ${cwd}/master-thesis/data/metadata
 
 datamodule: 
   _target_: data.discover.datamodule.MimicGenRobotDataModule
-  
-  ctr_transforms: false
 
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
@@ -23,7 +21,7 @@ datamodule:
   crop_factor: 0.75 # (0, 1)
   noise_level: 0.1 # (0, 1)
   window: 8 # > 0
-  chunk: 8 # > 0
+  chunk: 4 # > 0
 
   batch_size: 32
   shuffle: true
@@ -35,7 +33,10 @@ datamodule:
   - 0.8
   - 0.1
   - 0.1
-  
+
+  seed: ${seed}
+
+  ctr_transforms: false
   transforms: 
     - to_image
     - resize
@@ -55,7 +56,7 @@ model:
     encoder_layer_kwargs: 
       d_model: ${d_model}
       nhead: 4 
-      dim_feedforward: 512
+      dim_feedforward: ${d_model}
       batch_first: True
 
     transformer_encoder_kwargs:
@@ -63,12 +64,7 @@ model:
       norm: null
       enable_nested_tensor: False 
       mask_check: False
-    
-    up_emb_kwargs:
-      in_features: ${d_model}
-      hidden_features: 32
-      out_features: ${d_model} 
-      
+
     pe_kwargs: 
       d_model: ${d_model}
       max_len: 300
@@ -125,7 +121,8 @@ logger:
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-
+  # overfit_batches: 1
+  log_every_n_steps: 1 
   accelerator: gpu   
   devices: 
     - 0
@@ -133,4 +130,18 @@ trainer:
   num_sanity_val_steps: 2
   enable_progress_bar: true
   profiler: simple 
-  default_root_dir: logs/${logger.project}
+  default_root_dir: outputs/logs/${logger.project}
+
+callbacks: 
+  learning_rate_monitor: 
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor 
+    logging_interval: step 
+
+  model_checkpoint: 
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint 
+    monitor: val/loss
+    dirpath: outputs/checkpoints/${logger.project}
+    filename: 'best-checkpoint-{epoch:02d}-{val_loss:.2f}'
+    save_top_k: 1 
+    mode: min 
+    save_last: true
