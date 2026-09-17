@@ -63,15 +63,21 @@ class DepthVisionBackBone(nn.Module):
 class VisionEncoder(nn.Module): 
     def __init__(
         self, 
-        model_name: str, 
-        d_model: int, 
-        lora_config_kwargs: DictConfig
+        model_name: str="resnet18",  
+        d_model: int=512, 
+        r: int=64,  
+        lora_alpha: int=64, 
+        lora_dropout: float=0.05, 
+        bias: str="lora_only"
         ) -> None:
         super().__init__()
         
         self.model_name = model_name 
         self.d_model = d_model
-        self.lora_config_kwargs = lora_config_kwargs
+        self.r = r 
+        self.lora_alpha = lora_alpha
+        self.lora_dropout = lora_dropout
+        self.bias = bias 
     
         self.backbone = load_r3m(self.model_name)
         backbone = self.backbone.module  
@@ -83,12 +89,20 @@ class VisionEncoder(nn.Module):
             for m in range(1, 3) # Convlutions 1 and 2
         ]
         
-        backbone.convnet.fc = nn.Linear(512, self.d_model)
+        in_features = 2048 if "50" in self.model_name else 512
+        backbone.convnet.fc = nn.Linear(in_features, self.d_model)
         nn.init.xavier_uniform_(backbone.convnet.fc.weight)
         if backbone.convnet.fc.bias is not None: 
             nn.init.zeros_(backbone.convnet.fc.bias)
         
-        lora_config = LoraConfig(target_modules=target_modules, **lora_config_kwargs)
+        lora_config = LoraConfig(
+            target_modules=target_modules, 
+            r=self.r, 
+            lora_alpha=self.lora_alpha, 
+            lora_dropout=self.lora_dropout, 
+            bias = self.bias
+            )
+        
         self.model = get_peft_model(backbone, lora_config)
         
     def train(self, mode: bool=True): 
@@ -111,53 +125,63 @@ class VisionEncoder(nn.Module):
         return x
     
 
-class Transformer(nn.Module): 
+class TransformerEncoder(nn.Module): 
     def __init__(
         self, 
         encoder_layer_kwargs: DictConfig, 
         transformer_encoder_kwargs: DictConfig, 
+        head_kwargs: DictConfig,
         pe_kwargs: DictConfig,
-        up_emb_kwargs: Optional[DictConfig]=None
         ) -> None:
-        
         super().__init__()
+        
+        self.encoder_layer_kwargs = encoder_layer_kwargs
+        self.transformer_encoder_kwargs = transformer_encoder_kwargs
+        self.head_kwargs = head_kwargs
+        self.pe_kwargs = pe_kwargs
+        
+        self.d_model = int(encoder_layer_kwargs.d_model)
             
-        encoder_layer = nn.TransformerEncoderLayer(**encoder_layer_kwargs)
-        self.encoder_transformer = nn.TransformerEncoder(
-            encoder_layer=encoder_layer, 
-            **transformer_encoder_kwargs
-        )
+        encoder_layer = nn.TransformerEncoderLayer(**self.encoder_layer_kwargs)
+        self.transformerEncoder = nn.TransformerEncoder(encoder_layer, **self.transformer_encoder_kwargs)
         
-        self.is_up_emb = isinstance(up_emb_kwargs, DictConfig)
+        self.head = nn.Sequential(
+            nn.Linear(self.d_model, self.d_model * 2, bias=False),
+            nn.BatchNorm1d(self.d_model * 2),
+            nn.ReLU(inplace=True), 
+            nn.Linear(self.d_model * 2, self.d_model)
+            )      
         
-        if self.is_up_emb:  
-            self.up_emb = nn.Sequential(
-                nn.Linear(up_emb_kwargs["in_features"], up_emb_kwargs["hidden_features"]), 
-                nn.ReLU(), 
-                nn.Linear(up_emb_kwargs["hidden_features"], up_emb_kwargs["out_features"])
-            )
+        self.cls_token = nn.Parameter(data=torch.empty(size=(1, 1, self.d_model), dtype=torch.float32))
         
-        self.pe = PE(**pe_kwargs)
-        self.cls = nn.Parameter(data=torch.empty(size=(1, 1, encoder_layer_kwargs.d_model), dtype=torch.float32))
-        nn.init.xavier_uniform_(self.cls)
-    
+        self.pe = PE(**self.pe_kwargs)
+        
+        self.apply(self._init_weights)
+        nn.init.normal_(self.cls_token, std=0.02)
+
+    def _init_weights(self, module): 
+        if isinstance(module, nn.Linear): 
+            nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None: 
+                nn.init.zeros_(module.bias)       
+                
+        if isinstance(module, nn.BatchNorm1d): 
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
+            
     def forward(
         self, 
         x: TensorType["batch*chunk, window", "d_model"], 
         idxs: Optional[TensorType["batch", "chunk", "window"]]=None
-        ) -> TensorType["*"]: 
+        ) -> torch.Tensor: 
         
-            
-        cls = self.cls.expand(x.shape[0], -1, -1) # [batch*chunk, 1, d_model]
+        cls_token = self.cls_token.expand(x.shape[0], -1, -1) # [batch*chunk, 1, d_model]
         
-        x = torch.cat(tensors=(cls, x), dim=1) # [batch*chunk, 1+window, d_model]
+        x = torch.cat(tensors=(cls_token, x), dim=1) # [batch*chunk, 1+window, d_model]
         x = self.pe(x, idxs) # [batch*chunk, 1+window, d_model]
-        x = self.encoder_transformer(x) # [batch*chunk, 1+window, d_model]
-        x = torch.mean(x, dim=1) # [batch*chunk, d_model]
-        # x = x[:, 0, :] # [batch*chunk, d_model]
-        
-        if self.is_up_emb: 
-            x = self.up_emb(x) # [batch*chunk, d_model]
+        x = self.transformerEncoder(x) # [batch*chunk, 1+window, d_model]
+        x = x[:, 0, :] # [batch*chunk, d_model]
+        x = self.head(x) # [batch*chunk, d_model]
         
         return x
 
@@ -176,7 +200,7 @@ class Expander(nn.Module):
         self.out_dim = int(out_dim)
                 
         self.model = nn.Sequential(
-            nn.Linear(in_features=self.in_dim, out_features=self.h_dim), 
+            nn.Linear(in_features=self.in_dim, out_features=self.h_dim, bias=None), 
             nn.BatchNorm1d(num_features=self.h_dim), 
             nn.LeakyReLU(negative_slope=0.01), 
 

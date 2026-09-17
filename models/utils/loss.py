@@ -7,19 +7,19 @@ from torchtyping import TensorType
 
 # https://arxiv.org/abs/1705.07115
 class UncertaintyWeighting(nn.Module): 
-    def __init__(self, num_losses: int=2) -> None:
+    def __init__(self, num_losses: int=3) -> None:
         super().__init__()
         
         self.num_losses = num_losses
         self.log_vars = nn.Parameter(torch.zeros(self.num_losses, dtype=torch.float32))
         
     def  forward(self, losses: List[torch.Tensor]) -> torch.Tensor: 
-        losses = torch.stack(losses, dim=0) # [num_modalities, 1]
+        losses = torch.cat(losses, dim=0) # [num_losses]
         
-        precisions = torch.exp(-self.log_vars) # [num_modalities, 1]
-        weighted_losses = 1/2 * precisions * losses + 1/2 * self.log_vars # [num_modalities, 1]
+        precisions = torch.exp(-self.log_vars) # [num_losses]
+        weighted_losses = 1/2 * precisions * losses + 1/2 * self.log_vars # [num_losses]
         
-        loss = torch.sum(weighted_losses, dim=0) # []
+        loss = torch.sum(weighted_losses) # []
         
         return loss 
   
