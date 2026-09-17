@@ -67,7 +67,7 @@ class FIFOQueue(nn.Module):
         self.queue_elements.copy_(min(self.capacity, queue_elements + num_elements))
     
     @torch.no_grad()
-    def dequeue(self) -> torch.Tensor: 
+    def get(self) -> torch.Tensor: 
         write_idx = int(self.write_idx.item())
         queue_elements = int(self.queue_elements.item())
         

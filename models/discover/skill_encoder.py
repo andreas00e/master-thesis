@@ -206,7 +206,7 @@ class SkillEncoder(pl.LightningModule):
         if self.trainer and self.trainer.training: 
             if self.queue is not None:
                 if self.queue.is_full:
-                    queue_features = self.queue.dequeue() # all features 
+                    queue_features = self.queue.get() # all features 
                     z_one = torch.cat([z_one, queue_features[0]], dim=0)
                     z_two = torch.cat([z_two, queue_features[1]], dim=0)
                     z_gripper = torch.cat([z_gripper, queue_features[2]], dim=0)
@@ -242,7 +242,13 @@ class SkillEncoder(pl.LightningModule):
         loss = self.uncertainty_weighting([loss_one, loss_two, loss_gripper]) # []
     
         self.log_dict(
-            {f"{stage}_loss": loss},
+            {
+                f"{stage}/loss_one": loss_one, 
+                f"{stage}/loss_two": loss_two, 
+                f"{stage}/loss_gripper": loss_gripper, 
+                f"{stage}/loss": loss
+             
+            },
             logger=True,
             prog_bar=True, 
             on_step=stage=="train", 
