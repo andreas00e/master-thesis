@@ -28,9 +28,9 @@ class MimicGenRobotDataset(Dataset):
         df_gripper: pd.DataFrame, 
         window: int,
         chunk: int,
+        t_smooth: bool, 
         crop_factor: Optional[float], 
-        noise_level: float,
-        ctr_transforms: bool,  
+        ctr_transforms: bool, 
         transforms: List[str],
         ) -> None:
         super().__init__()
@@ -42,14 +42,16 @@ class MimicGenRobotDataset(Dataset):
         self.df_gripper = df_gripper
         self.window = window
         self.chunk = chunk
+        self.t_smooth = t_smooth
         self.crop_factor = crop_factor
-        self.noise_level = noise_level
+        self.ctr_transforms = ctr_transforms 
+        self.transforms = transforms
         
-        if ctr_transforms: 
-            self.anchor_transforms = get_transforms(transforms)
-            self.positive_transforms = get_transforms(transforms)
+        if self.ctr_transforms: 
+            self.anchor_transforms = get_transforms(self.transforms)
+            self.positive_transforms = get_transforms(self.transforms)
         else: 
-            self.transforms = get_transforms(transforms)  
+            self.transforms = get_transforms(self.transforms)   
                              
     def __len__(self) -> int:
         return len(self.demo_map)
@@ -86,7 +88,7 @@ class MimicGenRobotDataset(Dataset):
         
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]: 
         item = {}
-        file_path, demo, _ =  self.demo_map[idx]
+        file_path, demo, _ =  self.demo_map[idx] # one hdf5 file 
         
         task = Path(file_path).stem.split("_")[0]
         robot = Path(file_path).stem.split("_")[-1]
@@ -97,9 +99,17 @@ class MimicGenRobotDataset(Dataset):
         n_steps = demo_obs["robot0_eye_in_hand_image"].shape[0]
         
         if self.window is not None and self.chunk is not None: 
-            max_offset = max(1, n_steps - self.window + 1)
-            offsets = torch.randint(0, max_offset, size=(self.chunk, )) # indexing, not slicing
-            idxs = offsets[:, None] + torch.arange(self.window) # [chunk, window]
+            if self.t_smooth:
+                max_offset = max(1, n_steps - self.window + 1)
+                start = torch.randint(0, max_offset, (1,)).item()  
+                
+                idx_range = torch.arange(start=start - self.window, end=start + self.window*2)
+                idx_range = torch.clamp(idx_range, min=0, max=n_steps - 1)
+                idxs = torch.stack(torch.chunk(idx_range, 3), dim=0) # [3, window] 
+            else: 
+                max_offset = max(1, n_steps - self.window + 1)
+                offsets = torch.randint(0, max_offset, size=(self.chunk, )) # indexing, not slicing
+                idxs = offsets[:, None] + torch.arange(self.window) # [chunk, window]
         else: 
             idxs = torch.arange(n_steps) # [whole trajectory] 
  
