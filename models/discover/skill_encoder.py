@@ -20,7 +20,7 @@ from torchtyping import TensorType
 
 from models.discover.utils.queue import FIFOQueue
 from models.utils.loss import UncertaintyWeighting
-from models.utils.aux_models import TransformerEncoder, VisionEncoder
+from models.utils.aux_models import TransformerEncoder, VisionEncoder, CNN
 from models.fine_tune.fine_tuner import FineTunerVisual, FineTunerGripper
 
 TASK_DICT = {
@@ -75,7 +75,7 @@ class SkillEncoder(pl.LightningModule):
             for p in self.visionEncoder.parameters(): 
                 p.requires_grad_(False)
         else: 
-            self.visionEncoder = VisionEncoder() 
+            self.visionEncoder = CNN(self.d_model)
         
         if gripper_encoder_ckpt is not None: 
             self.gripperEncoder = None # TODO: Exchange with fine-tuned gripper encoder 
@@ -184,14 +184,15 @@ class SkillEncoder(pl.LightningModule):
             self.C.weight.copy_(F.normalize(self.C.weight, dim=0))
     
         batch_size, chunk, window = batch["rgb_one"].shape[:3]
-        n = batch_size*chunk*window
+        n = batch_size*chunk
         
-        emb_one = self.visionEncoder(batch["rgb_one"]) # [n, d_model]
-        emb_two = self.visionEncoder(batch["rgb_two"]) # [n, d_model]
+        emb_one = self.visionEncoder(batch["rgb_one"]) # [batch_size*chunk*window, d_model]
+        emb_two = self.visionEncoder(batch["rgb_one_pos"])
+        # emb_two = self.visionEncoder(batch["rgb_two"]) # [batch_size*chunk*window, d_model]
          
         g_qpos = batch["g_qpos"] # [batch, chunk, window, 1]
-        g_qpos = g_qpos.view(-1, 1) # [n, 1]
-        emb_gripper = self.gripperEncoder(g_qpos) # [n, d_model]
+        g_qpos = g_qpos.view(-1, 1) # [batch_size*chunk*window, 1]
+        emb_gripper = self.gripperEncoder(g_qpos) # [batch_size*chunk*window, d_model]
         
         # Non-linear mapping 
         emb_one = self.sequential(emb_one.view(batch_size*chunk, window, -1)) # [n, d_model]: robot0_eye_in_hand_view

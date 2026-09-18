@@ -13,6 +13,27 @@ from torchtyping import TensorType
 from models.utils.utils import PE
 
 
+
+class CNN(nn.Module):
+
+    def __init__(self, out_size) -> None:
+        super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=8, stride=4, padding=0),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+        self.linear = nn.Linear(6400, out_size)
+
+    def forward(self, images):
+
+        return self.linear(self.cnn(images))
+
+
 class DepthVisionBackBone(nn.Module): 
     def __init__(
         self
