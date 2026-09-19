@@ -1,24 +1,22 @@
-from r3m import load_r3m
-import loralib as lora 
-from pathlib import Path
+from r3m import load_r3m 
 from  peft import LoraConfig, get_peft_model
 from omegaconf import  DictConfig
-from typing import List, Optional, Union
+from typing import Optional
 
 import torch 
 import torch.nn as nn 
-import torch.nn.functional as F 
 from torchtyping import TensorType
 
 from models.utils.utils import PE
 
 
-
 class CNN(nn.Module):
-
-    def __init__(self, out_size) -> None:
+    def __init__(self, d_model: int) -> None:
         super().__init__()
-        self.cnn = nn.Sequential(
+        
+        self.d_model = d_model
+        
+        self.model = nn.Sequential(
             nn.Conv2d(3, 32, kernel_size=8, stride=4, padding=0),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
@@ -26,13 +24,18 @@ class CNN(nn.Module):
             nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
             nn.ReLU(),
             nn.Flatten(),
+            nn.Linear(6400, self.d_model) 
         )
-        self.linear = nn.Linear(6400, out_size)
 
-    def forward(self, images):
-
-        return self.linear(self.cnn(images))
-
+    def forward(
+        self, 
+        x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
+        ) -> TensorType["batch*chunk*window", "d_model"]:
+        
+        x = x.view(-1, *x.shape[-3:]) # [batch*chunk*window, channels, height, width]
+        x = self.model(x) # [batch*chunk*window, feature_dim]
+        
+        return x
 
 class DepthVisionBackBone(nn.Module): 
     def __init__(
