@@ -29,7 +29,8 @@ class MimicGenRobotDataset(Dataset):
         window: int,
         chunk: int,
         t_smooth: bool, 
-        crop_factor: Optional[float], 
+        crop_factor: float, 
+        noise_level: float, 
         ctr_transforms: bool, 
         transforms: List[str],
         ) -> None:
@@ -44,6 +45,7 @@ class MimicGenRobotDataset(Dataset):
         self.chunk = chunk
         self.t_smooth = t_smooth
         self.crop_factor = crop_factor
+        self.noise_level = noise_level
         self.ctr_transforms = ctr_transforms 
         self.transforms = transforms
         
