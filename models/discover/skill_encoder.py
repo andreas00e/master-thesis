@@ -23,6 +23,7 @@ from models.utils.loss import UncertaintyWeighting
 from models.utils.aux_models import TransformerEncoder, VisionEncoder, CNN
 from models.fine_tune.fine_tuner import FineTunerVisual, FineTunerGripper
 
+
 TASK_DICT = {
     0: "square",
     1: "threading"
@@ -34,6 +35,10 @@ ROBOT_DICT = {
     2: "sawyer", 
     3: "ur5e"
 }
+
+map_task = np.vectorize(lambda x: TASK_DICT.get(x, str(x)))
+map_robot =np.vectorize(lambda x: ROBOT_DICT.get(x, str(x)))
+
 
 class SkillEncoder(pl.LightningModule): 
     def __init__(
@@ -281,8 +286,8 @@ class SkillEncoder(pl.LightningModule):
             "label": label, 
             })
         
-        df["task"] = task.astype(int).map(TASK_DICT)
-        df["robot"] = robot.astype(int).map(ROBOT_DICT)
+        df["task"] = map_task(task.astype(int))
+        df["robot"] =  map_robot(robot.astype(int))
          
         plt.figure(figsize=(8, 6))
         scatterplot = sns.scatterplot(
