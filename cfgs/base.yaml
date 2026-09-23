@@ -1,0 +1,71 @@
+defaults:
+  - _self_ 
+
+d_model: 512
+seed: 42
+
+cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
+data_dir: ${cwd}/imports/mimicgen/datasets/robot
+meta_dir: ${cwd}/master-thesis/data/metadata
+
+datamodule: 
+  _target_: data.utils.datamodule.MimicGenRobotDataModule
+
+  data_dir: ${data_dir}
+  meta_dir: ${meta_dir}
+
+  transforms: null 
+  contrastive_transforms: false
+
+  robots: null # [iiwa, panda, sawyer, ur5e]
+  tasks: null # [square, threading]
+  data_distribution: d0 # d1, both
+  data_portion: 1.0
+  window_size: 8 # > 0
+  chunk_size: 1
+
+  batch_size: 512
+  shuffle: true
+  num_workers: 0
+  pin_memory: true
+  persistent_workers: false
+  drop_last: true
+
+  dataset_lengths: 
+  - 0.8
+  - 0.1 
+  - 0.1
+
+  seed: ${seed}
+
+logger: 
+  _target_: lightning.pytorch.loggers.WandbLogger
+  name: null 
+  version: ${now:%Y_%m_%d_%H_%M}
+  project: null
+
+trainer: 
+  _target_: lightning.pytorch.Trainer
+  log_every_n_steps: 1 
+  accelerator: gpu   
+  devices: 
+    - 0
+  max_epochs: 200 
+  num_sanity_val_steps: 2
+  enable_progress_bar: true
+  profiler: simple 
+  default_root_dir: outputs/logs/${logger.project}
+
+callbacks: 
+  learning_rate_monitor: 
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor 
+    logging_interval: step 
+
+  model_checkpoint: 
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint 
+    monitor: null
+    dirpath: outputs/checkpoints/${logger.project}
+    filename: 'best-checkpoint-{epoch:02d}-{val_loss:.2f}'
+    save_top_k: 1 
+    mode: min 
+    save_last: true

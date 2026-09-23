@@ -2,7 +2,7 @@ seed: 42
 cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
 
 d_model: 512 
-d_prototypes: 128
+d_prototypes: 64
 
 data_dir: ${cwd}/imports/mimicgen/datasets/robot
 meta_dir: ${cwd}/master-thesis/data/metadata
@@ -13,11 +13,12 @@ datamodule:
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
 
-  robots:  # iiwa, panda, sawyer, ur5e
-     - iiwa 
-     - panda
-  tasks: # square, threading 
+  robots: # null # iiwa, panda, sawyer, ur5e
+    - iiwa 
+    - panda
+  tasks: # null # square, threading 
     - square 
+    # - threading
   n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
   f_ds: 1
   depth: false # True: include depth maps  
@@ -27,8 +28,9 @@ datamodule:
   chunk: 1 # > 0
   consistent_batch: true
   t_smooth: false
-
-  batch_size: 64
+  pos_window_size: 4 
+  neg_window_size: 12 
+  batch_size: 32
   shuffle: true
   num_workers: 0
   pin_memory: true
@@ -45,8 +47,8 @@ datamodule:
   ctr_transforms: true
   transforms: 
     - to_image
-    - to_dtype
-    - resize
+    - to_dtype_cnn
+    - resize_cnn
     - rotate 
     - color_jitter
     - grayscale 
@@ -58,7 +60,9 @@ model:
   _recursive_: false
 
   d_model: ${d_model}
-  n_plot: 1000
+  n_plot: 2000
+  tcn: true
+  temp_tcn: 0.1
   
   vision_encoder_ckpt: null 
   gripper_encoder_ckpt: null 
@@ -105,7 +109,7 @@ model:
       eta_min: 1e-6
   
   uncertainty_weighting_kwargs: 
-    num_losses: 3 
+    num_losses: 4
 
   sinkhorn_kwargs: 
     tau: 0.1
@@ -113,7 +117,7 @@ model:
     epsilon: 0.05
 
   queue_kwargs: 
-    num_modalities: 3
+    num_modalities: 2
     capacity: 3840
     feature_dim: ${d_model}
 

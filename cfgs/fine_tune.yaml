@@ -1,58 +1,33 @@
-seed: 42
-d_model: 512 
-
-cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
-
-data_dir: ${cwd}/imports/mimicgen/datasets/robot
-meta_dir: ${cwd}/master-thesis/data/metadata
+defaults: 
+  - base 
+  - _self_ 
 
 datamodule: 
-  _target_: data.discover.datamodule.MimicGenRobotDataModule
-  
-  seed: ${seed}
-  ctr_transforms: false # transforms reuquired for constrastive learning
-
-  data_dir: ${data_dir}
-  meta_dir: ${meta_dir}
-
-  robots: null # iiwa, panda, sawyer, ur5e
-  tasks: null # square, threading
-  n_ds: 2 # {1, 2} if d_0 or d_0 & d_1
-  f_ds: 1
-  depth: false # True: include depth maps  
-  crop_factor: 1 # (0, 1)
-  noise_level: 0.1 # (0, 1)
-  window: 1 # > 0
-  chunk: 1 # > 0
-
-  batch_size: 512
-  shuffle: true
-  num_workers: 0
-  pin_memory: true
-  persistent_workers: false
-
-  dataset_lengths: 
-  - 0.8
-  - 0.1 
-  - 0.1
+  robots: 
+    - iiwa 
+    - panda 
+  tasks:
+    - square
   
   transforms: # r3m model expects unnormalized images with pixel values in [0, 255]
     - to_image
-    - resize
-    - to_dtype
+    - resize_r3m
+    - to_dtype_r3m
 
 model_vision: 
   _target_: models.fine_tune.fine_tuner.FineTunerVisual
   _recursive_: False
-  
+
   optimizer_kwargs: 
-    _target_: torch.optim.AdamW
-    _recursive_: False
+    encoder: 
+      lr: 1e-4
+      weight_decay: 1e-3
 
-    lr: 1e-5
-    weight_decay: 1e-6
+    expander: 
+      lr: 1e-5
+      weight_decay: 1e-4
 
-  lr_scheduler_kwargs: 
+  scheduler_kwargs: 
     warmup_percentage: 0.1
 
     linear:  
@@ -63,7 +38,7 @@ model_vision:
     cosine_annealing: 
       T_max: 1000 # adapted dynamically 
       eta_min: 1e-6
-
+  
   vision_encoder_kwargs: 
     model_name: resnet18
     d_model: ${d_model}
@@ -75,65 +50,21 @@ model_vision:
 
   expander_kwargs: 
     in_dim: ${d_model}
-    h_dim: ${d_model}
-    out_dim: ${d_model}
-    # h_dim: ${eval:"${d_model} * 1"}
-    # out_dim: ${eval:"${d_model} * 1.5"}
+    h_dim: ${eval:"${d_model}*1"}
+    out_dim: ${eval:"${d_model}*1"}
 
   vic_reg_kwargs: 
     log_every_n_steps: 50 
 
     lambda_: 15.0
     mu: 35.0
-    nu: 1.0
+    nu: 10.0
     gamma: 1.0
     eps: 1e-4
 
-model_gripper: 
-  _target_: models.fine_tune.fine_tuner.FineTunerGripper
-  _recursive_: False
-
-  d_model: ${d_model}
-
-  fine_tuner_visual_ckpt: fine_tune/2026_09_15_14_35/checkpoints/epoch=4-step=125.ckpt
-  
-  optimizer_kwargs: 
-    _target_: torch.optim.AdamW
-    _recursive_: False
-
-    lr: 1e-3
-    weight_decay: 1e-4
-
-  lr_scheduler_kwargs: 
-    warmup_percentage: 0.1
-
-    linear:  
-      start_factor: 1e-3
-      end_factor: 1.0 
-      total_iters: 100 # adapted dynamically  
-
-    cosine_annealing: 
-      T_max: 1000 # adapted dynamically 
-      eta_min: 1e-6
-
 logger: 
-  _target_: lightning.pytorch.loggers.WandbLogger
-  name: rgb_2_depth_0_gripper_ds_1_002
-  version: ${now:%Y_%m_%d_%H_%M}
+  name: new_try
   project: fine_tune
-
-trainer: 
-  _target_: lightning.pytorch.Trainer
-  # overfit_batches: 1
-  log_every_n_steps: 1 
-  accelerator: gpu   
-  devices: 
-    - 0
-  max_epochs: 200 
-  num_sanity_val_steps: 2
-  enable_progress_bar: true
-  profiler: simple 
-  default_root_dir: outputs/logs/${logger.project}
 
 callbacks: 
   learning_rate_monitor: 
@@ -141,10 +72,4 @@ callbacks:
     logging_interval: step 
 
   model_checkpoint: 
-    _target_: lightning.pytorch.callbacks.ModelCheckpoint 
     monitor: val/tot_loss
-    dirpath: outputs/checkpoints/${logger.project}
-    filename: 'best-checkpoint-{epoch:02d}-{val_loss:.2f}'
-    save_top_k: 1 
-    mode: min 
-    save_last: true
