@@ -81,3 +81,9 @@ class FIFOQueue(nn.Module):
     @property
     def is_full(self) -> bool: 
         return int(self.queue_elements.item()) == self.capacity
+    
+    @torch.no_grad()
+    def reset(self) -> None:
+        self.queue.zero_()
+        self.write_idx.zero_()
+        self.queue_elements.zero_()
