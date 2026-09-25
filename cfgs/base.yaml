@@ -1,7 +1,7 @@
 defaults:
   - _self_ 
 
-d_model: 512
+d_model: 64
 seed: 42
 
 cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
@@ -14,7 +14,7 @@ datamodule:
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
 
-  transforms: null 
+  transforms_list: null 
   contrastive_transforms: false
 
   robots: null # [iiwa, panda, sawyer, ur5e]
@@ -24,9 +24,9 @@ datamodule:
   window_size: 8 # > 0
   chunk_size: 1
 
-  batch_size: 512
+  batch_size: 32
   shuffle: true
-  num_workers: 0
+  num_workers: 1
   pin_memory: true
   persistent_workers: false
   drop_last: true

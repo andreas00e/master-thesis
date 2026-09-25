@@ -10,9 +10,9 @@ from typing import Dict, List, Optional, Tuple,  Union
 
 def get_files(
     data_dir: Union[str, os.PathLike], 
-    depth: bool=False, 
     robots: Optional[Union[str, List[str]]]=None, 
     tasks: Optional[Union[str, List[str]]]=None, 
+    depth: bool=False
     ) -> Tuple[List[str], List[str], List[str]]:
     
     data_dir = Path(data_dir)

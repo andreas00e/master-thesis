@@ -9,7 +9,7 @@ setup_environment()
 
 
 @hydra.main(config_path="../../cfgs/", config_name="fine_tune", version_base=None)
-def main(cfg):     
+def main(cfg):    
     pl.seed_everything(cfg.seed, workers=True)
     
     datamodule = instantiate(cfg.datamodule)

@@ -9,102 +9,83 @@ from torch.utils.data import DataLoader, ConcatDataset, random_split
 
 import lightning.pytorch as pl 
 
-from data.utils.load_files import get_files, get_metadata, get_demo_dict
-from data.discover.dataset import MimicGenRobotDataset
 from data.utils.collate import collate_discover
+from data.utils.load_files import get_files, get_metadata, get_demo_dict
+from data.utils.dataset import MimicGenRobotDataset
 from data.discover.utils.sampler import SameRobotBatchSampler
 
 
 class MimicGenRobotDataModule(pl.LightningDataModule): 
     def __init__(self, 
-        data_dir: Union[str, os.PathLike], # directory containing the hdf5 trajectory files 
-        meta_dir: Union[str, os.PathLike], # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
-        robots: Optional[Union[str, List[str]]], 
-        tasks: Optional[Union[str, List[str]]], 
-        n_ds: int, # d0 or d0 and d1
-        f_ds: float, # percentage of dataset use
-        depth: bool, 
-        crop_factor: float,        
-        noise_level: float, 
-        window: int, 
-        chunk: int, 
-        consistent_batch: bool, 
-        t_smooth: bool, 
-        pos_window_size: int, 
-        neg_window_size: int, 
-        batch_size: int,
-        shuffle: bool,  
-        num_workers: int, 
-        pin_memory: bool, 
-        persistent_workers: bool,
-        drop_last: bool, 
-        dataset_lengths: List[float],
-        seed: int, 
-        ctr_transforms: bool, 
-        transforms: List[str], 
+        data_dir: str, # directory containing the hdf5 trajectory files 
+        meta_dir: str, # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
+        transforms_list: List[str], 
+        contrastive_transforms: bool=False, 
+        robots: Optional[Union[str, List[str]]]=None, 
+        tasks: Optional[Union[str, List[str]]]=None, 
+        data_distribution: float="d0", # d0 or d0 and d1
+        data_portion: float=1.0, # percentage of dataset use
+        window_size: int=8, 
+        chunk_size: int=1, 
+        crop_factor: float=1.0,       
+        noise_level: float=1.0, 
+        consistent_batch: bool=False, 
+        temporal_smoothing: bool=False, 
+        positive_window_size: Optional[int]=None,
+        negative_window_size: Optional[int]=None,  
+        batch_size: int=16,
+        shuffle: bool=True,  
+        num_workers: int=0, 
+        pin_memory: bool=False, 
+        persistent_workers: bool=True,
+        drop_last: bool=False, 
+        dataset_lengths: List[float]=[0.8, 0.1, 0.1],
+        seed: int=42, 
         ) -> None:
         super().__init__()
-        
-        if not n_ds in [1, 2]: 
-            raise ValueError(f"n_ds has to be 1 or 2, got {n_ds}.")
-        if not 0 < f_ds <= 1: 
-            raise ValueError(f"f_ds has to be in (0, 1], got {f_ds}.")
-        if not 0 < crop_factor <= 1: 
-            raise ValueError(f"crop_factor has to be in (0, 1), got {crop_factor}.")
-        if not 0 < noise_level < 1: 
-            raise ValueError(f"noise_level has to be in (0, 1), got {noise_level}.")
-        if window < 1: 
-            raise ValueError(f"Size of window must be >= 1, got {window}.")
-        if chunk < 1: 
-            raise ValueError(f"Chunk size must be >=1,  got {chunk}.")
-        
-        cpu_count = os.cpu_count() or 1
-        if num_workers > cpu_count: 
-            self.num_workers = cpu_count
-        else: 
-            self.num_workers = num_workers
        
         # Data kwargs
         self.data_dir = Path(data_dir)
         self.meta_dir = Path(meta_dir)
         
-        self.n_ds = n_ds
-        self.f_ds = f_ds
-        self.depth = depth
+        # Image transformations/ augmenations
+        self.transforms_list = transforms_list
+        self.contrastive_transforms = contrastive_transforms
+        
+        self.data_distribution = data_distribution
+        self.data_portion = data_portion
+        self.window_size = window_size
+        self.chunk_size = chunk_size
         self.crop_factor = crop_factor
         self.noise_level = noise_level
-        self.window = window
-        self.chunk = chunk
+        
         self.consistent_batch = consistent_batch
-        self.t_smooth = t_smooth
-        self.pos_window_size = pos_window_size 
-        self.neg_window_size = neg_window_size 
+        self.temporal_smoothing = temporal_smoothing
+        self.positive_window_size = positive_window_size 
+        self.negative_window_size = negative_window_size 
 
         # Dataloading kwargs
         self.batch_size = batch_size
         self.shuffle = shuffle
+        self.num_workers = num_workers if num_workers < os.cpu_count() else max(1, os.cpu_count())
         self.pin_memory = pin_memory
         self.persistent_workers = persistent_workers
         self.drop_last = drop_last
         self.dataset_lengths = dataset_lengths
         self.seed = seed
-
-        # Image transformations/ augmenations
-        self.ctr_transforms = ctr_transforms
-        self.transforms = transforms
         
         # File handling 
-        self.robots, self.tasks, self.files = get_files(self.data_dir, self.depth, robots, tasks) # all hdf5 files containg given robot(s) and task(s)
+        self.robots, self.tasks, self.files = get_files(self.data_dir, robots, tasks) # all hdf5 files containg given robot(s) and task(s)
         self.metadata = get_metadata(self.meta_dir, self.files)
-        self.df_gripper = pd.read_csv(self.meta_dir / "gripper_state_robot.csv") # TODO: Move .csv to config 
-        self.demo_map, self.window = get_demo_dict(self.metadata, self.files, self.window)  # Tuple[Dict[str, List[Tuple[str, str, int]]], int]
+        self.dataframe_gripper = pd.read_csv(self.meta_dir / "gripper_state_robot.csv")
+        self.demo_map, self.window_size = get_demo_dict(self.metadata, self.files, self.window_size) # Tuple[Dict[str, List[Tuple[str, str, int]]], int]
             
         self.train_dataset = None
         self.val_dataset = None
         self.test_dataset = None
        
     def setup(self, stage: Optional[str]=None) -> None:
-        if getattr(self, "dataset_", None) is not None: 
+        if getattr(self, "val_dataset", None) is not None: 
             self.teardown(stage=stage)
         
         rng = random.Random(self.seed)
@@ -116,33 +97,35 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 d1_key = f"{task}_d1_{robot}"
                 map_key = f"{task}{robot}"
                 
-                if self.n_ds == 1: 
+                if self.data_distribution == "d0": 
                     entries = list(self.demo_map[d0_key])
-                elif self.n_ds == 2: 
+                elif self.data_distribution == "d1": 
+                    entries = list(self.demo_map[d1_key])
+                elif self.data_distribution == "both":
                     entries = list(self.demo_map[d0_key] + self.demo_map[d1_key])
                 else: 
-                    raise ValueError(f"n_ds must 1 or 2, got {self.n_ds}")
+                    raise ValueError(f"n_ds must 1 or 2, got {self.data_distribution}")
             
-                if self.f_ds < 1: 
+                if self.data_portion < 1: 
                     n_dm = len(entries)
                     rng.shuffle(entries)
-                    entries = entries[:int(self.f_ds * n_dm)]
+                    entries = entries[:int(self.data_portion * n_dm)]
                 
                 demo_map[map_key] = entries
         
         datasets = [
             MimicGenRobotDataset(
             demo_map=demo_map[f"{task}{robot}"],
-            df_gripper=self.df_gripper, 
-            window=self.window,
-            chunk=self.chunk, 
-            t_smooth=self.t_smooth, 
-            pos_window_size=self.pos_window_size, 
-            neg_window_size=self.neg_window_size, 
+            dataframe_gripper=self.dataframe_gripper, 
+            transforms_list=self.transforms_list, 
+            contrastive_transforms=self.contrastive_transforms,
+            window_size=self.window_size,
+            chunk_size=self.chunk_size, 
+            temporal_smoothing=self.temporal_smoothing, 
+            positive_window_size=self.positive_window_size, 
+            negative_window_size=self.negative_window_size, 
             crop_factor=self.crop_factor,
-            noise_level=self.noise_level,
-            ctr_transforms=self.ctr_transforms, 
-            transforms=self.transforms
+            noise_level=self.noise_level
             ) 
             for task in self.tasks 
             for robot in self.robots
@@ -204,7 +187,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 pin_memory=self.pin_memory, 
                 persistent_workers=self.persistent_workers, 
                 collate_fn=collate_discover,
-                # multiprocessing_context="spawn"  
                 )
             
         return DataLoader(
@@ -217,7 +199,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             persistent_workers=self.persistent_workers, 
             drop_last=self.drop_last,
             collate_fn=collate_discover, 
-            # multiprocessing_context="spawn"  
             )
     
     def train_dataloader(self) -> DataLoader:

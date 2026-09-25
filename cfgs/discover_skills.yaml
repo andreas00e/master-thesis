@@ -1,68 +1,49 @@
-seed: 42
-cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
+defaults: 
+  - base 
+  - _self_ 
 
-d_model: 512 
+d_model: 512
 d_prototypes: 64
 
-data_dir: ${cwd}/imports/mimicgen/datasets/robot
-meta_dir: ${cwd}/master-thesis/data/metadata
-
 datamodule: 
-  _target_: data.discover.datamodule.MimicGenRobotDataModule
-
-  data_dir: ${data_dir}
-  meta_dir: ${meta_dir}
-
-  robots: # null # iiwa, panda, sawyer, ur5e
-    - iiwa 
-    - panda
-  tasks: # null # square, threading 
-    - square 
-    # - threading
-  n_ds: 1 # {1, 2} if d_0 or d_0 & d_1
-  f_ds: 1
-  depth: false # True: include depth maps  
-  crop_factor: 0.75 # (0, 1)
-  noise_level: 0.1 # (0, 1)
-  window: 8 # > 0
-  chunk: 1 # > 0
-  consistent_batch: true
-  t_smooth: false
-  pos_window_size: 4 
-  neg_window_size: 12 
-  batch_size: 32
-  shuffle: true
-  num_workers: 0
-  pin_memory: true
-  persistent_workers: false
-  drop_last: true
- 
-  dataset_lengths: 
-  - 0.8
-  - 0.1
-  - 0.1
-
-  seed: ${seed}
-
-  ctr_transforms: true
-  transforms: 
+  transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
     - to_image
-    - to_dtype_cnn
-    - resize_cnn
     - rotate 
+    - resize_cnn
     - color_jitter
     - grayscale 
     - gaussian_blur
-    - normalize 
+    - to_dtype_cnn
+    - normalize     
+  
+  contrastive_transforms: true 
 
+  robots: 
+    - iiwa 
+    - panda 
+  tasks:
+    - square
+  
+  data_portion: 1.0
+  window_size: 8
+  chunk_size: 4
+  consistent_batch: true 
+  positive_window_size: 4
+  negative_window_size: 12   
+  batch_size: 64
+                    
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
   _recursive_: false
 
   d_model: ${d_model}
-  n_plot: 2000
-  tcn: true
-  temp_tcn: 0.1
+  num_plot: 2000
+  time_contrastive: true
+  temp_time_contrastive: 0.1
+
+  uncertainty_weighting: false
+  uncertainty_weighting_kwargs: 
+    num_losses: 4
   
   vision_encoder_ckpt: null 
   gripper_encoder_ckpt: null 
@@ -70,12 +51,12 @@ model:
   sequential_kwargs: 
     encoder_layer_kwargs: 
       d_model: ${d_model}
-      nhead: 4 
+      nhead: 1 
       dim_feedforward: ${d_model}
       batch_first: True
 
     transformer_encoder_kwargs:
-      num_layers: 8
+      num_layers: 2
       norm: null
       enable_nested_tensor: False 
       mask_check: False
@@ -107,9 +88,6 @@ model:
     cosine_annealing: 
       T_max: 1000 # adapted dynamically 
       eta_min: 1e-6
-  
-  uncertainty_weighting_kwargs: 
-    num_losses: 4
 
   sinkhorn_kwargs: 
     tau: 0.1

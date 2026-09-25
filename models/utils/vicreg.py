@@ -1,5 +1,5 @@
 import wandb 
-from typing import Optional
+from typing import Dict, Tuple, Optional
 import torch 
 import torch.nn as nn 
 import torch.nn.functional as F
@@ -41,7 +41,7 @@ class VICReg(nn.Module):
         return out
         
     def _variance_loss(self, x: TensorType["n", "d"]) -> torch.Tensor: 
-        var = torch.var(x, dim=0, unbiased=True) # [d]
+        var = torch.var(x, dim=0, unbiased=False) # [d]
         std = torch.sqrt(var + self.eps) # [d]
         out = torch.mean(F.relu(self.gamma - std)) # []
 
@@ -59,11 +59,11 @@ class VICReg(nn.Module):
         
         return out 
     
-    def forward(self, z: TensorType["n", "d"], z_: TensorType["n", "d"]) -> torch.Tensor: 
+    def forward(self, z: TensorType["n", "d"], z_: TensorType["n", "d"]) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]: 
         inv_loss = self._invariance_loss(z, z_) # []
         
         var_loss_z, var = self._variance_loss(z)
-        var_loss_z_, _ = self._variance_loss(z_)
+        var_loss_z_, var_ = self._variance_loss(z_)
         var_loss = var_loss_z + var_loss_z_ # []
         
         cov_loss = self._covariance_loss(z) + self._covariance_loss(z_) # []
@@ -72,15 +72,16 @@ class VICReg(nn.Module):
         if self.logger is not None: 
             if self._global_step % self.log_every_n_steps == 0: 
                 self.logger.experiment.log({
-                    "train/var_histogram": wandb.Histogram(var.detach().cpu().numpy())
+                    "train/var_histogram_z": wandb.Histogram(var.detach().cpu().numpy()), 
+                    "train/var_histogram_z_": wandb.Histogram(var_.detach().cpu().numpy())
                 })
-
+                
         self._global_step += 1 
                 
         logs_ = {
-            "inv_loss": inv_loss.detach(), 
-            "var_loss": var_loss.detach(), 
-            "cov_loss": cov_loss.detach() 
+            "inv_loss": self.lambda_*inv_loss.detach(), 
+            "var_loss": self.mu*var_loss.detach(), 
+            "cov_loss":  self.nu*cov_loss.detach() 
         }
              
         return tot_loss, logs_

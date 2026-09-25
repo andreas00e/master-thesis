@@ -8,10 +8,16 @@ datamodule:
     - panda 
   tasks:
     - square
+
+  window_size: 4 # > 0
+  batch_size: 128
   
   transforms: # r3m model expects unnormalized images with pixel values in [0, 255]
     - to_image
+    - rotate 
     - resize_r3m
+    - color_jitter
+    - grayscale 
     - to_dtype_r3m
 
 model_vision: 
@@ -20,46 +26,46 @@ model_vision:
 
   optimizer_kwargs: 
     encoder: 
-      lr: 1e-4
+      lr: 1e-3
       weight_decay: 1e-3
-
     expander: 
-      lr: 1e-5
+      lr: 1e-4
       weight_decay: 1e-4
 
   scheduler_kwargs: 
     warmup_percentage: 0.1
-
     linear:  
       start_factor: 1e-4
       end_factor: 1.0 
-      total_iters: 100 # adapted dynamically  
-
+      total_iters: null # adapted dynamically  
     cosine_annealing: 
-      T_max: 1000 # adapted dynamically 
-      eta_min: 1e-6
+      T_max: null # adapted dynamically 
+      eta_min: 1e-5
   
   vision_encoder_kwargs: 
     model_name: resnet18
     d_model: ${d_model}
+    start_layer: 3 # {3, 4}
   
     r: 64
-    lora_alpha: 64
+    lora_alpha: 128
     lora_dropout: 0.05
     bias: lora_only
 
   expander_kwargs: 
     in_dim: ${d_model}
-    h_dim: ${eval:"${d_model}*1"}
-    out_dim: ${eval:"${d_model}*1"}
+    h_dim: ${eval:"${d_model}*2"}
+    out_dim: ${eval:"${d_model}*4"}
+    batch_norm_kwargs: 
+      momentum: 0.1 
 
   vic_reg_kwargs: 
     log_every_n_steps: 50 
 
-    lambda_: 15.0
-    mu: 35.0
-    nu: 10.0
-    gamma: 1.0
+    lambda_: 0.005
+    mu: 2
+    nu: 0.05
+    gamma: 1
     eps: 1e-4
 
 logger: 

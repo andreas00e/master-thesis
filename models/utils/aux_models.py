@@ -37,57 +37,12 @@ class CNN(nn.Module):
         
         return x
 
-class DepthVisionBackBone(nn.Module): 
-    def __init__(
-        self
-        ) -> None:
-        super().__init__()
-
-        self.conv_block_one = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, padding=1), 
-            nn.BatchNorm2d(32), 
-            nn.ReLU(), 
-            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, padding=1), 
-            nn.BatchNorm2d(32), 
-            nn.MaxPool2d(kernel_size=2, stride=2)
-        )
-        
-        self.conv_block_two = nn.Sequential(
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1), 
-            nn.BatchNorm2d(64), 
-            nn.ReLU(), 
-            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, padding=1), 
-            nn.BatchNorm2d(64), 
-            nn.MaxPool2d(kernel_size=2, stride=2)
-        )
-        
-        self.fc = nn.Sequential(
-            nn.Flatten(), 
-            nn.Linear(64*21*21, 512),
-            nn.ReLU(), 
-            nn.Linear(512, 256), 
-        )
-    
-    def forward(
-        self,
-        x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
-        ) -> TensorType["batch*chunk*window", "d_model"]:
-        x_shape = x.shape
-        x = x.view(-1, *x.shape[-3:]) # [batch*chunk*window, channels, height, width]
-        
-        x = self.conv_block_one(x)
-        x = self.conv_block_two(x)
-        x = self.fc(x)
-        
-        x = x.view(-1, *x_shape[1:3], x.shape[-1]) # [batch*chunk, window, d_model]
-        
-        return x
-
 class VisionEncoder(nn.Module): 
     def __init__(
         self, 
         model_name: str="resnet18",  
         d_model: int=512, 
+        start_layer: int=4, 
         r: int=64,  
         lora_alpha: int=64, 
         lora_dropout: float=0.05, 
@@ -97,6 +52,7 @@ class VisionEncoder(nn.Module):
         
         self.model_name = model_name 
         self.d_model = d_model
+        self.start_layer = start_layer
         self.r = r 
         self.lora_alpha = lora_alpha
         self.lora_dropout = lora_dropout
@@ -107,7 +63,7 @@ class VisionEncoder(nn.Module):
         
         target_modules = [
             f"convnet.layer{k}.{l}.conv{m}" 
-            for k in range(3, 5) # Layers 3 and 4
+            for k in range(self.start_layer, 5) # Layers 3 and 4
             for l in range(0, 2) # Blocks 0 and 1
             for m in range(1, 3) # Convlutions 1 and 2
         ]
@@ -146,6 +102,39 @@ class VisionEncoder(nn.Module):
         x = self.model(x) # [batch*chunk*window, feature_dim]
         
         return x
+    
+class Expander(nn.Module): 
+    def __init__(
+        self, 
+        in_dim: int, 
+        h_dim: int, 
+        out_dim: int, 
+        batch_norm_kwargs: DictConfig, 
+        ) -> None:
+        super().__init__() 
+        
+        self.in_dim = int(in_dim)
+        self.h_dim = int(h_dim)
+        self.out_dim = int(out_dim)
+        self.batch_norm_kwargs = batch_norm_kwargs
+                
+        self.model = nn.Sequential(
+            nn.Linear(in_features=self.in_dim, out_features=self.h_dim), 
+            nn.BatchNorm1d(num_features=self.h_dim, **self.batch_norm_kwargs), 
+            nn.ReLU(), 
+            nn.Linear(in_features=self.h_dim, out_features=self.out_dim)
+        ) 
+        
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module): 
+        if isinstance(module, nn.Linear): 
+            nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain("relu"))
+            if module.bias is not None: 
+                nn.init.zeros_(module.bias)
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor: 
+        return self.model(x)  
     
 class TransformerEncoder(nn.Module): 
     def __init__(
@@ -203,36 +192,4 @@ class TransformerEncoder(nn.Module):
         x = x[:, 0, :] # [batch*chunk, d_model]
         x = self.head(x) # [batch*chunk, d_model]
         
-        return x
-
-class Expander(nn.Module): 
-    def __init__(
-        self, 
-        in_dim: int, 
-        h_dim: int, 
-        out_dim: int
-        ) -> None:
-        super().__init__() 
-        
-        self.in_dim = int(in_dim)
-        self.h_dim = int(h_dim)
-        self.out_dim = int(out_dim)
-                
-        self.model = nn.Sequential(
-            nn.Linear(in_features=self.in_dim, out_features=self.h_dim, bias=None), 
-            nn.BatchNorm1d(num_features=self.h_dim), 
-            nn.LeakyReLU(negative_slope=0.01), 
-
-            nn.Linear(in_features=self.h_dim, out_features=self.out_dim)
-        ) 
-        
-        self.apply(self._init_weights)
-        
-    def _init_weights(self, module): 
-        if isinstance(module, nn.Linear): 
-            nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain("leaky_relu", 0.01))
-            if module.bias is not None: 
-                nn.init.zeros_(module.bias)
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor: 
-        return self.model(x)          
+        return x        
