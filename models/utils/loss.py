@@ -83,3 +83,17 @@ class TimeContrastiveLoss(nn.Module):
         tcn_loss = - torch.sum(torch.log(tcn_nom / tcn_denom), dim=0)
         
         return tcn_loss
+    
+class TimeSmoothingLoss(nn.Module): 
+    def __init__() -> None: 
+        super().__init__() 
+    
+    def forward(self, x: TensorType["batch", "3", "d_model"]):
+        x_plus = x[:, 1, :]
+        x_minus = x[:, 2, :]
+        x = x[:, 0, :]
+
+        loss = F.mse_loss(x, x_minus, reduction="none") + F.mse_loss(x_plus, x, reduction="none")
+        loss = torch.mean(loss)
+        
+        return loss        
