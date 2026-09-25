@@ -62,7 +62,6 @@ class DynamicWeightAverage(nn.Module):
 
         return lambda_k 
     
-    
 class TimeContrastiveLoss(nn.Module): 
     def __init__(
         self, 
