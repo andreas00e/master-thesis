@@ -17,14 +17,14 @@ from data.discover.utils.sampler import SameRobotBatchSampler
 
 class MimicGenRobotDataModule(pl.LightningDataModule): 
     def __init__(self, 
-        data_dir: str, # directory containing the hdf5 trajectory files 
-        meta_dir: str, # directory containing the hdf5 files metadata (e.g. min & max of depth maps)
+        data_dir: str, 
+        meta_dir: str,
         transforms_list: List[str], 
         contrastive_transforms: bool=False, 
         robots: Optional[Union[str, List[str]]]=None, 
         tasks: Optional[Union[str, List[str]]]=None, 
-        data_distribution: float="d0", # d0 or d0 and d1
-        data_portion: float=1.0, # percentage of dataset use
+        data_distribution: str="d0", 
+        data_portion: float=1.0,
         window_size: int=8, 
         chunk_size: int=1, 
         crop_factor: float=1.0,       
@@ -85,12 +85,9 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.test_dataset = None
        
     def setup(self, stage: Optional[str]=None) -> None:
-        if getattr(self, "val_dataset", None) is not None: 
-            self.teardown(stage=stage)
-        
         rng = random.Random(self.seed)
            
-        demo_map = {} 
+        demo_map = {"fit": {}, "validate": {}, "test": {}}         
         for robot in self.robots: 
             for task in self.tasks: 
                 d0_key = f"{task}_d0_{robot}"
@@ -105,62 +102,50 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                     entries = list(self.demo_map[d0_key] + self.demo_map[d1_key])
                 else: 
                     raise ValueError(f"n_ds must 1 or 2, got {self.data_distribution}")
-            
-                if self.data_portion < 1: 
-                    n_dm = len(entries)
-                    rng.shuffle(entries)
-                    entries = entries[:int(self.data_portion * n_dm)]
                 
-                demo_map[map_key] = entries
+                rng.shuffle(entries)
+                n_entries = len(entries)
+                if self.data_portion < 1: 
+                    entries = entries[:int(self.data_portion * n_entries)]
+                
+                n_entries = len(entries)
+                fit_end = int(self.dataset_lengths[0]*n_entries)
+                val_end = fit_end + int(self.dataset_lengths[1]*n_entries)
+                
+                demo_map["fit"][map_key] = entries[0:fit_end]
+                demo_map["validate"][map_key] = entries[fit_end:val_end]
+                demo_map["test"][map_key] = entries[val_end:]
         
-        datasets = [
-            MimicGenRobotDataset(
-            demo_map=demo_map[f"{task}{robot}"],
-            dataframe_gripper=self.dataframe_gripper, 
-            transforms_list=self.transforms_list, 
-            contrastive_transforms=self.contrastive_transforms,
-            window_size=self.window_size,
-            chunk_size=self.chunk_size, 
-            temporal_smoothing=self.temporal_smoothing, 
-            positive_window_size=self.positive_window_size, 
-            negative_window_size=self.negative_window_size, 
-            crop_factor=self.crop_factor,
-            noise_level=self.noise_level
-            ) 
-            for task in self.tasks 
-            for robot in self.robots
-        ]
-        
-        train_dataset = []
-        val_dataset = []
-        test_dataset = []
-        
-        generator = torch.Generator().manual_seed(self.seed)
+        if stage in ("fit", "validate") or stage is None: 
+            datasets_fit = self._make_dataset(demo_map["fit"], "fit")
+            datasets_validate = self._make_dataset(demo_map["validate"], "validate")
+            self.train_dataset = ConcatDataset(datasets_fit)
+            self.val_dataset = ConcatDataset(datasets_validate)
 
-        for dataset in datasets: 
-            train_subset, val_subset, test_subset = random_split(dataset, lengths=self.dataset_lengths, generator=generator)
-            train_dataset.append(train_subset)
-            val_dataset.append(val_subset)
-            test_dataset.append(test_subset)
-        
-        self.train_dataset = ConcatDataset(train_dataset)
-        self.val_dataset = ConcatDataset(val_dataset)
-        self.test_dataset = ConcatDataset(test_dataset)
+        if stage == "test" or stage is None: 
+            datasets_test = self._make_dataset(demo_map["test"], "test")
+            self.test_dataset = ConcatDataset(datasets_test)
             
     def teardown(self, stage: Optional[str]=None) -> None:
-        for stage_ in ["train", "val", "test"]: 
-            dataset = getattr(self,  f"{stage_}_dataset")
-            
+        stages_to_clean = []
+        if stage == "fit":
+            stages_to_clean.extend(["train", "val"])
+        elif stage == "validate": 
+            stages_to_clean.append("val")
+        elif stage == "test":
+            stages_to_clean.append("test")
+        else: 
+            stages_to_clean.extend(["train", "val", "test"])
+
+        for prefix in stages_to_clean:
+            attr_name = f"{prefix}_dataset"
+            dataset = getattr(self, attr_name, None)
             if isinstance(dataset, ConcatDataset):
-                for subset in dataset.datasets: 
+                for subset in dataset.datasets:
                     base_set = getattr(subset, "dataset", subset)
-                    
-                    if hasattr(base_set, "close") and callable(base_set.close): 
+                    if hasattr(base_set, "close") and callable(base_set.close):
                         base_set.close()
-                                    
-        self.train_dataset = None 
-        self.val_dataset = None 
-        self.test_dataset = None 
+            setattr(self, attr_name, None)
         
     def __del__(self):
         try:
@@ -168,9 +153,28 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         except Exception:
             pass
         
-    def _make_dataloader(self, dataset, shuffle: bool) -> DataLoader:        
-        batch_sampler = None 
-         
+    def _make_dataset(self, demo_map, stage): 
+        dataset = [
+            MimicGenRobotDataset(
+                demo_map=demo_map[f"{task}{robot}"],
+                dataframe_gripper=self.dataframe_gripper, 
+                transforms_list=self.transforms_list, 
+                contrastive_transforms=None if stage == "test" else self.contrastive_transforms, 
+                window_size=None if stage == "test" else self.window_size,
+                chunk_size=None if stage == "test" else self.chunk_size, 
+                temporal_smoothing=None if stage == "test" else self.temporal_smoothing, 
+                positive_window_size=None if stage == "test" else self.positive_window_size, 
+                negative_window_size=None if stage == "test" else self.negative_window_size, 
+                crop_factor=self.crop_factor,
+                noise_level=self.noise_level
+            ) 
+            for task in self.tasks 
+            for robot in self.robots
+        ]
+            
+        return dataset 
+        
+    def _make_dataloader(self, dataset, shuffle: bool) -> DataLoader:                 
         if self.consistent_batch: 
             batch_sampler = SameRobotBatchSampler(
                 concat_dataset=dataset, 
@@ -185,7 +189,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 batch_sampler=batch_sampler, 
                 num_workers=self.num_workers,  
                 pin_memory=self.pin_memory, 
-                persistent_workers=self.persistent_workers, 
+                persistent_workers=self.persistent_workers if self.num_workers > 0 else False, 
                 collate_fn=collate_discover,
                 )
             
@@ -193,10 +197,9 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             dataset=dataset, 
             batch_size=self.batch_size,
             shuffle=shuffle,
-            batch_sampler=batch_sampler, 
             num_workers=self.num_workers,  
             pin_memory=self.pin_memory, 
-            persistent_workers=self.persistent_workers, 
+            persistent_workers=self.persistent_workers if self.num_workers > 0 else False,
             drop_last=self.drop_last,
             collate_fn=collate_discover, 
             )
