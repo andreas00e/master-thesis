@@ -2,7 +2,12 @@ defaults:
   - base 
   - _self_ 
 
-datamodule: 
+datamodule:
+  transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
+    - to_image
+    - resize_r3m
+    - to_dtype_r3m
+
   robots: 
     - iiwa 
     - panda 
@@ -12,14 +17,6 @@ datamodule:
   window_size: 4 # > 0
   batch_size: 128
   
-  transforms: # r3m model expects unnormalized images with pixel values in [0, 255]
-    - to_image
-    - rotate 
-    - resize_r3m
-    - color_jitter
-    - grayscale 
-    - to_dtype_r3m
-
 model_vision: 
   _target_: models.fine_tune.fine_tuner.FineTunerVisual
   _recursive_: False

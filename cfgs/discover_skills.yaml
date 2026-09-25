@@ -2,8 +2,8 @@ defaults:
   - base 
   - _self_ 
 
-d_model: 512
-d_prototypes: 64
+d_model: 256
+d_prototypes: 32
 
 datamodule: 
   transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
@@ -15,7 +15,6 @@ datamodule:
     - gaussian_blur
     - to_dtype_cnn
     - normalize     
-  
   contrastive_transforms: true 
 
   robots: 
@@ -37,7 +36,10 @@ model:
   _recursive_: false
 
   d_model: ${d_model}
-  num_plot: 2000
+  num_plot: 1000
+  queue_start_epochs: 15
+  both_viewpoints: false 
+
   time_contrastive: true
   temp_time_contrastive: 0.1
 
@@ -94,7 +96,7 @@ model:
     sinkhorn_iterations: 3 
     epsilon: 0.05
 
-  queue_kwargs: 
+  queue_kwargs:
     num_modalities: 2
     capacity: 3840
     feature_dim: ${d_model}
@@ -114,7 +116,7 @@ logger:
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  # overfit_batches: 1
+  overfit_batches: 2
   log_every_n_steps: 1 
   accelerator: gpu   
   devices: 
