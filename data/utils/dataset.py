@@ -31,8 +31,8 @@ class MimicGenRobotDataset(Dataset):
         dataframe_gripper: pd.DataFrame, 
         transforms_list: List[str], 
         contrastive_transforms: Optional[bool]=None, 
-        window_size: int=8,
-        chunk_size: int=1,
+        window_size: Optional[int]=None,
+        chunk_size: Optional[int]=None,
         temporal_smoothing: bool=False, 
         positive_window_size: Optional[int]=None, 
         negative_window_size: Optional[int]=None, 
@@ -88,9 +88,9 @@ class MimicGenRobotDataset(Dataset):
     def __len__(self) -> int:
         return len(self.demo_map)
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]: 
+    def __getitem__(self, idxs: int) -> Dict[str, torch.Tensor]: 
         item = {}
-        file_path, demo, _ =  self.demo_map[idx] # one hdf5 file 
+        file_path, demo, _ =  self.demo_map[idxs] # one hdf5 file 
         
         task = Path(file_path).stem.split("_")[0]
         robot = Path(file_path).stem.split("_")[-1]
@@ -98,25 +98,22 @@ class MimicGenRobotDataset(Dataset):
         hf = self._get_hdf5_handle(file_path)
         demo_obs = hf["data"][demo]["obs"]
         
-        n_steps, height, width, n_channels = demo_obs["robot0_eye_in_hand_image"].shape
+        n_steps = demo_obs["robot0_eye_in_hand_image"].shape[0]
     
-        if self.positive_window_size is not None and self.negative_window_size is not None: 
+        if self.positive_window_size is not None and self.negative_window_size is not None: # time-contrastive sampling 
             max_offset = max(1, n_steps-self.window_size+1) 
+            
             start_ = torch.randint(0, max_offset, (1,)).item()
+            idxs = torch.arange(start_, start_+self.window_size)
             
-            idx = torch.arange(start_, start_+self.window_size)
-            idx = torch.clamp(idx, 0, n_steps-1)
-            
-            start_pos = torch.randint(1, self.positive_window_size+1, (1,)).item()
-            start_neg = torch.randint(1, self.negative_window_size+1, (1,)).item()
-            
-            pos_idx = torch.arange(start_pos, start_pos+self.window_size)
-            pos_idx = torch.clamp(pos_idx, start_pos, n_steps-1)
+            start_pos = torch.randint(start_-self.positive_window_size, start_+1, (1,)).item()
+            pos_idxs = torch.arange(start_pos, start_pos+self.window_size)
 
-            neg_idx = torch.arange(start_neg, start_neg+self.window_size)
-            neg_idx = torch.clamp(neg_idx, start_neg, n_steps-1)
+            start_neg = torch.randint(start_-self.negative_window_size-self.window_size, start_-self.negative_window_size+1, (1,)).item()
+            neg_idxs = torch.arange(start_neg, start_neg+self.window_size)
             
-            idxs = torch.vstack((idx, pos_idx, neg_idx))
+            idxs = torch.vstack((idxs, pos_idxs, neg_idxs))
+            idxs = torch.clamp(idxs, 0, n_steps-1)
         
         elif self.window_size is not None and self.chunk_size is not None: 
             if self.temporal_smoothing:
