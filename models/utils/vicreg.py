@@ -1,5 +1,7 @@
 import wandb 
+import numpy as np 
 from typing import Dict, Tuple, Optional
+
 import torch 
 import torch.nn as nn 
 import torch.nn.functional as F
@@ -57,7 +59,7 @@ class VICReg(nn.Module):
         off_diag = ~torch.eye(d, dtype=torch.bool, device=x.device)
         out = torch.sum(cov[off_diag] ** 2) / d
         
-        return out 
+        return out, cov
     
     def forward(self, z: TensorType["n", "d"], z_: TensorType["n", "d"]) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]: 
         inv_loss = self._invariance_loss(z, z_) # []
@@ -66,16 +68,31 @@ class VICReg(nn.Module):
         var_loss_z_, var_ = self._variance_loss(z_)
         var_loss = var_loss_z + var_loss_z_ # []
         
-        cov_loss = self._covariance_loss(z) + self._covariance_loss(z_) # []
+        cov_loss_z, cov = self._covariance_loss(z)
+        cov_loss_z_, cov_ = self._covariance_loss(z_) 
+        cov_loss = cov_loss_z + cov_loss_z_ # []
         tot_loss = self.lambda_ * inv_loss + self.mu * var_loss + self.nu * cov_loss # []
         
-        if self.logger is not None: 
-            if self._global_step % self.log_every_n_steps == 0: 
+        if self.logger is not None and self.training: 
+            if self._global_step % self.log_every_n_steps == 0:
+                with torch.no_grad(): 
+                    cov_np = cov.detach().cpu().numpy()
+
+                    if cov_np.shape[0] > 256:
+                        step_stride = cov_np.shape[0] // 256
+                        cov_viz = cov_np[::step_stride, ::step_stride]
+                    else:
+                        cov_viz = cov_np
+                    
+                    cov_viz = (cov_viz - np.min(cov_viz)) /(np.max(cov_viz) - np.min(cov_viz) + 1e-12) * 255.0
+                    cov_viz = cov_viz.astype(np.uint8)
+                    
                 self.logger.experiment.log({
                     "train/var_histogram_z": wandb.Histogram(var.detach().cpu().numpy()), 
-                    "train/var_histogram_z_": wandb.Histogram(var_.detach().cpu().numpy())
+                    "train/var_histogram_z_": wandb.Histogram(var_.detach().cpu().numpy()), 
+                    "train/covariance_heatmap_z": wandb.Image(cov_viz, caption=f"Covariance Matrix Step {self._global_step}")
                 })
-                
+                                
         self._global_step += 1 
                 
         logs_ = {
