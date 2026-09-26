@@ -2,8 +2,8 @@ defaults:
   - base 
   - _self_ 
 
-d_model: 256
-d_prototypes: 32
+d_model: 512
+d_prototypes: 64
 
 datamodule: 
   transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
@@ -28,8 +28,8 @@ datamodule:
   chunk_size: 4
   consistent_batch: true 
   positive_window_size: 4
-  negative_window_size: 12   
-  batch_size: 64
+  negative_window_size: 12  
+  batch_size: 32
                     
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
@@ -76,7 +76,7 @@ model:
     _target_: torch.optim.AdamW
     _recursive_: False
 
-    lr: 1e-5
+    lr: 5e-2
     weight_decay: 1e-6
 
   lr_scheduler_kwargs: 
@@ -110,13 +110,13 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: rgb_2_depth_0_gripper_ds_1
+  name: with_time
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  overfit_batches: 2
+  # overfit_batches: 10
   log_every_n_steps: 1 
   accelerator: gpu   
   devices: 

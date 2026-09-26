@@ -2,20 +2,19 @@ defaults:
   - base 
   - _self_ 
 
+d_model: 32
+
 datamodule:
   transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
     - to_image
     - resize_r3m
     - to_dtype_r3m
 
-  robots: 
-    - iiwa 
-    - panda 
-  tasks:
-    - square
+  robots: null
+  tasks: null
 
   window_size: 4 # > 0
-  batch_size: 128
+  batch_size: 64
   
 model_vision: 
   _target_: models.fine_tune.fine_tuner.FineTunerVisual
@@ -59,14 +58,14 @@ model_vision:
   vic_reg_kwargs: 
     log_every_n_steps: 50 
 
-    lambda_: 0.005
-    mu: 2
-    nu: 0.05
+    lambda_: 0.005 # 0.001
+    mu: 1.33 # 2
+    nu: 0.005 # 0.01
     gamma: 1
     eps: 1e-4
 
 logger: 
-  name: new_try
+  name: panda_iiwa_both
   project: fine_tune
 
 callbacks: 
