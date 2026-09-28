@@ -14,18 +14,23 @@ setup_environment()
 @hydra.main(config_path="../../../cfgs/", config_name="fine_tune", version_base=None)
 def main(cfg):    
     pl.seed_everything(cfg.seed, workers=True)
+   
+    cfg.datamodule.batch_size = 1
+    cfg.logger.name = "all_robots_all_tasks"
+    cfg.logger.project = "test_fine_tune"
+
     
     datamodule = instantiate(cfg.datamodule)
+    logger = instantiate(cfg.logger)
     
     model = FineTunerVisual.load_from_checkpoint(
-        "outputs/checkpoints/fine_tune/best-checkpoint-epoch=47-val_loss=0.00.ckpt", 
+        "/dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/outputs/checkpoints/fine_tune/best-checkpoint-epoch=110-val_loss=0.00.ckpt",
         strict=False
         )
+    
     model.eval()  
     
-    callbacks = [instantiate(callback_cfg) for callback_cfg in cfg.callbacks.values()]
-    trainer = instantiate(cfg.trainer, logger=logger, callbacks=callbacks)
-    
+    trainer = instantiate(cfg.trainer, logger=logger)
     trainer.test(model=model, datamodule=datamodule)
     
 if __name__ == "__main__": 
