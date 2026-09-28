@@ -68,7 +68,15 @@ def compute_softdtw_cuda(D, gamma, bandwidth, max_i, max_j, n_passes, R):
                 r0 = -R[b, i - 1, j - 1] * inv_gamma
                 r1 = -R[b, i - 1, j] * inv_gamma
                 r2 = -R[b, i, j - 1] * inv_gamma
-                rmax = max(max(r0, r1), r2)
+                
+                # --- FIX: Avoid chained built-in max() calls ---
+                rmax = r0
+                if r1 > rmax:
+                    rmax = r1
+                if r2 > rmax:
+                    rmax = r2
+                # ------------------------------------------------
+                
                 rsum = math.exp(r0 - rmax) + math.exp(r1 - rmax) + math.exp(r2 - rmax)
                 softmin = -gamma * (math.log(rsum) + rmax)
                 R[b, i, j] = D[b, i - 1, j - 1] + softmin
@@ -123,7 +131,8 @@ class _SoftDTWCUDA(Function):
     def forward(ctx, D, gamma, bandwidth):
         dev = D.device
         dtype = D.dtype
-        gamma = torch.cuda.FloatTensor([gamma])
+        # gamma = torch.cuda.FloatTensor([gamma])
+        gamma = torch.tensor([gamma], dtype=torch.float32, device='cuda')
         bandwidth = torch.cuda.FloatTensor([bandwidth])
 
         B = D.shape[0]
