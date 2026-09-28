@@ -2,7 +2,7 @@ defaults:
   - base 
   - _self_ 
 
-d_model: 32
+d_model: 128
 
 datamodule:
   transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
@@ -13,8 +13,8 @@ datamodule:
   robots: null
   tasks: null
 
-  window_size: 4 # > 0
-  batch_size: 64
+  window_size: 1 # > 0
+  batch_size: 256
   
 model_vision: 
   _target_: models.fine_tune.fine_tuner.FineTunerVisual
@@ -25,7 +25,7 @@ model_vision:
       lr: 1e-3
       weight_decay: 1e-3
     expander: 
-      lr: 1e-4
+      lr: 1e-5
       weight_decay: 1e-4
 
   scheduler_kwargs: 
@@ -50,8 +50,8 @@ model_vision:
 
   expander_kwargs: 
     in_dim: ${d_model}
-    h_dim: ${eval:"${d_model}*2"}
-    out_dim: ${eval:"${d_model}*4"}
+    h_dim: ${eval:"${d_model}"}
+    out_dim: ${eval:"${d_model}"}
     batch_norm_kwargs: 
       momentum: 0.1 
 
@@ -59,13 +59,13 @@ model_vision:
     log_every_n_steps: 50 
 
     lambda_: 0.005 # 0.001
-    mu: 1.33 # 2
-    nu: 0.005 # 0.01
+    mu: 1.5 # 2
+    nu: 0.01 # 0.01
     gamma: 1
     eps: 1e-4
 
 logger: 
-  name: panda_iiwa_both
+  name: all_robots_all_tasks
   project: fine_tune
 
 callbacks: 

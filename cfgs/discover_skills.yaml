@@ -20,8 +20,7 @@ datamodule:
   robots: 
     - iiwa 
     - panda 
-  tasks:
-    - square
+  tasks: null
   
   data_portion: 1.0
   window_size: 8
@@ -40,7 +39,7 @@ model:
   queue_start_epochs: 15
   both_viewpoints: false 
 
-  time_contrastive: true
+  time_contrastive: false
   temp_time_contrastive: 0.1
 
   uncertainty_weighting: false
@@ -53,12 +52,12 @@ model:
   sequential_kwargs: 
     encoder_layer_kwargs: 
       d_model: ${d_model}
-      nhead: 1 
+      nhead: 4 
       dim_feedforward: ${d_model}
       batch_first: True
 
     transformer_encoder_kwargs:
-      num_layers: 2
+      num_layers: 8
       norm: null
       enable_nested_tensor: False 
       mask_check: False
@@ -68,6 +67,8 @@ model:
       max_len: 300
 
   prototype_kwargs: 
+    tau: 0.1
+    model: 
       in_features: ${d_model}
       out_features: ${d_prototypes}
       bias: false # normalization layer 
@@ -92,9 +93,8 @@ model:
       eta_min: 1e-6
 
   sinkhorn_kwargs: 
-    tau: 0.1
-    sinkhorn_iterations: 3 
     epsilon: 0.05
+    num_iterations: 3 
 
   queue_kwargs:
     num_modalities: 2
@@ -110,13 +110,13 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: with_time
+  name: without_time_big_queue
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  # overfit_batches: 10
+  overfit_batches: 1
   log_every_n_steps: 1 
   accelerator: gpu   
   devices: 
