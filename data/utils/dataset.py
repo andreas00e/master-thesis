@@ -183,6 +183,6 @@ class MimicGenRobotDataset(Dataset):
         
         item["task"] = torch.full(size=(idxs.shape[0], ), fill_value=TASK_DICT[task], dtype=torch.long) # [chunk]
         item["robot"] = torch.full(size=(idxs.shape[0], ), fill_value=ROBOT_DICT[robot], dtype=torch.long) # [chunk]
-        item["idxs"] = idxs
+        item["idxs"] = idxs # [chunk, window]
 
         return item

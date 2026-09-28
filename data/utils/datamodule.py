@@ -2,14 +2,13 @@ import os
 import random 
 import pandas as pd
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, Union
 
-import torch
-from torch.utils.data import DataLoader, ConcatDataset, random_split
+from torch.utils.data import DataLoader, ConcatDataset
 
 import lightning.pytorch as pl 
 
-from data.utils.collate import collate_discover
+from data.utils.collate import collate_discover, collate_discover_test
 from data.utils.load_files import get_files, get_metadata, get_demo_dict
 from data.utils.dataset import MimicGenRobotDataset
 from data.discover.utils.sampler import SameRobotBatchSampler
@@ -174,7 +173,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             
         return dataset 
         
-    def _make_dataloader(self, dataset, shuffle: bool) -> DataLoader:                 
+    def _make_dataloader(self, dataset, shuffle: bool, collate_fn: Callable) -> DataLoader:                 
         if self.consistent_batch: 
             batch_sampler = SameRobotBatchSampler(
                 concat_dataset=dataset, 
@@ -190,7 +189,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 num_workers=self.num_workers,  
                 pin_memory=self.pin_memory, 
                 persistent_workers=self.persistent_workers if self.num_workers > 0 else False, 
-                collate_fn=collate_discover,
+                collate_fn=collate_fn,
                 )
             
         return DataLoader(
@@ -201,14 +200,14 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             pin_memory=self.pin_memory, 
             persistent_workers=self.persistent_workers if self.num_workers > 0 else False,
             drop_last=self.drop_last,
-            collate_fn=collate_discover, 
+            collate_fn=collate_fn, 
             )
     
     def train_dataloader(self) -> DataLoader:
-        return self._make_dataloader(self.train_dataset, shuffle=self.shuffle)
+        return self._make_dataloader(self.train_dataset, shuffle=self.shuffle, collate_fn=collate_discover)
     
     def val_dataloader(self) -> DataLoader:
-        return self._make_dataloader(self.val_dataset, shuffle=False)
+        return self._make_dataloader(self.val_dataset, shuffle=False, collate_fn=collate_discover)
 
     def test_dataloader(self) -> DataLoader:
-        return self._make_dataloader(self.test_dataset, shuffle=False)
+        return self._make_dataloader(self.test_dataset, shuffle=False, collate_fn=collate_discover_test)
