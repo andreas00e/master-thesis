@@ -1,5 +1,5 @@
+from r3m import load_r3m 
 from omegaconf import DictConfig
-from hydra.utils import instantiate
 from typing import Any, Dict, Optional, Tuple
 
 import torch
@@ -12,6 +12,7 @@ import lightning.pytorch as pl
 
 from models.utils.vicreg import VICReg
 from models.utils.aux_models import VisionEncoder, Expander
+from models.fine_tune.tests import _pair_metrics
         
 
 class FineTunerVisual(pl.LightningModule): 
@@ -37,7 +38,9 @@ class FineTunerVisual(pl.LightningModule):
         self.visionExpander = Expander(**self.expander_kwargs)
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
         self.cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+        self.r3m_baseline = None # only needed for testing 
         
+        self.strict_loading = False        
         
     def setup(self, stage: Optional[str]=None) -> None:
         if self.logger is not None: 
@@ -84,7 +87,22 @@ class FineTunerVisual(pl.LightningModule):
             "frequency": 1,
         }
 
-        return {"optimizer": optimizer, "lr_scheduler": scheduler}
+        return {
+            "optimizer": optimizer, 
+            "lr_scheduler": scheduler
+            }
+        
+    def on_test_start(self) -> None: 
+        model_name = self.vision_encoder_kwargs.get("model_name", "resnet18")
+        r3m_baseline = load_r3m(model_name).module
+        self.r3m_baseline  = r3m_baseline.to(self.device).eval().requires_grad_(False)
+        self.visionEncoder.eval().requires_grad_(False)
+    
+    def on_predict_start(self) -> None:
+        self.visionEncoder.model.merge_adapter()
+
+    def on_predict_end(self) -> None:
+        self.visionEncoder.model.unmerge_adapter()
     
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None: 
         trainable_param_names = {name for name, param in self.named_parameters() if param.requires_grad}
@@ -93,7 +111,7 @@ class FineTunerVisual(pl.LightningModule):
         checkpoint["state_dict"] = filtered_state_dict
     
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
-        self.strict_loading = False
+        assert any("convnet.fc.weight" in k for k in checkpoint["state_dict"]), "fc missing from checkpoint"
         
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         return self(batch, batch_idx, stage="train")
@@ -101,47 +119,70 @@ class FineTunerVisual(pl.LightningModule):
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         return self(batch, batch_idx, stage="val")
     
-    def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
+    def test_step(self, batch: Any, batch_idx: int) -> None:
         rgb_one = batch["rgb_one"]
         rgb_two = batch["rgb_two"]
         
-        rgb_one_ours = self.visionEncoder(rgb_one) # [n, d_model] robot0_eye_in_hand_image 
-        rgb_two_ours = self.visionEncoder(rgb_two) # [n, d_model] agentview_image 
+        with torch.no_grad(): 
+            rgb_one_ours = self.visionEncoder(rgb_one) # [n, d_model]
+            rgb_two_ours = self.visionEncoder(rgb_two) # [n, d_model]
+            
+            pos_our, neg_ours, top_one_ours = _pair_metrics(rgb_one_ours, rgb_two_ours)
+            
+            rgb_one_baseline = self.r3m_baseline(rgb_one.view(-1, *rgb_one.shape[-3:])) # [n, d_model]
+            rgb_two_baseline = self.r3m_baseline(rgb_two.view(-1, *rgb_one.shape[-3:])) # [n, d_model]
+        
+            pos_basline, neg_baseline, top_one_baseline = _pair_metrics(rgb_one_baseline, rgb_two_baseline)
+        
+        sim_diff_ours = pos_our.mean() - neg_ours.mean()
+        sim_diff_baseline = pos_basline.mean() - neg_baseline.mean()
+        top_one_ours = top_one_ours.mean()
+        top_one_baseline = top_one_baseline.mean()
 
-        rgb_one_r3m = self.visionEncoder.backbone(rgb_one) 
-        rgb_two_r3m = self.visionEncoder.backbone(rgb_one)
-        
-        rgb_one_ours = F.normalize(rgb_one_ours)
-        rgb_two_ours = F.normalize(rgb_two_ours)
-        
-        rgb_one_r3m = F.normalize(rgb_one_r3m)
-        rgb_two_r3m = F.normalize(rgb_two_r3m)
+        self.log_dict(
+            {
+            "test/sim_diff_ours": sim_diff_ours,
+            "test/sim_diff_baseline": sim_diff_baseline,
+            "test/top_one_ours": top_one_ours,
+            "test/top_one_baseline": top_one_baseline
+            },
+            logger=True, 
+            prog_bar=True, 
+            on_step=False, 
+            on_epoch=True
+        )
 
-        sim_ours = self.cos(rgb_one_ours, rgb_two_ours)
-        sim_r3m = self.cos(rgb_one_r3m, rgb_two_r3m)
-        sim_diff = sim_ours - sim_r3m
-        
-        out = {
-            "sim_diff": sim_diff.detach().cpu(), 
-        }
-        
-        return out 
-    
     def predict_step(self, batch: Any, batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor]: 
         rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model] robot0_eye_in_hand_image 
         rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model] agentview_image 
         
         return rgb_one_y, rgb_two_y
     
-    def forward(self, batch: Any, batch_idx: int, stage: str) -> torch.Tensor:       
+    def forward(self, batch: Any, batch_idx: int, stage: str) -> torch.Tensor:  
         rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model] robot0_eye_in_hand_image 
         rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model] agentview_image 
         
+        if stage == "train" and self.logger is not None and self.global_step % 50 == 0: 
+            with torch.no_grad(): 
+                y_centered = rgb_one_y - torch.mean(rgb_one_y, dim=0)
+                
+                _, S, _ = torch.linalg.svd(y_centered)
+                p = S / torch.sum(S)
+                eff_rank = torch.exp(-torch.sum(p*torch.log(p + 1e-12))).item() # effective Rank (Shannon entropy of a singular value)
+                
+                self.log(
+                    "train/eff_rank", 
+                    eff_rank, 
+                    on_step=True, 
+                    on_epoch=False,
+                    sync_dist=False
+                    )
+            
         rgb_one_z = self.visionExpander(rgb_one_y) # [n, d_model*x]
         rgb_two_z = self.visionExpander(rgb_two_y) # [n, d_model*x]
 
         loss, logs_ = self.vicReg(rgb_one_z, rgb_two_z)
-        
+
         self.log_dict(
             {
                 f"{stage}/inv_loss": logs_["inv_loss"], 
