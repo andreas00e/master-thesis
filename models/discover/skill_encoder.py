@@ -1,14 +1,10 @@
 import os
+import math
 import wandb
 import tempfile
-import numpy as np 
-import pandas as pd 
-import seaborn as sns
 from hydra.utils import instantiate
 from typing import Any, Dict, Optional
 from omegaconf import DictConfig
-from sklearn.manifold import TSNE
-from matplotlib import pyplot as plt
 
 import torch
 import torch.nn as nn 
@@ -18,26 +14,13 @@ from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import lightning.pytorch as pl 
 from torchtyping import TensorType
 
-from models.discover.utils.queue import FIFOQueue
-from models.utils.loss import UncertaintyWeighting, TimeContrastiveLoss
-from models.utils.aux_models import TransformerEncoder, VisionEncoder, CNN
 from models.fine_tune.fine_tuner import FineTunerVisual
-
-
-TASK_DICT = {
-    0: "square",
-    1: "threading"
-}
-
-ROBOT_DICT = {
-    0: "iiwa", 
-    1: "panda",
-    2: "sawyer", 
-    3: "ur5e"
-}
-
-map_task = np.vectorize(lambda x: TASK_DICT.get(x, str(x)))
-map_robot =np.vectorize(lambda x: ROBOT_DICT.get(x, str(x)))
+from models.discover.utils.queue import FIFOQueue
+from models.discover.utils.sinkhorn import Sinkhorn
+from models.discover.utils.visualize import Visualize
+from models.utils.aux_models import TransformerEncoder, VisionEncoder, CNN
+from models.utils.loss import UncertaintyWeighting, TimeContrastiveLoss
+from models.utils.soft_dtw_cuda import SoftDTW
 
 
 class SkillEncoder(pl.LightningModule): 
@@ -46,10 +29,10 @@ class SkillEncoder(pl.LightningModule):
         d_model: int, 
         num_plot: int, 
         queue_start_epochs: int, 
-        both_viewpoints: bool, 
+        with_both_viewpoints: bool, 
         time_contrastive: bool, 
         temp_time_contrastive: float, 
-        uncertainty_weighting: bool, 
+        with_uncertainty_weighting: bool, 
         uncertainty_weighting_kwargs: DictConfig,
         vision_encoder_ckpt: Optional[str],  
         gripper_encoder_ckpt: Optional[str],
@@ -68,10 +51,10 @@ class SkillEncoder(pl.LightningModule):
         self.d_model = d_model
         self.num_plot = num_plot
         self.queue_start_epochs = queue_start_epochs
-        self.both_viewpoints = both_viewpoints
+        self.with_both_viewpoints = with_both_viewpoints
         self.time_contrastive = time_contrastive
         self.temp_time_contrastive = temp_time_contrastive 
-        self.uncertainty_weighting = uncertainty_weighting
+        self.with_uncertainty_weighting = with_uncertainty_weighting
         self.uncertainty_weighting_kwargs = uncertainty_weighting_kwargs
         self.vision_encoder_ckpt = vision_encoder_ckpt
         self.gripper_encoder_ckpt = gripper_encoder_ckpt
@@ -84,16 +67,14 @@ class SkillEncoder(pl.LightningModule):
         self.tsne_kwargs = tsne_kwargs
         
         if vision_encoder_ckpt is not None: 
-            self.visionEncoder = FineTunerVisual.load_from_checkpoint(vision_encoder_ckpt)
-            self.visionEncoder.eval()
-                
+            self.visionEncoder = FineTunerVisual.load_from_checkpoint(vision_encoder_ckpt)                
             for p in self.visionEncoder.parameters(): 
-                p.requires_grad_(False)
+                p.requires_grad = False
         else: 
             self.visionEncoder = CNN(self.d_model)
         
         if gripper_encoder_ckpt is not None: 
-            self.gripperEncoder = None # TODO: Exchange with fine-tuned gripper encoder 
+            raise NotImplementedError
         else: 
             self.gripperEncoder = nn.Sequential(
                 nn.Linear(1, self.d_model // 2), 
@@ -102,22 +83,31 @@ class SkillEncoder(pl.LightningModule):
             )  
         
         self.sequential = TransformerEncoder(**self.sequential_kwargs)
-        self.C = nn.Linear(**self.prototype_kwargs) # config: bias=False 
+        
+        self.C = nn.Linear(**self.prototype_kwargs.model) # [d_model, k]: config: bias=False 
         nn.init.xavier_uniform_(self.C.weight)
+        
         with torch.no_grad():
-            self.C.weight.copy_(F.normalize(self.C.weight, dim=0))
-        if self.both_viewpoints: 
+            self.C.weight.copy_(F.normalize(self.C.weight, dim=1)) # normalize rows!
+            
+        if self.with_both_viewpoints: 
             self.down_emb = nn.Linear(self.d_model*2, d_model)    
         
-        if self.uncertainty_weighting:
+        if self.with_uncertainty_weighting:
             self.uncertainty_weighting = UncertaintyWeighting(**self.uncertainty_weighting_kwargs)
-        self.timeContrastiveLoss = TimeContrastiveLoss(self.temp_time_contrastive)
-
+        
+        if self.time_contrastive: 
+            self.timeContrastiveLoss = TimeContrastiveLoss(self.temp_time_contrastive)
+        
+        self.softDTW = None
+        
         self.queue = FIFOQueue(**self.queue_kwargs)
-        self.tsne = TSNE(**self.tsne_kwargs)
+        self.sinkhorn = Sinkhorn(**self.sinkhorn_kwargs)
+        self.tsne = Visualize(self.tsne_kwargs)
     
         self._c_val = []
         self._target_val = []
+        self._idxs_val = []
         self._task_val = []
         self._robot_val = []
                 
@@ -126,7 +116,7 @@ class SkillEncoder(pl.LightningModule):
         optimizer = instantiate(self.optimizer_kwargs, params=trainable_parameters)
         
         warmup_steps = 100
-        if hasattr(self, "trainer") and self.trainer is not None and self.trainer.estimated_stepping_batches:            
+        if hasattr(self, "trainer") and self.trainer is not None and math.isfinite(self.trainer.estimated_stepping_batches):   
             total_steps = self.trainer.estimated_stepping_batches 
             warmup_percentage = self.lr_scheduler_kwargs.get("warmup_percentage", 0.1)
             warmup_steps = int(warmup_percentage * total_steps)
@@ -154,51 +144,51 @@ class SkillEncoder(pl.LightningModule):
         
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
         return self(batch, batch_idx, stage="val")
-
-    def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
+    
+    def predict_step(self, batch: Any):
         batch_size, chunk, window = batch["rgb_one"].shape[:3]
         n = batch_size*chunk
         
+        # 1. Feature Extraction 
         emb_one = self.visionEncoder(batch["rgb_one"]) # [batch_size*chunk*window, d_model]
-        emb_two = self.visionEncoder(batch["rgb_one_pos"])
-            
-        if self.both_viewpoints:         
-            emb_three = self.visionEncoder(batch["rgb_two"])
-            emb_four = self.visionEncoder(batch["rgb_two_pos"])
         
-            emb = torch.cat((emb_one, emb_three), dim=-1) # [batch_size*chunk*window, d_model*2]
-            emb_pos = torch.cat((emb_two, emb_four), dim=-1) # [batch_size*chunk*window, d_model*2]
-            
-            emb_one = self.down_emb(emb)
-            emb_two = self.down_emb(emb_pos)
-        
+        if self.with_both_viewpoints: 
+            emb_one_pos = self.visionEncoder(batch["rgb_one_pos"]) # [batch_size*chunk*window, d_model]            
+            emb_one = torch.cat(tensors=(emb_one, emb_one_pos), dim=-1) # [batch_size*chunk*window, d_model*2]            
+            emb_one = self.down_emb(emb_one)
+
+        # Sequential Transformer Encoding 
         emb_one = self.sequential(emb_one.view(n, window, -1)) # [n, d_model]: robot0_eye_in_hand_view
-        emb_two =  self.sequential(emb_two.view(n, window, -1)) # [n, d_model]: agentview_image
         
+        # Unit Sphere Normalization 
         z_one = F.normalize(emb_one, dim=-1) # [n, d_model]
-        z_two = F.normalize(emb_two, dim=-1) # [n, d_model]
         
-        c_one = self.C(z_one_full) # [n, k] 
-        c_two = self.C(z_two_full) # [n, k]
+        c_one = self.C(z_one) # [n, k] 
 
-    def on_train_epoch_start(self) -> None:
-        if hasattr(self, "queue") and self.queue is not None:
-            self.queue.reset()
-
+        return c_one
+    
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.vision_encoder_ckpt is not None:
+            self.visionEncoder.eval()
+        return self
+            
     def on_train_batch_end(self, outputs: Any, batch: Any, batch_idx: int) -> None:
         with torch.no_grad():
-            self.C.weight.copy_(F.normalize(self.C.weight, dim=0))
+            self.C.weight.copy_(F.normalize(self.C.weight, dim=1))
     
     def on_validation_epoch_start(self) -> None:   
         self._c_val.clear()
         self._target_val.clear()
+        self._idxs_val.clear()
         self._task_val.clear()
         self._robot_val.clear()
     
     def on_validation_epoch_end(self) -> None:
-        if self.global_rank == 0 and len(self._c_val) != 0:
+        if len(self._c_val) != 0:
             c_all = torch.cat(self._c_val)
             target_all = torch.cat(self._target_val)
+            idxs_all = torch.cat(self._idxs_val)
             task_all = torch.cat(self._task_val)
             robot_all = torch.cat(self._robot_val)
             
@@ -206,9 +196,10 @@ class SkillEncoder(pl.LightningModule):
             
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f: 
                 fname = f.name 
-                self.plot_(
+                self.tsne.plot_(
                     x=c_all[:n_plot], 
                     label=target_all[:n_plot], 
+                    idxs=idxs_all[:n_plot], 
                     task=task_all[:n_plot], 
                     robot=robot_all[:n_plot], 
                     fname=fname
@@ -218,7 +209,10 @@ class SkillEncoder(pl.LightningModule):
                     self.logger.experiment.log({"tsne_plot": wandb.Image(fname)})
                     
             os.remove(fname)
-
+    
+    def on_test_start(self) -> None: 
+        self.softDTW = SoftDTW(use_cuda=True, normalize=True)
+    
     def forward(
         self, 
         batch: Dict[str, TensorType["batch", "chunk", "window", "*"]],
@@ -233,178 +227,97 @@ class SkillEncoder(pl.LightningModule):
         
         # 1. Feature Extraction 
         emb_one = self.visionEncoder(batch["rgb_one"]) # [batch_size*chunk*window, d_model]
-        emb_two = self.visionEncoder(batch["rgb_one_pos"])
+        emb_two = self.visionEncoder(batch["rgb_two"])
+        emb_gripper = self.gripperEncoder(batch["g_qpos"].view(-1, 1))
         
-        # if self.gripper:       
-        #     g_qpos = batch["g_qpos"].view(-1, 1) # [batch_size*chunk*window, 1]
-        #     emb_gripper = self.gripperEncoder(g_qpos) # [batch_size*chunk*window, d_model]
+        if self.with_both_viewpoints: 
+            emb_one_pos = self.visionEncoder(batch["rgb_one_pos"]) # [batch_size*chunk*window, d_model]
+            emb_two_pos = self.visionEncoder(batch["rgb_two_pos"]) # [batch_size*chunk*window, d_model]
             
-        if self.both_viewpoints:         
-            emb_three = self.visionEncoder(batch["rgb_two"])
-            emb_four = self.visionEncoder(batch["rgb_two_pos"])
-        
-            emb = torch.cat((emb_one, emb_three), dim=-1) # [batch_size*chunk*window, d_model*2]
-            emb_pos = torch.cat((emb_two, emb_four), dim=-1) # [batch_size*chunk*window, d_model*2]
+            emb_one = torch.cat(tensors=(emb_one, emb_one_pos), dim=-1) # [batch_size*chunk*window, d_model*2]
+            emb_two = torch.cat(tensors=(emb_two, emb_two_pos), dim=-1) # [batch_size*chunk*window, d_model*2]
             
-            emb_one = self.down_emb(emb)
-            emb_two = self.down_emb(emb_pos)
-        
+            emb_one = self.down_emb(emb_one)
+            emb_two = self.down_emb(emb_two)
+
         # Sequential Transformer Encoding 
         emb_one = self.sequential(emb_one.view(n, window, -1)) # [n, d_model]: robot0_eye_in_hand_view
         emb_two =  self.sequential(emb_two.view(n, window, -1)) # [n, d_model]: agentview_image
-        # emb_gripper = self.sequential(emb_gripper.view(n, window, -1)) # [n, d_model]: gripper states
+        emb_gripper = self.sequential(emb_gripper.view(n, window, -1)) # [n, d_model]: gripper states
         
         # Unit Sphere Normalization 
         z_one = F.normalize(emb_one, dim=-1) # [n, d_model]
         z_two = F.normalize(emb_two, dim=-1) # [n, d_model]
-        # z_gripper = F.normalize(emb_gripper, dim=-1) # [n, d_model]
+        z_gripper = F.normalize(emb_gripper, dim=-1) # [n, d_model]
         
-        if self.curret_epoch >= self.queue_epoch_start:
-            if stage == "train" and self.queue is not None and self.queue.is_full:
-                queue_features = self.queue.get() # all features 
-                z_one_full = torch.cat([z_one, queue_features[0]], dim=0)
-                z_two_full = torch.cat([z_two, queue_features[1]], dim=0)
-                #z_gripper_full = torch.cat([z_gripper, queue_features[2]], dim=0)
-            else: 
-                z_one_full, z_two_full = z_one, z_two
-                # z_one_full, z_two_full, z_gripper_full = z_one, z_two, z_gripper
-                        
-            if stage == "train" and self.queue is not None:  
-                self.queue.enqueue(torch.stack([z_one.detach(), z_two.detach()], dim=0))
-                # self.queue.enqueue(torch.stack([z_one.detach(), z_two.detach(), z_gripper.detach()], dim=0))
-        else: 
-            z_one_full, z_two_full = z_one, z_two
-        
+        z_one_full, z_two_full, z_gripper_full = z_one, z_two, z_gripper
+                
+        if self.current_epoch >= self.queue_start_epochs and self.queue is not None:
+            if self.queue.is_full and stage == "train": # only use queue once it is completely filled
+                queue_features = self.queue.get() # get all features 
+                z_one_full = torch.cat([z_one, queue_features[0]], dim=0) # [n+capacity, d_model]
+                z_two_full = torch.cat([z_two, queue_features[1]], dim=0) # [n+capacity, d_model]
+                z_gripper_full = torch.cat([z_gripper, queue_features[2]], dim=0)
+                
+        if self.queue is not None and stage == "train":     
+            self.queue.enqueue(torch.stack([z_one.detach(), z_two.detach(), z_gripper.detach()], dim=0))
+                
         # 3. Prototype Mapping
-        c_one = self.C(z_one_full) # [n, k] # batch_size, chunk 
-        c_two = self.C(z_two_full) # [n, k]
-        # c_gripper = self.C(z_gripper_full) # [n, k]
+        c_one = self.C(z_one_full) # [n || n + capacity, k] 
+        c_two = self.C(z_two_full) # [n || n + capacity, k]
+        c_gripper = self.C(z_gripper_full) # [n || n + capacity, k]
         
-        # Time Contrastive Loss (TCN) - Only computed on current batch elements 
-        if self.time_contrastive: # only for one clip 
-            t_one = c_one[:n].view(batch_size, chunk, -1)
-            # t_two = c_two[:n].view(batch_size, chunk, -1)
-            # t_gripper = c_gripper[:n].view(batch_size, chunk, -1)
-            
-            tcn_loss_one = self.timeContrastiveLoss(t_one)
-            # tcn_loss_two = self.timeContrastiveLoss(t_two)
-            # tcn_loss_three = self.timeContrastiveLoss(t_gripper)
-            
-            losses.extend([tcn_loss_one])
-            # losses.extend([tcn_loss_one, tcn_loss_two])
-            # losses.extend([tcn_loss_one, tcn_loss_two, tcn_loss_three])
-            
+        c = {"one": c_one, "two": c_two, "grip": c_gripper}
+        
         # 4. Sinkhorn Assignment (Over current batch + queue)
-        if stage == "train": 
-            with torch.no_grad(): 
-                q_one = self.distributed_sinkhorn(c_two) # [n, k]
-                q_two = self.distributed_sinkhorn(c_one) # [n, k]
-                # q_gripper = self.distributed_sinkhorn(c_two) # [n, k]
-        else: 
-            q_one = F.softmax(c_two / self.sinkhorn_kwargs.tau, dim=-1)
-            q_two = F.softmax(c_one / self.sinkhorn_kwargs.tau, dim=-1)
-        
+        with torch.no_grad():
+            q = {k: self.sinkhorn(s) for k, s in c.items()} # [n || n + capacity, k] each: targets
+            
         # Softmax probabilities for current batch elements 
-        p_one = F.log_softmax(c_one[:n, :] / self.sinkhorn_kwargs.tau, dim=-1)
-        p_two = F.log_softmax(c_two[:n, :] / self.sinkhorn_kwargs.tau, dim=-1)
-        # p_gripper = F.log_softmax(c_gripper[:n, :] / self.sinkhorn_kwargs.tau, dim=-1)
+        p = {k: F.log_softmax(s[:n] / self.prototype_kwargs.tau, dim=-1) for k, s in c.items()} # [n, k]: predictions 
+
+        # Time Contrastive Loss (TCN) - Only computed on current batch elements 
+        if self.time_contrastive: 
+            t_one = c["one"][:n].view(batch_size, chunk, -1) # [batch_size, chunk, k]
+            tcn_loss = self.timeContrastiveLoss(t_one) # []
+            losses.extend([tcn_loss])
+            
+            self.log_dict({
+                f"{stage}/time_contrastive_loss": tcn_loss.detach()
+            })
+
+        # one loss per predicting stream: it predicts the codes of the other two
+        swav_losses = {}
+        for target in c.keys():
+            predictions = [s for s in c.keys() if s != target]
+            swav_losses[target] = torch.mean(torch.stack([torch.mean(-torch.sum((q[prediction] * p[target]), dim=-1)) for prediction in predictions]))
+
+        losses.extend(swav_losses.values()) # 3 (+1 TCN) -> num_losses: 4
     
         if stage == "val": 
-            self._c_val.append(c_one[:n, :].detach().cpu())
-            self._target_val.append(q_one[:n].detach().cpu())
-            self._task_val.append(batch["task"].cpu())
-            self._robot_val.append(batch["robot"].cpu())
+            if sum(x.shape[0] for x in self._c_val) < self.num_plot: 
+                self._c_val.append(c_one[:n].detach().cpu()) # [n, k]
+                self._target_val.append(q["one"][:n].detach().cpu()) # [n, k]
+                self._idxs_val.append(batch["idxs"][:, :, 0].view(n).cpu()) # [n]
+                self._task_val.append(batch["task"].view(n).cpu()) # [n]
+                self._robot_val.append(batch["robot"].view(n).cpu()) # [n]
         
-        # Cross-entropy loss on current batch targets
-        loss_one = -torch.mean(torch.sum(q_one[:n] * p_one, dim=-1))
-        loss_two = -torch.mean(torch.sum(q_two[:n] * p_two, dim=-1))
-        # loss_gripper = -torch.mean(torch.sum(q_gripper[:n] * p_gripper, dim=-1))
-        
-        losses.extend([loss_one, loss_two])
-        # losses.extend([loss_one, loss_two, loss_gripper])
-        
-        if self.uncertainty_weighting: 
-            loss = self.uncertainty_weighting(losses) # []
-        else: 
-            loss = torch.mean(torch.stack(losses))
-    
+        if self.with_uncertainty_weighting: 
+            pass
+            # loss = self.uncertainty_weighting(losses) # []
+        # else: 
+        loss = torch.mean(torch.stack(losses)) # []
+
         self.log_dict(
             {
-                f"{stage}/loss_one": loss_one.detach(), 
-                f"{stage}/loss_two": loss_two.detach(), 
-                # f"{stage}/loss_gripper": loss_gripper.detach(), 
-                f"{stage}/loss": loss.detach()
-             
+                **{f"{stage}/loss_{k}": v.detach() for k, v in swav_losses.items()},
+                f"{stage}/loss": loss.detach(),
             },
-            logger=True,
-            prog_bar=True, 
-            on_step=(stage=="train"), 
-            on_epoch=True, 
-            sync_dist=True, 
+            logger=True, 
+            prog_bar=True,
+            on_step=(stage == "train"), 
+            on_epoch=True,
+            sync_dist=True,
         )
         
         return loss
-    
-    def plot_(
-        self, 
-        x: TensorType["n", "k"],
-        label: TensorType["n"], 
-        task: TensorType["n"], 
-        robot: TensorType["n"], 
-        fname: str
-        ) -> None:
-                
-        x = x.cpu().numpy() # [n, k]
-        label = label.argmax(-1).cpu().numpy() # [n]
-        task = task.cpu().numpy().reshape(-1) # [n]
-        robot = robot.cpu().numpy().reshape(-1) # [n]
-        
-        x = self.tsne.fit_transform(x) # [n, 2]
-        
-        df = pd.DataFrame({
-            "x": x[:, 0], 
-            "y": x[:, 1], 
-            "label": label, 
-            })
-        
-        df["task"] = map_task(task.astype(int))
-        df["robot"] =  map_robot(robot.astype(int))
-         
-        plt.figure(figsize=(8, 6))
-        scatterplot = sns.scatterplot(
-            data=df, 
-            x="x",
-            y="y", 
-            hue="robot", 
-            style="task"
-            )
-        
-        fig = scatterplot.get_figure() 
-        fig.savefig(fname)
-        plt.close()
-         
-    @torch.no_grad()
-    def distributed_sinkhorn(self, out: TensorType["n", "k"]) -> TensorType["n", "k"]:
-    # from https://github.com/real-stanford/xskill/blob/main/xskill/model/core.py
-     
-        Q = torch.exp(out / self.sinkhorn_kwargs.epsilon).T # [K, B]
-        K, B = Q.shape # number of prototypes, number of samples to assign
-
-        # matrix has to sum to 1
-        sum_Q = torch.sum(Q) + 1e-8
-        Q /= sum_Q
-
-        for _ in range(self.sinkhorn_kwargs.sinkhorn_iterations):
-            # normalize each row: total weight per prototype must be 1/K
-            sum_of_rows = torch.sum(Q, dim=1, keepdim=True) + 1e-8 # [K, 1]
-            Q /= sum_of_rows 
-            Q /= K
-
-            # normalize each column: total weight per sample must be 1/B
-            Q /= torch.sum(Q, dim=0, keepdim=True) + 1e-8 # [1, B]
-            Q /= B
-
-        Q *= B  # the colomns must sum to 1 so that Q is an assignment
-        Q = Q.T 
-            
-        return Q
