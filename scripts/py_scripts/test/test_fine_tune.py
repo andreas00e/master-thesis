@@ -15,7 +15,7 @@ setup_environment()
 def main(cfg):    
     pl.seed_everything(cfg.seed, workers=True)
    
-    cfg.datamodule.batch_size = 1
+    # cfg.datamodule.batch_size = 16
     cfg.logger.name = "all_robots_all_tasks"
     cfg.logger.project = "test_fine_tune"
 
@@ -24,7 +24,7 @@ def main(cfg):
     logger = instantiate(cfg.logger)
     
     model = FineTunerVisual.load_from_checkpoint(
-        "/dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/outputs/checkpoints/fine_tune/best-checkpoint-epoch=110-val_loss=0.00.ckpt",
+        "outputs/checkpoints/fine_tune/best-checkpoint-epoch=53-val_loss=0.00.ckpt",       
         strict=False
         )
     

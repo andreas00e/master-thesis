@@ -26,7 +26,7 @@ datamodule:
 
   batch_size: 32
   shuffle: true
-  num_workers: 1
+  num_workers: 0
   pin_memory: true
   persistent_workers: false
   drop_last: true

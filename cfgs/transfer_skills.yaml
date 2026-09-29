@@ -1,52 +1,45 @@
-seed: 42 
-data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot/
-meta_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/data/metadata
-cfgs_dir: /home/bing_TUM/ehrensberger/master-thesis/thesis/cfgs/dh_cfgs/
+seed: 42
+
+cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
+data_dir: ${cwd}/imports/mimicgen/datasets/robot
+meta_dir: ${cwd}/master-thesis/data/metadata
+cfgs_dir: ${cwd}/master-thesis/cfgs/dh_cfgs
 
 stage: fit # test, predict
 
 datamodule: 
   _target_: data.transfer.datamodule.TransferDataModule 
-  
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
   cfgs_dir: ${cfgs_dir}
-  horizon: 16 
-  crop_factor: 0.75
-  robots: # has to be a list or null
-    # - iiwa
-    - panda 
-    # - sawyer 
-    # - ur5e
-  tasks: # has to be a list or null 
-    # - square
-    - threading 
-  depth: False
+  window_size: 8
+  crop_factor: 1
+  robots: null
+  tasks: null
   batch_size: 4
   shuffle: True
-  num_workers: 1
+  num_workers: 0
   pin_memory: True 
   drop_last: True
-  persistent_workers: True 
+  persistent_workers: False 
 
   dataset_lengths: 
   - 0.8 
   - 0.1 
   - 0.1
 
-  transforms: 
+  transforms_list: 
     - to_image 
-    - resize 
-    - to_dtype 
+    - resize_cnn
+    - to_dtype_cnn
     - normalize 
   
 model: 
   _target_: models.transfer.sad.SAD
 
   d_model: 256
-  obs_encoder_ckpt: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
-  
-  tse_ckpt: null 
+
+  tse_ckpt: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/outputs/checkpoints/skill_discovery/best-checkpoint-epoch=09-val/loss=3.30.ckpt
   
   rce_kwargs:
     dsc_kwargs: 
@@ -88,9 +81,8 @@ model:
   pool_kwargs: 
     k: 5 
     d_model: ${model.d_model}
-  sat_kwargs: 
-    weights_path: /home/bing_TUM/ehrensberger/master-thesis/thesis/models/weights/r3m_resnet18_weights.pth
 
+  sat_kwargs: 
     encoder_layer_kwargs: 
       d_model: 256 
       nhead: 4 
@@ -118,6 +110,7 @@ logger:
   project: skill_transfer
 
 trainer: 
+  _target_: lightning.pytorch.Trainer
   accelerator: gpu   
   # strategy: ddp # delete to run on single gpu
   devices: # for ddp: -1 

@@ -12,7 +12,7 @@ os.environ["PYOPENGL_PLATFORM"] = "egl" # for headless OpenGL rendering
 warnings.filterwarnings("ignore", category=UserWarning, module="lightning")
 
 
-@hydra.main(config_path="cfgs/", config_name="transfer_skills", version_base=None)
+@hydra.main(config_path="../../cfgs/", config_name="transfer_skills", version_base=None)
 def main(cfg):     
     pl.seed_everything(cfg.seed)
 

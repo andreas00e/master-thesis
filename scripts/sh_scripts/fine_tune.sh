@@ -16,3 +16,4 @@ export HYDRA_FULL_ERROR=1
 export PYTHONPATH="$PWD:$PYTHONPATH"
 
 python3 scripts/py_scripts/fine_tune.py
+# python3 scripts/py_scripts/test/test_fine_tune.py
