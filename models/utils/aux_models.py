@@ -42,7 +42,7 @@ class VisionEncoder(nn.Module):
         self, 
         model_name: str="resnet18",  
         d_model: int=512, 
-        start_layer: int=4, 
+        start_layer: int=3, 
         r: int=64,  
         lora_alpha: int=64, 
         lora_dropout: float=0.05, 
@@ -57,9 +57,9 @@ class VisionEncoder(nn.Module):
         self.lora_alpha = lora_alpha
         self.lora_dropout = lora_dropout
         self.bias = bias 
-    
-        self.backbone = load_r3m(self.model_name)
-        backbone = self.backbone.module  
+        
+        lora_backbone_wrapper = load_r3m(self.model_name)
+        lora_backbone = lora_backbone_wrapper.module  
         
         target_modules = [
             f"convnet.layer{k}.{l}.conv{m}" 
@@ -69,11 +69,11 @@ class VisionEncoder(nn.Module):
         ]
         
         in_features = 2048 if "50" in self.model_name else 512
-        backbone.convnet.fc = nn.Linear(in_features, self.d_model)
-        nn.init.xavier_uniform_(backbone.convnet.fc.weight)
-        if backbone.convnet.fc.bias is not None: 
-            nn.init.zeros_(backbone.convnet.fc.bias)
-        
+        lora_backbone.convnet.fc = nn.Linear(in_features, self.d_model)
+        nn.init.xavier_uniform_(lora_backbone.convnet.fc.weight)
+        if lora_backbone.convnet.fc.bias is not None: 
+            nn.init.zeros_(lora_backbone.convnet.fc.bias)
+                            
         lora_config = LoraConfig(
             target_modules=target_modules, 
             r=self.r, 
@@ -82,7 +82,7 @@ class VisionEncoder(nn.Module):
             bias = self.bias
             )
         
-        self.model = get_peft_model(backbone, lora_config)
+        self.model = get_peft_model(lora_backbone, lora_config)
         
     def train(self, mode: bool=True): 
         super().train(mode)
@@ -92,6 +92,8 @@ class VisionEncoder(nn.Module):
                 if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)): 
                     module.eval() 
                     module.requires_grad_(False)
+        
+        return self 
                     
     def forward(
         self, 
@@ -181,15 +183,27 @@ class TransformerEncoder(nn.Module):
     def forward(
         self, 
         x: TensorType["batch*chunk, window", "d_model"], 
-        idxs: Optional[TensorType["batch", "chunk", "window"]]=None
+        idxs: Optional[TensorType["batch", "chunk", "window"]]=None, 
+        src_key_padding_mask: Optional[TensorType["batch", "max_steps", "d_model"]]=None
         ) -> torch.Tensor: 
         
         cls_token = self.cls_token.expand(x.shape[0], -1, -1) # [batch*chunk, 1, d_model]
         
         x = torch.cat(tensors=(cls_token, x), dim=1) # [batch*chunk, 1+window, d_model]
         x = self.pe(x, idxs) # [batch*chunk, 1+window, d_model]
-        x = self.transformerEncoder(x) # [batch*chunk, 1+window, d_model]
-        x = x[:, 0, :] # [batch*chunk, d_model]
-        x = self.head(x) # [batch*chunk, d_model]
+        
+        if src_key_padding_mask is not None: 
+            x = self.transformerEncoder(x, src_key_padding_mask=src_key_padding_mask)  # [batch_size, max_steps, d_model]
+            
+            batch_size, max_steps, d_model = x.shape
+            x = x.contiguous().view(-1, d_model)
+            
+            x = self.head(x)  
+            x = x.view(batch_size, max_steps, -1) # [batch_size, max_steps, d_model]
+                
+        else:
+            x = self.transformerEncoder(x) # [batch*chunk, 1+window, d_model]
+            x = x[:, 0, :] # [batch*chunk, d_model]
+            x = self.head(x) # [batch*chunk, d_model]
         
         return x        
