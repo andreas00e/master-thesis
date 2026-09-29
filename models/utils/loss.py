@@ -65,21 +65,22 @@ class DynamicWeightAverage(nn.Module):
 class TimeContrastiveLoss(nn.Module): 
     def __init__(
         self, 
-        temp_tcn: float
+        temp_time_contrastive: float
         ) -> None:   
         super().__init__() 
     
-        self.temp_tcn = temp_tcn 
-        self.sim = nn.CosineSimilarity()
+        self.temp_time_contrastive = temp_time_contrastive 
 
-    def forward(self, x: TensorType["batch", "3", "d_model"]) -> torch.Tensor: 
-        p_ix = x[:, 0, :]
-        p_iy = x[:, 1, :]
-        p_iz = x[:, 2, :]
-    
-        tcn_nom = torch.exp(self.sim(p_ix, p_iy) / self.temp_tcn)
-        tcn_denom = tcn_nom + torch.exp(self.sim(p_ix, p_iz) / self.temp_tcn)
-        tcn_loss = - torch.sum(torch.log(tcn_nom / tcn_denom), dim=0)
+    def forward(self, x: TensorType["batch_size", "3", "d_model"]) -> torch.Tensor: 
+        p_ix = x[:, 0, :] # [batch_size, d_model]
+        p_iy = x[:, 1, :] # [batch_size, d_model]
+        p_iz = x[:, 2, :] # [batch_size, d_model]
+        
+        tcn_nom = torch.exp(torch.sum((p_ix * p_iy), dim=-1) / self.temp_time_contrastive) # [batch_size]
+        tcn_denom = tcn_nom + torch.exp(torch.sum((p_ix * p_iz), dim=-1) / self.temp_time_contrastive) # [batch_size]
+        tcn_loss = -torch.sum(torch.log(tcn_nom / tcn_denom)) 
+        
+        tcn_loss /= x.shape[0]
         
         return tcn_loss
     
