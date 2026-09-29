@@ -37,7 +37,6 @@ class FineTunerVisual(pl.LightningModule):
         self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
         self.visionExpander = Expander(**self.expander_kwargs)
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
-        self.cos = nn.CosineSimilarity(dim=1, eps=1e-6)
         self.r3m_baseline = None # only needed for testing 
         
         self.strict_loading = False        
@@ -91,12 +90,34 @@ class FineTunerVisual(pl.LightningModule):
             "optimizer": optimizer, 
             "lr_scheduler": scheduler
             }
-        
+
     def on_test_start(self) -> None: 
         model_name = self.vision_encoder_kwargs.get("model_name", "resnet18")
         r3m_baseline = load_r3m(model_name).module
         self.r3m_baseline  = r3m_baseline.to(self.device).eval().requires_grad_(False)
         self.visionEncoder.eval().requires_grad_(False)
+        
+        # if self.trainer.datamodule is not None:
+        #     self.trainer.datamodule.setup(stage="fit")
+        #     train_loader = self.trainer.datamodule.train_dataloader()
+            
+        #     print("We are using train")
+        #     # 2. Extract a single training batch
+        #     train_batch = next(iter(train_loader))
+
+        #     # 3. Move batch tensors to the model's device (e.g., GPU/MPS)
+        #     if isinstance(train_batch, (list, tuple)):
+        #         self.train_batch = [
+        #             t.to(self.device) if isinstance(t, torch.Tensor) else t
+        #             for t in train_batch
+        #         ]
+        #     elif isinstance(train_batch, dict):
+        #         self.train_batch = {
+        #             k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+        #             for k, v in train_batch.items()
+        #         }
+        #     else:
+        #         self.train_batch = train_batch.to(self.device)
     
     def on_predict_start(self) -> None:
         self.visionEncoder.model.merge_adapter()
@@ -120,30 +141,40 @@ class FineTunerVisual(pl.LightningModule):
         return self(batch, batch_idx, stage="val")
     
     def test_step(self, batch: Any, batch_idx: int) -> None:
-        rgb_one = batch["rgb_one"]
-        rgb_two = batch["rgb_two"]
-        
         with torch.no_grad(): 
+            rgb_one = batch["rgb_one"] # [batch_size, chunk, window, channels, height, width]
+            rgb_two = batch["rgb_one"] 
+            
             rgb_one_ours = self.visionEncoder(rgb_one) # [n, d_model]
             rgb_two_ours = self.visionEncoder(rgb_two) # [n, d_model]
             
+            for name, children in self.visionEncoder.named_children(): 
+                print(name)
+            exit()
             pos_our, neg_ours, top_one_ours = _pair_metrics(rgb_one_ours, rgb_two_ours)
             
             rgb_one_baseline = self.r3m_baseline(rgb_one.view(-1, *rgb_one.shape[-3:])) # [n, d_model]
             rgb_two_baseline = self.r3m_baseline(rgb_two.view(-1, *rgb_one.shape[-3:])) # [n, d_model]
-        
             pos_basline, neg_baseline, top_one_baseline = _pair_metrics(rgb_one_baseline, rgb_two_baseline)
+            
+            z_one_ours = self.visionExpander(rgb_one_ours)
+            z_two_ours = self.visionExpander(rgb_two_ours)
+            pos_z, neg_z, top1_z = _pair_metrics(z_one_ours, z_two_ours)
         
-        sim_diff_ours = pos_our.mean() - neg_ours.mean()
-        sim_diff_baseline = pos_basline.mean() - neg_baseline.mean()
-        top_one_ours = top_one_ours.mean()
-        top_one_baseline = top_one_baseline.mean()
+            sim_diff_ours = pos_our.mean() - neg_ours.mean()
+            sim_diff_ours_expander = pos_z.mean() - neg_z.mean()
+            sim_diff_baseline = pos_basline.mean() - neg_baseline.mean()
+            top_one_ours = top_one_ours.mean()
+            top_one_expander = top1_z.mean()
+            top_one_baseline = top_one_baseline.mean()
 
         self.log_dict(
             {
             "test/sim_diff_ours": sim_diff_ours,
+            "test/sim_diff_ours_expander": sim_diff_ours_expander,
             "test/sim_diff_baseline": sim_diff_baseline,
             "test/top_one_ours": top_one_ours,
+            "test/top_one_expander": top_one_expander,
             "test/top_one_baseline": top_one_baseline
             },
             logger=True, 
