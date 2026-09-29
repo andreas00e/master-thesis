@@ -6,7 +6,6 @@ import torch.nn as nn
 from torchtyping import TensorType
 
 from diffusers import DDPMScheduler
-
 from models.utils.utils import PE
 
 
@@ -15,7 +14,7 @@ class DIT(nn.Module):
         self, 
         d_model: int,
         action_dim: int, 
-        action_horizon: int, <
+        action_horizon: int, 
         obs_emb_dim: int, 
         noise_scheduler_kwargs: DictConfig, 
         decoder_layer_kwargs: DictConfig, 
