@@ -1,79 +1,206 @@
 import os 
+import random 
+import pandas as pd
+from pathlib import Path
 from omegaconf import OmegaConf
-from typing import  List, Optional, Tuple
+from typing import Callable, List, Optional, Union
 
-import torch
-import lightning as pl 
-from torch.utils.data import Dataset, DataLoader, random_split
+import torch 
+from torch.utils.data import DataLoader, ConcatDataset
 
-from data.utils.load_files import get_files, get_metadata, get_demo_list
+import lightning.pytorch as pl 
+
 from data.utils.collate import collate_transfer
+from data.utils.load_files import get_files, get_metadata, get_demo_dict
 from data.transfer.dataset import TransferDataset
+from data.discover.utils.sampler import SameRobotBatchSampler
 
 
 class TransferDataModule(pl.LightningDataModule): 
     def __init__(self, 
-        data_dir: os.PathLike, # directory containing the hdf5 trajectory files 
-        meta_dir: os.PathLike, # directory containing the hdf5 files metadata (e.g. min & max of depth maps)        cfgs_dir: os.PathLike, 
-        cfgs_dir: os.PathLike, 
-        horizon: int,
-        crop_factor: float, 
-        robots: Optional[List[str]], 
-        tasks: Optional[List[str]], 
-        depth: bool, 
-        batch_size: int,
-        shuffle: bool,  
-        num_workers: int, 
-        pin_memory: bool,
-        drop_last: bool,  
-        persistent_workers: bool,
-        dataset_lengths: List[int], 
-        transforms: List[str],
-        *args, **kwargs) -> None:
+        data_dir: str, 
+        meta_dir: str,
+        cfgs_dir: str, 
+        transforms_list: List[str], 
+        robots: Optional[Union[str, List[str]]]=None, 
+        tasks: Optional[Union[str, List[str]]]=None, 
+        data_distribution: str="d0", 
+        data_portion: float=1.0,
+        window_size: int=8, 
+        chunk_size: int=1, 
+        crop_factor: float=1.0,       
+        consistent_batch: bool=True, 
+        batch_size: int=16,
+        shuffle: bool=True,  
+        num_workers: int=0, 
+        pin_memory: bool=False, 
+        persistent_workers: bool=True,
+        drop_last: bool=False, 
+        dataset_lengths: List[float]=[0.8, 0.1, 0.1],
+        seed: int=42, 
+        ) -> None:
         super().__init__()
-        
+       
         # Data kwargs
-        self.data_dir = data_dir
-        self.meta_dir = meta_dir
-        self.cfgs_dir = cfgs_dir
-        self.horizon = horizon
-        self.crop_factor = crop_factor
-        self.robots = robots 
-        self.tasks = tasks 
-        self.depth = depth
+        self.data_dir = Path(data_dir)
+        self.meta_dir = Path(meta_dir)
+        self.cfgs_dir = Path(cfgs_dir)
         
+        # Image transformations/ augmenations
+        self.transforms_list = transforms_list
+        
+        self.data_distribution = data_distribution
+        self.data_portion = data_portion
+        self.window_size = window_size
+        self.chunk_size = chunk_size
+        self.crop_factor = crop_factor
+        
+        self.consistent_batch = consistent_batch
+
         # Dataloading kwargs
         self.batch_size = batch_size
         self.shuffle = shuffle
-        self.num_workers = num_workers
+        self.num_workers = num_workers if num_workers < os.cpu_count() else max(1, os.cpu_count())
         self.pin_memory = pin_memory
-        self.drop_last = drop_last
         self.persistent_workers = persistent_workers
+        self.drop_last = drop_last
         self.dataset_lengths = dataset_lengths
-        self.transforms = transforms 
-
+        self.seed = seed
+                
         # File handling 
-        self.files = get_files(self.data_dir, self.depth, self.robots, self.tasks)
-        self.meta_data = get_metadata(self.meta_dir, self.files)
-
-        self.demo_map, _ = get_demo_list(self.meta_data, self.files, 8)
+        self.robots, self.tasks, self.files = get_files(self.data_dir, robots, tasks) # all hdf5 files containg given robot(s) and task(s)
+        self.metadata = get_metadata(self.meta_dir, self.files)
+        self.dataframe_gripper = pd.read_csv(self.meta_dir / "gripper_state_robot.csv")
+        self.demo_map, self.window_size = get_demo_dict(self.metadata, self.files, self.window_size) # Tuple[Dict[str, List[Tuple[str, str, int]]], int]
+            
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
         
         self.joint_dsc = self._get_joint_dsc()
-        self.train_dataset, self.val_dataset, self.test_dataset = self.setup()
+       
+    def setup(self, stage: Optional[str]=None) -> None:
+        rng = random.Random(self.seed)
+           
+        demo_map = {"fit": {}, "validate": {}, "test": {}}         
+        for robot in self.robots: 
+            for task in self.tasks: 
+                d0_key = f"{task}_d0_{robot}"
+                d1_key = f"{task}_d1_{robot}"
+                map_key = f"{task}{robot}"
+                
+                if self.data_distribution == "d0": 
+                    entries = list(self.demo_map[d0_key])
+                elif self.data_distribution == "d1": 
+                    entries = list(self.demo_map[d1_key])
+                elif self.data_distribution == "both":
+                    entries = list(self.demo_map[d0_key] + self.demo_map[d1_key])
+                else: 
+                    raise ValueError(f"n_ds must 1 or 2, got {self.data_distribution}")
+                
+                rng.shuffle(entries)
+                n_entries = len(entries)
+                if self.data_portion < 1: 
+                    entries = entries[:int(self.data_portion * n_entries)]
+                
+                n_entries = len(entries)
+                fit_end = int(self.dataset_lengths[0]*n_entries)
+                val_end = fit_end + int(self.dataset_lengths[1]*n_entries)
+                
+                demo_map["fit"][map_key] = entries[0:fit_end]
+                demo_map["validate"][map_key] = entries[fit_end:val_end]
+                demo_map["test"][map_key] = entries[val_end:]
         
-    def setup(self, stage=None) -> Tuple[Dataset, ...]:
-        dataset = TransferDataset(
-            demo_map=self.demo_map,
-            horizon=self.horizon,
-            crop_factor=self.crop_factor,
-            depth=self.depth,
-            joint_dsc=self.joint_dsc,
-            transforms=self.transforms
+        if stage in ("fit", "validate") or stage is None: 
+            datasets_fit = self._make_dataset(demo_map["fit"], "fit")
+            datasets_validate = self._make_dataset(demo_map["validate"], "validate")
+            self.train_dataset = ConcatDataset(datasets_fit)
+            self.val_dataset = ConcatDataset(datasets_validate)
+
+        if stage == "test" or stage is None: 
+            datasets_test = self._make_dataset(demo_map["test"], "test")
+            self.test_dataset = ConcatDataset(datasets_test)
+            
+    def teardown(self, stage: Optional[str]=None) -> None:
+        stages_to_clean = []
+        if stage == "fit":
+            stages_to_clean.extend(["train", "val"])
+        elif stage == "validate": 
+            stages_to_clean.append("val")
+        elif stage == "test":
+            stages_to_clean.append("test")
+        else: 
+            stages_to_clean.extend(["train", "val", "test"])
+
+        for prefix in stages_to_clean:
+            attr_name = f"{prefix}_dataset"
+            dataset = getattr(self, attr_name, None)
+            if isinstance(dataset, ConcatDataset):
+                for subset in dataset.datasets:
+                    base_set = getattr(subset, "dataset", subset)
+                    if hasattr(base_set, "close") and callable(base_set.close):
+                        base_set.close()
+            setattr(self, attr_name, None)
+        
+    def __del__(self):
+        try:
+            self.teardown()
+        except Exception:
+            pass
+        
+    def _make_dataset(self, demo_map, stage): 
+        dataset = [
+            TransferDataset(
+                demo_map=demo_map[f"{task}{robot}"],
+                crop_factor=self.crop_factor, 
+                joint_dsc=self.joint_dsc, 
+                transforms_list=self.transforms_list
             )
+            for task in self.tasks 
+            for robot in self.robots
+        ]
+            
+        return dataset 
         
-        train_dataset, val_dataset, test_dataset = random_split(dataset, lengths=self.dataset_lengths)
-        return train_dataset, val_dataset, test_dataset
+    def _make_dataloader(self, dataset, shuffle: bool, collate_fn: Callable) -> DataLoader:                 
+        if self.consistent_batch: 
+            batch_sampler = SameRobotBatchSampler(
+                concat_dataset=dataset, 
+                n_robots=len(self.robots),
+                batch_size=self.batch_size, 
+                shuffle=shuffle, 
+                drop_last=self.drop_last
+            )
+            
+            return DataLoader(
+                dataset=dataset, 
+                batch_sampler=batch_sampler, 
+                num_workers=self.num_workers,  
+                pin_memory=self.pin_memory, 
+                persistent_workers=self.persistent_workers if self.num_workers > 0 else False, 
+                collate_fn=collate_fn,
+                )
+            
+        return DataLoader(
+            dataset=dataset, 
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            num_workers=self.num_workers,  
+            pin_memory=self.pin_memory, 
+            persistent_workers=self.persistent_workers if self.num_workers > 0 else False,
+            drop_last=self.drop_last,
+            collate_fn=collate_fn, 
+            )
     
+    def train_dataloader(self) -> DataLoader:
+        return self._make_dataloader(self.train_dataset, shuffle=self.shuffle, collate_fn=collate_transfer)
+    
+    def val_dataloader(self) -> DataLoader:
+        return self._make_dataloader(self.val_dataset, shuffle=False, collate_fn=collate_transfer)
+
+    def test_dataloader(self) -> DataLoader:
+        return self._make_dataloader(self.test_dataset, shuffle=False, collate_fn=collate_transfer)
+
     def _get_joint_dsc(self): 
         cfgs = [os.path.join(self.cfgs_dir, cfg) for cfg in os.listdir(self.cfgs_dir)] 
         
@@ -86,38 +213,4 @@ class TransferDataModule(pl.LightningDataModule):
             
             joint_dsc[robot] = values
         
-        return joint_dsc     
-    
-    def train_dataloader(self):
-        train_dataloader = DataLoader(
-            dataset=self.train_dataset, 
-            batch_size=self.batch_size, 
-            shuffle=self.shuffle,    
-            num_workers=self.num_workers,  
-            collate_fn=collate_transfer, 
-            pin_memory=self.pin_memory, 
-            persistent_workers=self.persistent_workers, 
-            )
-        return train_dataloader
-    
-    def val_dataloader(self):
-        val_dataloader = DataLoader(
-            dataset=self.val_dataset, 
-            batch_size=self.batch_size, 
-            num_workers=self.num_workers, 
-            collate_fn=collate_transfer, 
-            pin_memory=self.pin_memory, 
-            persistent_workers=self.persistent_workers, 
-            )
-        return val_dataloader
-    
-    def test_dataloader(self):
-        test_dataloader = DataLoader(
-            dataset=self.test_dataset,             
-            batch_size=self.batch_size, 
-            num_workers=self.num_workers, 
-            collate_fn=collate_transfer, 
-            pin_memory=self.pin_memory, 
-            persistent_workers=self.persistent_workers, 
-            )
-        return test_dataloader
+        return joint_dsc  
