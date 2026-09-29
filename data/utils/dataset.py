@@ -179,7 +179,7 @@ class MimicGenRobotDataset(Dataset):
             
         item["rgb_one"] = rgb_one
         item["rgb_two"] = rgb_two
-        # item["g_qpos"] = g_qpos
+        item["g_qpos"] = g_qpos
         
         item["task"] = torch.full(size=(idxs.shape[0], ), fill_value=TASK_DICT[task], dtype=torch.long) # [chunk]
         item["robot"] = torch.full(size=(idxs.shape[0], ), fill_value=ROBOT_DICT[robot], dtype=torch.long) # [chunk]

@@ -46,7 +46,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         # Data kwargs
         self.data_dir = Path(data_dir)
         self.meta_dir = Path(meta_dir)
-        
+                
         # Image transformations/ augmenations
         self.transforms_list = transforms_list
         self.contrastive_transforms = contrastive_transforms
@@ -159,14 +159,16 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 dataframe_gripper=self.dataframe_gripper, 
                 transforms_list=self.transforms_list, 
                 contrastive_transforms=None if stage == "test" else self.contrastive_transforms, 
-                window_size=None if stage == "test" else self.window_size,
-                chunk_size=None if stage == "test" else self.chunk_size, 
+                window_size=self.window_size,
+                chunk_size=self.chunk_size, 
+                #window_size=None if stage == "test" else self.window_size,
+                #chunk_size=None if stage == "test" else self.chunk_size, 
                 temporal_smoothing=None if stage == "test" else self.temporal_smoothing, 
                 positive_window_size=None if stage == "test" else self.positive_window_size, 
                 negative_window_size=None if stage == "test" else self.negative_window_size, 
                 crop_factor=self.crop_factor,
                 noise_level=self.noise_level
-            ) 
+            )  
             for task in self.tasks 
             for robot in self.robots
         ]
@@ -210,4 +212,5 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         return self._make_dataloader(self.val_dataset, shuffle=False, collate_fn=collate_discover)
 
     def test_dataloader(self) -> DataLoader:
-        return self._make_dataloader(self.test_dataset, shuffle=False, collate_fn=collate_discover_test)
+        # return self._make_dataloader(self.test_dataset, shuffle=False, collate_fn=collate_discover_test)
+        return self._make_dataloader(self.test_dataset, shuffle=False, collate_fn=collate_discover)
