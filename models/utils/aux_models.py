@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn 
 from torchtyping import TensorType
 
-from models.utils.utils import PE
+from models.utils.utils import PositionalEncoding
 
 
 class CNN(nn.Module):
@@ -165,7 +165,7 @@ class TransformerEncoder(nn.Module):
         
         self.cls_token = nn.Parameter(data=torch.empty(size=(1, 1, self.d_model), dtype=torch.float32))
         
-        self.pe = PE(**self.pe_kwargs)
+        self.pe = PositionalEncoding(**self.pe_kwargs)
         
         self.apply(self._init_weights)
         nn.init.normal_(self.cls_token, std=0.02)

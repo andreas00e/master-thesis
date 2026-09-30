@@ -1,5 +1,3 @@
-# Robot Conditioned Encoder (RCE)
-
 from omegaconf import DictConfig 
 
 import torch 
@@ -7,7 +5,7 @@ import torch.nn as nn
 from torchtyping import TensorType
 
 
-class RCE(nn.Module):
+class RobotConditionedEncoder(nn.Module):
     def __init__(
         self,
         dsc_kwargs: DictConfig,
@@ -65,7 +63,7 @@ class RCE(nn.Module):
         
         dsc_emb = self.dsc_encoder(joint_dsc) # [batch, joints, d_model]
         dsc_emb = torch.exp(dsc_emb / (self.tau + self.epsilon))  # [batch, jonts, d_model]
-        dsc_emb /= torch.sum(dsc_emb, dim=-1, keepdim=True) # [batch, joints, d_model]
+        dsc_emb = dsc_emb / torch.sum(dsc_emb, dim=-1, keepdim=True) # [batch, joints, d_model]
         dsc_emb = dsc_emb.unsqueeze(1).repeat(1, joint_obs.shape[1], 1, 1) # [batch, steps, joints, d_model]
 
         obs_emb = self.obs_encoder(joint_obs) # [batch, steps, joints, d_model]

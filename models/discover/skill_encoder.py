@@ -146,32 +146,56 @@ class SkillEncoder(pl.LightningModule):
         return self(batch, batch_idx, stage="val")
     
     def predict_step(self, batch: Any):
-        batch_size, chunk, window = batch["rgb_one"].shape[:3]
-        n = batch_size*chunk
-        
-        # 1. Feature Extraction 
-        emb_one = self.visionEncoder(batch["rgb_one"]) # [batch_size*chunk*window, d_model]
-        
-        if self.with_both_viewpoints: 
-            emb_one_pos = self.visionEncoder(batch["rgb_one_pos"]) # [batch_size*chunk*window, d_model]            
-            emb_one = torch.cat(tensors=(emb_one, emb_one_pos), dim=-1) # [batch_size*chunk*window, d_model*2]            
-            emb_one = self.down_emb(emb_one)
+        with torch.no_grad(): 
+            batch_size, chunk, window = batch["rgb_one"].shape[:3]
+            n = batch_size*chunk
+            
+            # 1. Feature Extraction 
+            emb_one = self.visionEncoder(batch["rgb_one"]) # [batch_size*chunk*window, d_model]
+            emb_two = self.visionEncoder(batch["rgb_two"]) # [batch_size*chunk*window, d_model]
+            
+            if self.with_both_viewpoints: 
+                emb_rgb = torch.cat(tensors=(emb_one, emb_two), dim=-1) # [batch_size*chunk*window, d_model*2]            
+                emb_rgb = self.down_emb(emb_rgb)
 
-        # Sequential Transformer Encoding 
-        emb_one = self.sequential(emb_one.view(n, window, -1)) # [n, d_model]: robot0_eye_in_hand_view
-        
-        # Unit Sphere Normalization 
-        z_one = F.normalize(emb_one, dim=-1) # [n, d_model]
-        
-        c_one = self.C(z_one) # [n, k] 
+            # Sequential Transformer Encoding 
+            emb_rgb = self.sequential(emb_rgb.view(n, window, -1), idxs=batch["idxs"]) # [n, d_model]: robot0_eye_in_hand_view
+            
+            # Unit Sphere Normalization 
+            z_rgb = F.normalize(emb_rgb, dim=-1) # [n, d_model]
+            
+            z_rgb = self.C(z_rgb) # [n, k] 
 
-        return c_one
+            return z_rgb
     
     def train(self, mode: bool = True):
         super().train(mode)
         if self.vision_encoder_ckpt is not None:
             self.visionEncoder.eval()
         return self
+    
+    # def on_train_epoch_start(self):
+    #     if self.current_epoch < 3:  
+    #         self._set_freeze(True)
+        
+    #     elif self.current_epoch == 3: 
+    #         self._set_freeze(False)
+    
+    def on_train_batch_start(self, batch: Any, batch_idx: int) -> None:
+        if self.global_step < 3: 
+            self._set_freeze(True)
+            
+        elif self.global_step == 3: 
+            self._set_freeze(False)
+    
+    def _set_freeze(self, freeze: bool) -> None: 
+        for p in self.C.parameters(): 
+            p.requires_grad_(not freeze)
+            
+        if freeze: 
+            self.C.eval() 
+        else:
+            self.C.train()
             
     def on_train_batch_end(self, outputs: Any, batch: Any, batch_idx: int) -> None:
         with torch.no_grad():
@@ -234,16 +258,16 @@ class SkillEncoder(pl.LightningModule):
             emb_one_pos = self.visionEncoder(batch["rgb_one_pos"]) # [batch_size*chunk*window, d_model]
             emb_two_pos = self.visionEncoder(batch["rgb_two_pos"]) # [batch_size*chunk*window, d_model]
             
-            emb_one = torch.cat(tensors=(emb_one, emb_one_pos), dim=-1) # [batch_size*chunk*window, d_model*2]
-            emb_two = torch.cat(tensors=(emb_two, emb_two_pos), dim=-1) # [batch_size*chunk*window, d_model*2]
+            emb_one = torch.cat(tensors=(emb_one, emb_two), dim=-1) # [batch_size*chunk*window, d_model*2]
+            emb_two = torch.cat(tensors=(emb_one_pos, emb_two_pos), dim=-1) # [batch_size*chunk*window, d_model*2]
             
             emb_one = self.down_emb(emb_one)
             emb_two = self.down_emb(emb_two)
 
         # Sequential Transformer Encoding 
-        emb_one = self.sequential(emb_one.view(n, window, -1)) # [n, d_model]: robot0_eye_in_hand_view
-        emb_two =  self.sequential(emb_two.view(n, window, -1)) # [n, d_model]: agentview_image
-        emb_gripper = self.sequential(emb_gripper.view(n, window, -1)) # [n, d_model]: gripper states
+        emb_one = self.sequential(emb_one.view(n, window, -1), idxs=batch["idxs"]) # [n, d_model]: robot0_eye_in_hand_view
+        emb_two =  self.sequential(emb_two.view(n, window, -1), idxs=batch["idxs"]) # [n, d_model]: agentview_image
+        emb_gripper = self.sequential(emb_gripper.view(n, window, -1), idxs=batch["idxs"]) # [n, d_model]: gripper states
         
         # Unit Sphere Normalization 
         z_one = F.normalize(emb_one, dim=-1) # [n, d_model]
@@ -271,7 +295,7 @@ class SkillEncoder(pl.LightningModule):
         
         # 4. Sinkhorn Assignment (Over current batch + queue)
         with torch.no_grad():
-            q = {k: self.sinkhorn(s) for k, s in c.items()} # [n || n + capacity, k] each: targets
+            q = {k: self.sinkhorn(s)[:n] for k, s in c.items()} # [n || n + capacity, k] each: targets
             
         # Softmax probabilities for current batch elements 
         p = {k: F.log_softmax(s[:n] / self.prototype_kwargs.tau, dim=-1) for k, s in c.items()} # [n, k]: predictions 
@@ -303,10 +327,9 @@ class SkillEncoder(pl.LightningModule):
                 self._robot_val.append(batch["robot"].view(n).cpu()) # [n]
         
         if self.with_uncertainty_weighting: 
-            pass
-            # loss = self.uncertainty_weighting(losses) # []
-        # else: 
-        loss = torch.mean(torch.stack(losses)) # []
+            loss = self.uncertainty_weighting(losses) # []
+        else: 
+            loss = torch.mean(torch.stack(losses)) # []
 
         self.log_dict(
             {

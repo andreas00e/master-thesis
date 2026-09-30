@@ -3,7 +3,7 @@ defaults:
   - _self_ 
 
 d_model: 512
-d_prototypes: 64
+d_prototypes: 128
 
 datamodule: 
   transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
@@ -22,20 +22,20 @@ datamodule:
    - panda
   tasks: 
     - square
-  
+
   data_portion: 1.0
   consistent_batch: true 
   positive_window_size: 4
   negative_window_size: 12  
-  batch_size: 32
+  batch_size: 64
                     
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
   _recursive_: false
 
   d_model: ${d_model}
-  num_plot: 500
-  queue_start_epochs: 10
+  num_plot: 1000
+  queue_start_epochs: 1
   with_both_viewpoints: true 
 
   time_contrastive: true
@@ -97,7 +97,7 @@ model:
 
   queue_kwargs:
     num_modalities: 3
-    capacity: 4096
+    capacity: 3840
     feature_dim: ${d_model}
 
   tsne_kwargs: 
@@ -109,13 +109,13 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: with_time_big_queue_all_two_view_gripper_sym_loss
+  name: with_time_big_queue_all_two_view_ctr_gripper_sym_loss_ur5e
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  # overfit_batches: 5
+  # overfit_batches: 2
   log_every_n_steps: 1
   accelerator: gpu   
   devices: 

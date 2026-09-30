@@ -1,23 +1,22 @@
-# Skill conditioned Action Decoder (SAD)
-
 import os 
+from typing import Any
 from omegaconf import DictConfig
 
 from r3m import load_r3m
 
 import torch
+torch.autograd.set_detect_anomaly(True)
 import torch.nn as nn
-from torchtyping import TensorType
 import lightning.pytorch as pl
 
-from models.transfer.utils.sat import SAT
-from models.transfer.utils.rce import RCE
-from models.transfer.utils.dit import DIT
+from models.transfer.utils.sat import SkillAllignmentTransformer
+from models.transfer.utils.rce import RobotConditionedEncoder
+from models.transfer.utils.dit import DiffusionTransformer
 from models.transfer.utils.pooling import CrossAttentionQueryPooling
 from models.discover.skill_encoder import SkillEncoder
 
 
-class SAD(pl.LightningModule): 
+class SkillConditionedActionDecoder(pl.LightningModule): 
     def __init__(
         self, 
         d_model: int, 
@@ -41,20 +40,20 @@ class SAD(pl.LightningModule):
         
         # Frozen models
         self.obs_encoder = load_r3m("resnet18")
+        self.obs_encoder.requires_grad_(False)
+        self.obs_encoder.eval()
+          
         self.tse = SkillEncoder.load_from_checkpoint(self.tse_ckpt)
+        self.tse.requires_grad_(False)
         self.tse.eval() 
-        self.tse.freeze()
         
         # Trainable models 
-        self.obs_down = nn.Linear(
-            512, 
-            self.d_model
-            )
+        self.obs_down = nn.Linear(512, self.d_model)
         
-        self.rce = RCE(**self.rce_kwargs)
-        self.dit = DIT(**self.dit_kwargs)
-        self.sat = SAT(self.tse, **self.sat_kwargs)
-        self.pool = CrossAttentionQueryPooling(**self.pool_kwargs)
+        self.rce = RobotConditionedEncoder(**self.rce_kwargs)
+        self.dit = DiffusionTransformer(**self.dit_kwargs)
+        self.sat = SkillAllignmentTransformer(self.obs_encoder, self.tse,  **self.sat_kwargs)
+        self.attention_pooling = CrossAttentionQueryPooling(**self.pool_kwargs)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), **self.optimizer_kwargs.optimizer)
@@ -68,55 +67,42 @@ class SAD(pl.LightningModule):
             }
         }   
     
-    def forward(self, batch):
+    def forward(self, batch: Any, batch_idx: int, stage: str) -> torch.Tensor:
         conditions = []
-        actions, rgb_obs, joint_dsc, joint_obs = batch.values() 
         
+        batch_size, seq_len = batch["rgb_one"].shape[:2]
+                
+        rgb_one = batch["rgb_one"].view(-1, *batch["rgb_one"].shape[2:]) # [batch*seq_len, channels=3, height=224, width=224]
+        rgb_one = self.obs_encoder(rgb_one) # [batch*seq_len, *]
+        rgb_one = self.obs_down(rgb_one) # [batch*seq_len, d_model]
+        rgb_one = rgb_one.view(batch_size, seq_len, -1) # [batch, seq_len, d_model]
         
-        batch_size, n_steps = actions.shape[:2]        
-        item = {}
-        item["rgb_one"] = rgb_obs.unsqueeze(0)
-        item["rgb_one_pos"] = rgb_obs.unsqueeze(0)
+        rgb_two = batch["rgb_two"].view(-1, *batch["rgb_two"].shape[2:]) # [batch*seq_len, channels=3, height=224, width=224]
+        rgb_two = self.obs_encoder(rgb_two) # [batch*seq_len, *]
+        rgb_two = self.obs_down(rgb_two) # [batch*seq_len, d_model]
+        rgb_two = rgb_two.view(batch_size, seq_len, -1) # [batch, seq_len, d_model]
         
-        
-        loss_sat = self.sat(item)
-        
-        rgb_obs = batch["rgb_obs"].view(-1, *rgb_obs.shape[2:]) # [batch*steps, channels=3, height=224, width=224]
-        rgb_emb = self.obs_encoder(rgb_obs) # [batch*steps, *]
-        rgb_emb = self.obs_down(rgb_emb) # [batch*steps, d_model]
-        rgb_emb = rgb_emb.view(batch_size, n_steps, -1) # [batch, steps, d_model]
-        
-        rce_emb = self.rce(joint_dsc, joint_obs) # [batch, steps, d_model]
-        
-        skl_emb = torch.randn_like(rce_emb) # [batch, steps, d_model]: skill token prototypes 
-        
-        conditions = [rgb_emb, rce_emb, skl_emb] # list of conditions,,0
-        conditions = self.pool(conditions) # [batch, n_steps, k, d_model] 
+        rce_emb = self.rce(batch["joint_dsc"], batch["joint_obs"]) # [batch, seq_len, d_model]
+
+        conditions = [rgb_one, rgb_two, rce_emb] 
+        conditions = self.attention_pooling(conditions) # [batch, seq_len, k, d_model] 
         
         loss_bc = self.dit(batch["actions"], conditions)       
-         
-        loss_sat = 0
-        loss = loss_sat + loss_bc
 
-        stage = self.trainer.state.stage
         self.log_dict({
-            f"{stage}_loss_sat": loss_sat, 
-            f"{stage}_loss_bc": loss_bc, 
-            f"{stage}_loss": loss
-        })
+            f"{stage}/loss_bc": loss_bc, 
+        },                             
+        logger=True, 
+        prog_bar=True,
+        on_step=(stage == "train"), 
+        on_epoch=True,
+        sync_dist=True,
+        )
         
-        return loss 
+        return loss_bc 
     
-    def _shared_step(self, batch: TensorType["batch"]) -> None: 
-        loss = self(batch)
-    
-        return None
-    
-    def training_step(self, batch, batch_idx):
-        return self._shared_step(batch)
-    
-    def validation_step(self, batch, batch_idx):
-        return self._shared_step(batch)
-    
-    def test_step(self, batch, batch_idx):
-        return self._shared_step(batch)
+    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
+        return self(batch, batch_idx, stage="train")
+        
+    def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
+        return self(batch, batch_idx, stage="val")

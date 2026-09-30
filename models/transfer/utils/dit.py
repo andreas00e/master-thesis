@@ -16,6 +16,7 @@ class DiffusionTransformer(nn.Module):
         d_model: int,
         action_dim: int, 
         action_horizon: int, 
+        obs_horizon: int, 
         noise_scheduler_kwargs: DictConfig, 
         decoder_layer_kwargs: DictConfig, 
         transformer_decoder_kwargs: DictConfig, 
@@ -26,7 +27,8 @@ class DiffusionTransformer(nn.Module):
         self.d_model = d_model
         self.action_dim = action_dim 
         self.action_horizon = action_horizon
-
+        self.obs_horizon = self.obs_horizon
+        
         self.noise_scheduler_kwargs = noise_scheduler_kwargs
         self.decoder_layer_kwargs = decoder_layer_kwargs 
         self.transformer_decoder_kwargs = transformer_decoder_kwargs
@@ -51,8 +53,8 @@ class DiffusionTransformer(nn.Module):
         
     def forward(
         self, 
-        actions: TensorType["batch", "steps", "action_dim"], 
-        conditions: TensorType["batch", "steps", "k", "d_model"]
+        actions: TensorType["batch", "action_horizon", "action_dim"], # actions to predict 
+        conditions: TensorType["batch", "obs_horizon", "k", "d_model"] # past observations
         ) -> torch.Tensor:   
              
         batch_size = actions.shape[0]
@@ -63,9 +65,9 @@ class DiffusionTransformer(nn.Module):
             dtype=torch.long, 
             device=actions.device
             ) # [batch]
-
-        noise = torch.randn_like(actions) # [batch, n_steps, action_dim]
-        padding_mask = torch.all(torch.isnan(actions), dim=-1) # [batch, n_steps]
+        
+        noise = torch.randn(size=(batch_size, self.action_horizon, self.action_dim)) # [batch, action_horizon, action_dim]
+        padding_mask = torch.all(torch.isnan(actions), dim=-1) # [batch, obs_horizon]
         
         # Forward process: Add noise to input sample 
         noisy_actions = self._forward_process(actions, noise, timesteps) # [batch, n_steps, action_dim]

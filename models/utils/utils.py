@@ -9,7 +9,7 @@ from torchtyping import TensorType
 # !!! ADJUSTED FROM !!!: 
 # https://discuss.pytorch.org/t/how-to-modify-the-positional-encoding-in-torch-nn-transformer/104308
 
-class PE(nn.Module): 
+class PositionalEncoding(nn.Module): 
     def __init__(self, d_model: int, max_len: int) -> None:
         super().__init__()
         
@@ -47,13 +47,13 @@ class PE(nn.Module):
 
 
 class SinusoidalEmbedding(nn.Module): 
-    def __init__(self, new_d: int) -> None:
+    def __init__(self, d_new: int) -> None:
         super().__init__()
         
-        if new_d%2 != 0: 
-            raise ValueError(f"Expanded dimension has to be even, got {new_d}")
+        if d_new%2 != 0: 
+            raise ValueError(f"Expanded dimension has to be even, got {d_new}")
         
-        self.new_d = int(new_d)
+        self.new_d = int(d_new)
         half_d = self.new_d // 2 
         
         freq = torch.exp(torch.arange(half_d, dtype=torch.float32) * -(torch.log(torch.tensor(1e4)) / half_d))

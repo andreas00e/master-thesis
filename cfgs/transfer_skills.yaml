@@ -1,11 +1,10 @@
 seed: 42
+d_model: 256
 
 cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
 data_dir: ${cwd}/imports/mimicgen/datasets/robot
 meta_dir: ${cwd}/master-thesis/data/metadata
 cfgs_dir: ${cwd}/master-thesis/cfgs/dh_cfgs
-
-stage: fit # test, predict
 
 datamodule: 
   _target_: data.transfer.datamodule.TransferDataModule 
@@ -14,14 +13,17 @@ datamodule:
   cfgs_dir: ${cfgs_dir}
   window_size: 8
   crop_factor: 1
-  robots: null
-  tasks: null
+  robots: 
+    - iiwa 
+    - panda 
+  tasks:
+    - square
   batch_size: 4
-  shuffle: True
+  shuffle: true
   num_workers: 0
-  pin_memory: True 
-  drop_last: True
-  persistent_workers: False 
+  pin_memory: true 
+  drop_last: true
+  persistent_workers: false 
 
   dataset_lengths: 
   - 0.8 
@@ -35,21 +37,20 @@ datamodule:
     - normalize 
   
 model: 
-  _target_: models.transfer.sad.SAD
-
-  d_model: 256
-
-  tse_ckpt: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/outputs/checkpoints/skill_discovery/best-checkpoint-epoch=09-val/loss=3.30.ckpt
+  _target_: models.transfer.sad.SkillConditionedActionDecoder
+  
+  d_model: ${d_model}
+  tse_ckpt: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/outputs/checkpoints/skill_discovery/last-v8.ckpt
   
   rce_kwargs:
     dsc_kwargs: 
       input_dim: 3
       hidden_dim: 64
-      output_dim: ${model.d_model}
+      output_dim: ${d_model}
 
     obs_kwargs: 
       input_dim: 2
-      output_dim: ${model.d_model}
+      output_dim: ${d_model}
 
     h_kwargs: 
       tau: 0.1
@@ -57,30 +58,30 @@ model:
       epsilon: 1e-6
 
   dit_kwargs:
-    d_model: ${model.d_model}
+    d_model: ${d_model}
     action_dim: 7  
-    obs_emb_dim: ${model.d_model} 
     action_horizon: 16 
 
     noise_scheduler_kwargs: 
       num_train_timesteps:  100 
+      clip_sample: false 
 
     decoder_layer_kwargs: 
-      d_model: ${model.d_model} 
+      d_model: ${d_model} 
       nhead: 2 
       dim_feedforward: 1024
-      batch_first: True
+      batch_first: true
 
     transformer_decoder_kwargs: 
       num_layers: 2 
 
     pe_kwargs: 
-      d_model: ${model.d_model}
+      d_model: ${d_model}
       max_len: 300
 
   pool_kwargs: 
-    k: 5 
-    d_model: ${model.d_model}
+    k: 3 
+    d_model: ${d_model}
 
   sat_kwargs: 
     encoder_layer_kwargs: 
@@ -92,7 +93,7 @@ model:
       num_layers: 1
   
     pe_kwargs: 
-      d_model: ${model.d_model}
+      d_model: ${d_model}
       max_len: 300
     
   optimizer_kwargs: 
@@ -117,6 +118,6 @@ trainer:
     - 0 # single gpu 
   max_epochs: 400 
   num_sanity_val_steps: 2
-  enable_progress_bar: True
+  enable_progress_bar: true
   profiler: simple 
   default_root_dir: logs/skill_transfer/
