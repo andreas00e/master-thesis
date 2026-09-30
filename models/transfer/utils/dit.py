@@ -16,7 +16,7 @@ class DiffusionTransformer(nn.Module):
         d_model: int,
         action_dim: int, 
         action_horizon: int, 
-        obs_horizon: int, 
+        condition_horizon: int, 
         noise_scheduler_kwargs: DictConfig, 
         decoder_layer_kwargs: DictConfig, 
         transformer_decoder_kwargs: DictConfig, 
@@ -27,7 +27,7 @@ class DiffusionTransformer(nn.Module):
         self.d_model = d_model
         self.action_dim = action_dim 
         self.action_horizon = action_horizon
-        self.obs_horizon = obs_horizon
+        self.condition_horizon = condition_horizon
         
         self.noise_scheduler_kwargs = noise_scheduler_kwargs
         self.decoder_layer_kwargs = decoder_layer_kwargs 
@@ -53,8 +53,8 @@ class DiffusionTransformer(nn.Module):
         
     def forward(
         self, 
-        actions: TensorType["batch", "action_horizon", "action_dim"], # actions to predict 
-        conditions: TensorType["batch", "obs_horizon", "k", "d_model"], # past observation 
+        actions: TensorType["batch", "action_horizon", "action_dim"], # self.action_horizon actions to predict 
+        conditions: TensorType["batch", "obs_horizon", "k", "d_model"], # last self.condition_horizon observations
         actions_idxs: TensorType["batch", "action_horizon"], 
         conditions_idxs: TensorType["batch", "obs_horizon"]
         ) -> torch.Tensor:   
@@ -70,13 +70,13 @@ class DiffusionTransformer(nn.Module):
             ) # [batch]
         
         noise = torch.randn_like(actions) # [batch, action_horizon, action_dim]
-        padding_mask = torch.all(torch.isnan(actions), dim=-1) # [batch, obs_horizon]
+        padding_mask = torch.all(torch.isnan(actions), dim=-1) # [batch, action_horizon]
         
         # Forward process: Add noise to input sample 
         noisy_actions = self._forward_process(actions, noise, timesteps) # [batch, n_steps, action_dim]
          
         # Backward process
-        predicted_noise = self._backward_process(noisy_actions, conditions, timesteps, padding_mask)
+        predicted_noise = self._backward_process(noisy_actions, conditions, actions_idxs, conditions_idxs, timesteps, padding_mask)
         
         valid_mask = (~padding_mask).float()
         loss_nom = torch.sum(torch.mean((noise - predicted_noise) ** 2, dim=-1) * valid_mask, dim=-1) # [batch]
@@ -99,24 +99,30 @@ class DiffusionTransformer(nn.Module):
     def _backward_process( # reconstruct sample from random noise
         self, 
         noisy_actions: TensorType["batch", "action_horizon", "action_dim"], 
-        conditions: TensorType["batch", "obs_horizon", "k", "d_model"], # k: number of condition modalities 
+        conditions: TensorType["batch", "condition_horizon", "k", "d_model"], # k: number of condition modalities
+        actions_idxs: TensorType["batch", "action_horizon"], 
+        conditions_idxs: TensorType["batch", "condition_horizon"], 
         timesteps: TensorType["batch"], 
-        padding_mask: Optional[TensorType["batch", "action_horizon"]]=None
+        padding_mask: Optional[TensorType["batch", "action_horizon"]]=None, 
         ) -> TensorType["batch", "action_horizon", "action_dim"]: 
                         
-        conditions = torch.sum(conditions, dim=-2) # [batch, obs_horizon, d_model]
+        conditions = torch.sum(conditions, dim=-2) # [batch, condition_horizon, d_model]
+        conditions = self.positional_encoding(conditions, idxs=conditions_idxs)
         
         noisy_actions_emb = self.action_down(noisy_actions) # [batch, action_horizon, d_model]
-        noisy_actions_emb = self.positional_encoding(noisy_actions_emb) # [batch, n_steps, d_model]
+        noisy_actions_emb = self.positional_encoding(noisy_actions_emb, actions_idxs) # [batch, n_steps, d_model]
         
         timesteps = timesteps.unsqueeze(-1).to(torch.float32) # [batch, 1]
         timesteps = self.sinusoidal_embedding(timesteps) # [batch, d_model]
         timesteps_emb = self.time_emb(timesteps).unsqueeze(1) # [batch, 1, d_model]
         tgt = noisy_actions_emb + timesteps_emb # [batch, n_steps, d_model] 
+        
+        tgt_mask = nn.Transformer.generate_square_subsequent_mask(self.action_horizon)
 
         out = self.decoder(
-            tgt=tgt, 
-            memory=conditions,
+            tgt=tgt, # self.action_horizon to predict actions 
+            memory=conditions, # self.condition_horizon last observations
+            tgt_mask=tgt_mask, 
             tgt_key_padding_mask=padding_mask, 
             memory_key_padding_mask=padding_mask
             ) # [batch, n_steps, d_model]
@@ -126,8 +132,14 @@ class DiffusionTransformer(nn.Module):
         return predicted_noise
     
     @torch.no_grad()
-    def sample(self, conditions: TensorType["batch", "steps", "k", "d_model"]) -> TensorType["batch", "steps", "action_dim"]:
+    def sample(
+        self, 
+        conditions: TensorType["batch", "condition_horizon", "k", "d_model"], 
+        actions_idxs: TensorType["batch", "action_horizon"], 
+        conditions_idxs: TensorType["batch", "condition_horizon"]
+        ) -> TensorType["batch", "action_horizon", "action_dim"]:
         self.eval() 
+        
         batch_size = conditions.shape[0]
 
         # Start from pure Gaussian noise 
@@ -137,7 +149,15 @@ class DiffusionTransformer(nn.Module):
         for t in reversed(range(self.noise_scheduler_kwargs.num_train_timesteps)): #  [99, 98, ..., 0]
             timesteps = torch.full((batch_size, ), fill_value=t, dtype=torch.long, device=conditions.device) # []
             # Predicted noise based on current sample 
-            predicted_noise = self._backward_process(noisy_actions=noisy_actions, conditions=conditions, timesteps=timesteps)
+            
+            predicted_noise = self._backward_process(
+                noisy_actions=noisy_actions,
+                conditions=conditions, 
+                actions_idxs=actions_idxs, 
+                conditions_idxs=conditions_idxs, 
+                timesteps=timesteps
+                )
+            
             # Scheduler output
             step = self.scheduler.step(model_output=predicted_noise, timestep=t, sample=noisy_actions) 
             # Reconstruct previous sample in diffusion process
