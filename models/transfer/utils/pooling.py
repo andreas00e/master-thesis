@@ -17,10 +17,9 @@ class CrossAttentionQueryPooling(nn.Module):
         self.k = k # number of learnable prototypes 
         self.d_model = d_model
         
-        q_data = torch.empty(size=(1, 1, self.k, self.d_model), dtype=torch.float32) 
-        nn.init.xavier_uniform_(q_data)
-        self.q = nn.Parameter(data=q_data) # [1, 1, k, d_model]
-        
+        self.q = nn.Parameter(torch.empty(size=(1, 1, self.k, self.d_model), dtype=torch.float32)) # [1, 1, k, d_model]
+        nn.init.xavier_uniform_(self.q)
+
         self.W_k = nn.Linear(self.d_model, self.d_model, bias=False)
         self.W_v = nn.Linear(self.d_model, self.d_model, bias=False)
         
