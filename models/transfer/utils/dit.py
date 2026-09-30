@@ -27,7 +27,7 @@ class DiffusionTransformer(nn.Module):
         self.d_model = d_model
         self.action_dim = action_dim 
         self.action_horizon = action_horizon
-        self.obs_horizon = self.obs_horizon
+        self.obs_horizon = obs_horizon
         
         self.noise_scheduler_kwargs = noise_scheduler_kwargs
         self.decoder_layer_kwargs = decoder_layer_kwargs 
@@ -54,10 +54,13 @@ class DiffusionTransformer(nn.Module):
     def forward(
         self, 
         actions: TensorType["batch", "action_horizon", "action_dim"], # actions to predict 
-        conditions: TensorType["batch", "obs_horizon", "k", "d_model"] # past observations
+        conditions: TensorType["batch", "obs_horizon", "k", "d_model"], # past observation 
+        actions_idxs: TensorType["batch", "action_horizon"], 
+        conditions_idxs: TensorType["batch", "obs_horizon"]
         ) -> torch.Tensor:   
              
         batch_size = actions.shape[0]
+        
         timesteps = torch.randint(
             low=0, 
             high=self.noise_scheduler_kwargs.num_train_timesteps, 
@@ -66,7 +69,7 @@ class DiffusionTransformer(nn.Module):
             device=actions.device
             ) # [batch]
         
-        noise = torch.randn(size=(batch_size, self.action_horizon, self.action_dim)) # [batch, action_horizon, action_dim]
+        noise = torch.randn_like(actions) # [batch, action_horizon, action_dim]
         padding_mask = torch.all(torch.isnan(actions), dim=-1) # [batch, obs_horizon]
         
         # Forward process: Add noise to input sample 
@@ -84,10 +87,10 @@ class DiffusionTransformer(nn.Module):
     
     def _forward_process(
         self, 
-        actions: TensorType["batch", "steps", "action_dim"],
-        noise: TensorType["batch", "steps", "action_dim"], 
+        actions: TensorType["batch", "action_horizon", "action_dim"],
+        noise: TensorType["batch", "action_horizon", "action_dim"], 
         timesteps: TensorType["batch"]
-        ) -> TensorType["batch", "steps", "action_dim"]: 
+        ) -> TensorType["batch", "action_horizon", "action_dim"]: 
 
         noisy_sample = self.scheduler.add_noise(original_samples=actions, noise=noise, timesteps=timesteps) # [batch, n_steps, action_dim] 
         
@@ -95,17 +98,15 @@ class DiffusionTransformer(nn.Module):
     
     def _backward_process( # reconstruct sample from random noise
         self, 
-        noisy_actions: TensorType["batch", "steps", "action_dim"], 
-        conditions: TensorType["batch", "steps", "k", "d_model"], # k: number of condition modalities 
+        noisy_actions: TensorType["batch", "action_horizon", "action_dim"], 
+        conditions: TensorType["batch", "obs_horizon", "k", "d_model"], # k: number of condition modalities 
         timesteps: TensorType["batch"], 
-        padding_mask: Optional[TensorType["batch", "steps"]]=None
-        ) -> TensorType["batch", "steps", "action_dim"]: 
+        padding_mask: Optional[TensorType["batch", "action_horizon"]]=None
+        ) -> TensorType["batch", "action_horizon", "action_dim"]: 
+                        
+        conditions = torch.sum(conditions, dim=-2) # [batch, obs_horizon, d_model]
         
-        tgt_mask = nn.Transformer.generate_square_subsequent_mask(conditions.shape[1]) # [n_steps, n_steps]
-                
-        conditions = torch.sum(conditions, dim=-2) # [batch, n_steps, d_model]
-        
-        noisy_actions_emb = self.action_down(noisy_actions) # [batch, n_steps, d_model]
+        noisy_actions_emb = self.action_down(noisy_actions) # [batch, action_horizon, d_model]
         noisy_actions_emb = self.positional_encoding(noisy_actions_emb) # [batch, n_steps, d_model]
         
         timesteps = timesteps.unsqueeze(-1).to(torch.float32) # [batch, 1]
@@ -116,7 +117,6 @@ class DiffusionTransformer(nn.Module):
         out = self.decoder(
             tgt=tgt, 
             memory=conditions,
-            tgt_mask=tgt_mask,
             tgt_key_padding_mask=padding_mask, 
             memory_key_padding_mask=padding_mask
             ) # [batch, n_steps, d_model]
