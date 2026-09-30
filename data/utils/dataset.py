@@ -168,7 +168,7 @@ class MimicGenRobotDataset(Dataset):
             
             item["rgb_one_pos"] = rgb_one_pos
             item["rgb_two_pos"] = rgb_two_pos
-            # item["g_qpos_plus"] = g_qpos_plus
+            item["g_qpos_plus"] = g_qpos_plus
 
         if hasattr(self, "transforms"): 
             rgb_one = self.transforms(rgb_one)

@@ -11,8 +11,9 @@ datamodule:
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
   cfgs_dir: ${cfgs_dir}
-  window_size: 8
-  crop_factor: 1
+  
+  action_horizon: 8 
+  condition_horizon: 10
   robots: 
     - iiwa 
     - panda 
