@@ -1,3 +1,6 @@
+# ADJUSTED FROM: 
+# https://github.com/nico-bohlinger/one_policy_to_run_them_all
+
 from omegaconf import DictConfig 
 
 import torch 
@@ -25,8 +28,7 @@ class RobotConditionedEncoder(nn.Module):
         self.init_tau_min = getattr(self.h_kwargs, "tau_min", 0.0)
         self.epsilon = getattr(self.h_kwargs, "epsilon", 1e-6)
 
-        self.tau = nn.Parameter(torch.empty(self.init_tau-self.init_tau_min, dtype=torch.float32))
-        nn.init.xavier_uniform_(self.tau)
+        self.tau = nn.Parameter(torch.tensor(data=(self.init_tau-self.init_tau_min), dtype=torch.float32))
 
     def _build_dsc_encoder(self) -> nn.Sequential:
         input_dim = getattr(self.dsc_kwargs, "input_dim", None) 
