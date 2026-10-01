@@ -21,6 +21,7 @@ def main(cfg):
     
     trainer.fit(model=model, datamodule=datamodule)
     
+    
 if __name__ == "__main__": 
     try:
         multiprocessing.set_start_method("spawn")

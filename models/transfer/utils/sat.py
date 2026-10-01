@@ -1,14 +1,7 @@
-import os 
 from omegaconf import DictConfig
 
-import torch 
 import torch.nn as nn 
-import torch.nn.functional as F
 from torchtyping import TensorType
-
-from r3m import load_r3m
-
-from models.utils.utils import PositionalEncoding
 
 
 class SkillAllignmentTransformer(nn.Module): 
@@ -32,7 +25,6 @@ class SkillAllignmentTransformer(nn.Module):
         
         self.encoder_layer = nn.TransformerEncoderLayer(**self.sat_layer_kwargs)
         self.encoder_transformer = nn.TransformerEncoder(self.encoder_layer, **self.sat_kwargs)
-        self.pe = PositionalEncoding(**self.pe_kwargs)
         
     def forward(
         self, 

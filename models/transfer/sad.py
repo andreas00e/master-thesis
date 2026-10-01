@@ -2,17 +2,17 @@ import os
 from typing import Any
 from omegaconf import DictConfig
 
-from r3m import load_r3m
-
 import torch
-torch.autograd.set_detect_anomaly(True)
 import torch.nn as nn
 import lightning.pytorch as pl
 
-from models.transfer.utils.sat import SkillAllignmentTransformer
-from models.transfer.utils.rce import RobotConditionedEncoder
+from r3m import load_r3m
+
 from models.transfer.utils.dit import DiffusionTransformer
 from models.transfer.utils.pooling import CrossAttentionQueryPooling
+from models.transfer.utils.rce import RobotConditionedEncoder
+from models.transfer.utils.sat import SkillAllignmentTransformer
+
 from models.discover.skill_encoder import SkillEncoder
 
 
@@ -50,6 +50,12 @@ class SkillConditionedActionDecoder(pl.LightningModule):
         # Trainable models 
         self.obs_down = nn.Linear(512, self.d_model)
         
+        self.gripperEncoder = nn.Sequential(
+            nn.Linear(1, self.d_model // 2), 
+            nn.ReLU(), 
+            nn.Linear(self.d_model // 2, self.d_model)
+        )  
+        
         self.rce = RobotConditionedEncoder(**self.rce_kwargs)
         self.dit = DiffusionTransformer(**self.dit_kwargs)
         self.sat = SkillAllignmentTransformer(self.obs_encoder, self.tse,  **self.sat_kwargs)
@@ -72,26 +78,34 @@ class SkillConditionedActionDecoder(pl.LightningModule):
         
         batch_size, seq_len = batch["rgb_one"].shape[:2]
                 
-        rgb_one = batch["rgb_one"].view(-1, *batch["rgb_one"].shape[2:]) # [batch*seq_len, channels=3, height=224, width=224]
-        rgb_one = self.obs_encoder(rgb_one) # [batch*seq_len, *]
-        rgb_one = self.obs_down(rgb_one) # [batch*seq_len, d_model]
-        rgb_one = rgb_one.view(batch_size, seq_len, -1) # [batch, seq_len, d_model]
+        rgb_one = batch["rgb_one"].view(-1, *batch["rgb_one"].shape[2:]) # [batch*observation_horizon, channels=3, height=224, width=224]
+        rgb_one = self.obs_encoder(rgb_one) # [batch*observation_horizon, *]
+        rgb_one = self.obs_down(rgb_one) # [batch*observation_horizon, d_model]
+        rgb_one = rgb_one.view(batch_size, seq_len, -1) # [batch, observation_horizon, d_model]
         
-        rgb_two = batch["rgb_two"].view(-1, *batch["rgb_two"].shape[2:]) # [batch*seq_len, channels=3, height=224, width=224]
-        rgb_two = self.obs_encoder(rgb_two) # [batch*seq_len, *]
-        rgb_two = self.obs_down(rgb_two) # [batch*seq_len, d_model]
-        rgb_two = rgb_two.view(batch_size, seq_len, -1) # [batch, seq_len, d_model]
+        rgb_two = batch["rgb_two"].view(-1, *batch["rgb_two"].shape[2:]) # [batch*observation_horizon, channels=3, height=224, width=224]
+        rgb_two = self.obs_encoder(rgb_two) # [batch*observation_horizon, *]
+        rgb_two = self.obs_down(rgb_two) # [batch*observation_horizon, d_model]
+        rgb_two = rgb_two.view(batch_size, seq_len, -1) # [batch, observation_horizon, d_model]
         
-        rce_emb = self.rce(batch["joint_dsc"], batch["joint_obs"]) # [batch, seq_len, d_model]
+        rce_emb = self.rce(batch["joint_dsc"], batch["joint_obs"]) # [batch, observation_horizon, d_model]
+        gripper_emb = self.gripperEncoder(batch["g_qpos"]) # [batch, observation_horizon, d_model]
 
-        conditions = [rgb_one, rgb_two, rce_emb] 
-        conditions = self.attention_pooling(conditions) # [batch, seq_len, k, d_model] 
+        conditions = [rgb_one, rgb_two, rce_emb, gripper_emb] 
+        conditions = self.attention_pooling(conditions) # [batch, observation_horizon, k, d_model] 
         
-        loss_bc = self.dit(batch["actions"], conditions)       
-
+        loss_bc = self.dit(batch["actions"], conditions, batch["actions_idxs"], batch["conditions_idxs"]) 
+              
+        loss_sat = self.sat()
+        
+        loss = loss_bc + loss_sat
+        
         self.log_dict({
-            f"{stage}/loss_bc": loss_bc, 
-        },                             
+            f"{stage}/loss_sat": loss_sat,
+            f"{stage}/loss_bc": loss_bc,
+            f"{stage}/loss": loss,
+
+        },                            
         logger=True, 
         prog_bar=True,
         on_step=(stage == "train"), 

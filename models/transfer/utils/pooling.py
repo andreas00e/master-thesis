@@ -9,13 +9,13 @@ from torchtyping import TensorType
 class CrossAttentionQueryPooling(nn.Module): 
     def __init__(
         self,
-        k: int,
-        d_model: int 
+        d_model: int, 
+        k: int=4
         ) -> None:
         super().__init__()
         
-        self.k = k # number of learnable prototypes 
         self.d_model = d_model
+        self.k = k # number of learnable prototypes 
         
         self.q = nn.Parameter(torch.empty(size=(1, 1, self.k, self.d_model), dtype=torch.float32)) # [1, 1, k, d_model]
         nn.init.xavier_uniform_(self.q)

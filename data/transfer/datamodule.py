@@ -26,15 +26,15 @@ class TransferDataModule(pl.LightningDataModule):
         tasks: Optional[Union[str, List[str]]]=None, 
         data_distribution: str="d0", 
         data_portion: float=1.0,
-        window_size: int=8, 
-        chunk_size: int=1, 
+        action_horizon: int=8, 
+        condition_horizon: int=10, 
         crop_factor: float=1.0,       
         consistent_batch: bool=True, 
         batch_size: int=16,
         shuffle: bool=True,  
         num_workers: int=0, 
         pin_memory: bool=False, 
-        persistent_workers: bool=True,
+        persistent_workers: bool=False,
         drop_last: bool=False, 
         dataset_lengths: List[float]=[0.8, 0.1, 0.1],
         seed: int=42, 
@@ -51,8 +51,8 @@ class TransferDataModule(pl.LightningDataModule):
         
         self.data_distribution = data_distribution
         self.data_portion = data_portion
-        self.window_size = window_size
-        self.chunk_size = chunk_size
+        self.action_horizon = action_horizon
+        self.condition_horizon = condition_horizon
         self.crop_factor = crop_factor
         
         self.consistent_batch = consistent_batch
@@ -152,9 +152,12 @@ class TransferDataModule(pl.LightningDataModule):
         dataset = [
             TransferDataset(
                 demo_map=demo_map[f"{task}{robot}"],
-                crop_factor=self.crop_factor, 
                 joint_dsc=self.joint_dsc, 
-                transforms_list=self.transforms_list
+                dataframe_gripper=self.dataframe_gripper, 
+                transforms_list=self.transforms_list, 
+                action_horizon=self.action_horizon, 
+                condition_horizon=self.condition_horizon, 
+                crop_factor=self.crop_factor, 
             )
             for task in self.tasks 
             for robot in self.robots

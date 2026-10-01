@@ -11,31 +11,28 @@ datamodule:
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
   cfgs_dir: ${cfgs_dir}
-  
-  action_horizon: 8 
-  condition_horizon: 10
-  robots: 
-    - iiwa 
-    - panda 
-  tasks:
-    - square
-  batch_size: 4
-  shuffle: true
-  num_workers: 0
-  pin_memory: true 
-  drop_last: true
-  persistent_workers: false 
-
-  dataset_lengths: 
-  - 0.8 
-  - 0.1 
-  - 0.1
 
   transforms_list: 
     - to_image 
     - resize_cnn
     - to_dtype_cnn
     - normalize 
+  
+  robots: 
+    - iiwa 
+    - panda 
+  tasks:
+    - square
+
+  action_horizon: 8 
+  condition_horizon: 10
+
+  batch_size: 4
+
+  dataset_lengths: 
+  - 0.8 
+  - 0.1 
+  - 0.1
   
 model: 
   _target_: models.transfer.sad.SkillConditionedActionDecoder
@@ -46,7 +43,7 @@ model:
   rce_kwargs:
     dsc_kwargs: 
       input_dim: 3
-      hidden_dim: 64
+      hidden_dim: ${eval:"${d_model} // 2"}
       output_dim: ${d_model}
 
     obs_kwargs: 
@@ -61,27 +58,27 @@ model:
   dit_kwargs:
     d_model: ${d_model}
     action_dim: 7  
-    action_horizon: 16 
+    action_horizon: ${datamodule.action_horizon} 
 
     noise_scheduler_kwargs: 
       num_train_timesteps:  100 
-      clip_sample: false 
+      clip_sample: false # do not clip output to [-1, 1]
 
     decoder_layer_kwargs: 
       d_model: ${d_model} 
-      nhead: 2 
-      dim_feedforward: 1024
+      nhead: 4 
+      dim_feedforward: ${eval:"${d_model} * 2"}
       batch_first: true
 
     transformer_decoder_kwargs: 
-      num_layers: 2 
+      num_layers: 4 
 
     pe_kwargs: 
       d_model: ${d_model}
       max_len: 300
 
   pool_kwargs: 
-    k: 3 
+    k: 4 
     d_model: ${d_model}
 
   sat_kwargs: 
@@ -107,7 +104,7 @@ model:
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
 
-  name: debugging
+  name: a_new_hope
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_transfer
 
@@ -122,3 +119,17 @@ trainer:
   enable_progress_bar: true
   profiler: simple 
   default_root_dir: logs/skill_transfer/
+
+callbacks: 
+  learning_rate_monitor: 
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor 
+    logging_interval: step 
+
+  model_checkpoint: 
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint 
+    monitor: val/loss
+    dirpath: outputs/checkpoints/${logger.project}
+    filename: 'best-checkpoint-{epoch:02d}-{val/loss:.2f}'
+    save_top_k: 1 
+    mode: min 
+    save_last: true

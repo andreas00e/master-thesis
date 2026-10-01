@@ -25,7 +25,8 @@ class RobotConditionedEncoder(nn.Module):
         self.init_tau_min = getattr(self.h_kwargs, "tau_min", 0.0)
         self.epsilon = getattr(self.h_kwargs, "epsilon", 1e-6)
 
-        self.tau = nn.Parameter(torch.tensor(self.init_tau - self.init_tau_min), requires_grad=True)
+        self.tau = nn.Parameter(torch.empty(self.init_tau-self.init_tau_min, dtype=torch.float32))
+        nn.init.xavier_uniform_(self.tau)
 
     def _build_dsc_encoder(self) -> nn.Sequential:
         input_dim = getattr(self.dsc_kwargs, "input_dim", None) 
@@ -34,7 +35,11 @@ class RobotConditionedEncoder(nn.Module):
         
         if any([isinstance(dim, type(None)) for dim in [input_dim, hidden_dim, output_dim]]): 
             raise ValueError("Linear layer dimensions of the description encoder cannot be zero!")
-        else:   
+        else:
+            input_dim = int(input_dim)
+            hidden_dim = int(hidden_dim)
+            output_dim = int(output_dim)
+            
             return nn.Sequential(
                 nn.Linear(input_dim, hidden_dim),
                 nn.LayerNorm(hidden_dim),
@@ -50,6 +55,9 @@ class RobotConditionedEncoder(nn.Module):
         if any([isinstance(dim, type(None)) for dim in [input_dim, output_dim]]): 
             raise ValueError("Linear layer dimensions of the observation encoder cannot be zero!")
         else:  
+            input_dim = int(input_dim)
+            output_dim = int(output_dim)
+            
             return nn.Sequential(
                 nn.Linear(input_dim, output_dim), 
                 nn.ELU()

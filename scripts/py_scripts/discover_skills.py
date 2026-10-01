@@ -1,7 +1,8 @@
 import hydra
 import multiprocessing
-import lightning.pytorch as pl
 from hydra.utils import instantiate
+
+import lightning.pytorch as pl
 
 from scripts.py_scripts.setup_environment import setup_environment
 setup_environment()
