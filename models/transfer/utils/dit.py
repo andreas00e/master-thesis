@@ -3,7 +3,7 @@ from omegaconf import DictConfig
 
 import torch 
 import torch.nn as nn 
-import torch.nn.functional as F 
+
 from torchtyping import TensorType
 
 from diffusers import DDPMScheduler
@@ -16,7 +16,6 @@ class DiffusionTransformer(nn.Module):
         d_model: int,
         action_dim: int, 
         action_horizon: int, 
-        condition_horizon: int, 
         noise_scheduler_kwargs: DictConfig, 
         decoder_layer_kwargs: DictConfig, 
         transformer_decoder_kwargs: DictConfig, 
@@ -27,7 +26,6 @@ class DiffusionTransformer(nn.Module):
         self.d_model = d_model
         self.action_dim = action_dim 
         self.action_horizon = action_horizon
-        self.condition_horizon = condition_horizon
         
         self.noise_scheduler_kwargs = noise_scheduler_kwargs
         self.decoder_layer_kwargs = decoder_layer_kwargs 
@@ -70,15 +68,15 @@ class DiffusionTransformer(nn.Module):
             ) # [batch]
         
         noise = torch.randn_like(actions) # [batch, action_horizon, action_dim]
-        padding_mask = torch.all(torch.isnan(actions), dim=-1) # [batch, action_horizon]
+        tgt_padding_mask = torch.all(torch.isnan(actions), dim=-1) # [batch, action_horizon]
         
         # Forward process: Add noise to input sample 
         noisy_actions = self._forward_process(actions, noise, timesteps) # [batch, n_steps, action_dim]
          
         # Backward process
-        predicted_noise = self._backward_process(noisy_actions, conditions, actions_idxs, conditions_idxs, timesteps, padding_mask)
+        predicted_noise = self._backward_process(noisy_actions, conditions, actions_idxs, conditions_idxs, timesteps, tgt_padding_mask)
         
-        valid_mask = (~padding_mask).float()
+        valid_mask = (~tgt_padding_mask).float()
         loss_nom = torch.sum(torch.mean((noise - predicted_noise) ** 2, dim=-1) * valid_mask, dim=-1) # [batch]
         loss_denom = torch.sum(valid_mask, dim=-1) # [batch]
         loss = torch.mean(loss_nom / loss_denom)
@@ -103,28 +101,29 @@ class DiffusionTransformer(nn.Module):
         actions_idxs: TensorType["batch", "action_horizon"], 
         conditions_idxs: TensorType["batch", "condition_horizon"], 
         timesteps: TensorType["batch"], 
-        padding_mask: Optional[TensorType["batch", "action_horizon"]]=None, 
+        tgt_padding_mask: Optional[TensorType["batch", "action_horizon"]]=None, 
         ) -> TensorType["batch", "action_horizon", "action_dim"]: 
                         
         conditions = torch.sum(conditions, dim=-2) # [batch, condition_horizon, d_model]
-        conditions = self.positional_encoding(conditions, idxs=conditions_idxs)
+        memory_padding_mask = torch.all(torch.isnan(conditions), dim=-1) # [batch, condition_horizon]
+        conditions = self.positional_encoding(conditions, seq_idxs=conditions_idxs)
         
         noisy_actions_emb = self.action_down(noisy_actions) # [batch, action_horizon, d_model]
-        noisy_actions_emb = self.positional_encoding(noisy_actions_emb, actions_idxs) # [batch, n_steps, d_model]
+        noisy_actions_emb = self.positional_encoding(noisy_actions_emb, seq_idxs=actions_idxs) # [batch, n_steps, d_model]
         
         timesteps = timesteps.unsqueeze(-1).to(torch.float32) # [batch, 1]
         timesteps = self.sinusoidal_embedding(timesteps) # [batch, d_model]
         timesteps_emb = self.time_emb(timesteps).unsqueeze(1) # [batch, 1, d_model]
         tgt = noisy_actions_emb + timesteps_emb # [batch, n_steps, d_model] 
         
-        tgt_mask = nn.Transformer.generate_square_subsequent_mask(self.action_horizon)
+        tgt_mask = nn.Transformer.generate_square_subsequent_mask(self.action_horizon, device=conditions.device)
 
         out = self.decoder(
             tgt=tgt, # self.action_horizon to predict actions 
             memory=conditions, # self.condition_horizon last observations
             tgt_mask=tgt_mask, 
-            tgt_key_padding_mask=padding_mask, 
-            memory_key_padding_mask=padding_mask
+            tgt_key_padding_mask=tgt_padding_mask, 
+            memory_key_padding_mask=memory_padding_mask
             ) # [batch, n_steps, d_model]
         
         predicted_noise = self.action_up(out) # [batch, n_steps, action_dim]
