@@ -120,7 +120,7 @@ class TransferDataset(Dataset):
         rgb_two = torch.from_numpy(rgb_two).permute(0, 3, 1, 2) # [condition_horizon, channels=3, height=224, width=224]    
         rgb_two = self.transforms(rgb_two)
         
-        joint_dsc = self.joint_dsc[robot].T # [7, 3]
+        joint_dsc = self.joint_dsc[robot].T # [joint=7, 3]
         
         joint_pos = demo_obs["robot0_joint_pos"][condition_values] # [condition_values, joints]
         joint_pos = np.repeat(joint_pos, condition_counts, axis=0) # [condition_horizon, joints]
@@ -141,16 +141,17 @@ class TransferDataset(Dataset):
             g_qpos = np.clip((g_qpos - g_min) / ((g_max - g_min) + 1e-8), 0.0, 1.0) # [condition_horizon, d] 
             
         g_qpos = np.mean(g_qpos, axis=-1) # [condition_horizon]
-        g_qpos = torch.from_numpy(g_qpos).to(torch.float32)
+        g_qpos = torch.from_numpy(g_qpos).to(torch.float32) .unsqueeze(-1)
 
-        item["rgb_one"] = rgb_one
-        item["rgb_two"] = rgb_two
-        item["joint_dsc"] = joint_dsc
-        item["joint_obs"] = joint_obs
-        item["g_qpos"] = g_qpos
+        item["actions"] = actions # [action_horizon, action_dim]
+        item["rgb_one"] = rgb_one # [condition_horizon, channels=3, height=224, width=224] 
+        item["rgb_two"] = rgb_two # [condition_horizon, channels=3, height=224, width=224] 
+        item["joint_dsc"] = joint_dsc # [joints=7, 3]
+        item["joint_obs"] = joint_obs  # [condition_horizon, joints, 2]
+        item["g_qpos"] = g_qpos # [condition_horizon]
         
-        item["task"] = torch.tensor(TASK_DICT[task], dtype=torch.long) # []
-        item["robot"] = torch.tensor(ROBOT_DICT[robot], dtype=torch.long) # []
+        item["task"] = torch.full(size=(1, ), fill_value=TASK_DICT[task], dtype=torch.long) # []
+        item["robot"] = torch.full(size=(1, ), fill_value=ROBOT_DICT[robot], dtype=torch.long) # []
         item["actions_idxs"] = torch.from_numpy(actions_idxs) # [action_horizon]
         item["conditions_idxs"] = torch.from_numpy(conditions_idxs) # [condition_horizon]
 

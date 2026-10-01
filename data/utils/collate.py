@@ -27,12 +27,12 @@ def collate_discover_test(batch: List[TensorType]) -> Dict[str, TensorType["*"]]
 
 def collate_transfer(batch: List[Dict[str, TensorType["steps", "*"]]]) -> Dict[str, TensorType["*"]]: 
     if len(batch) <= 0: raise ValueError(f"Batch has to contain at least one element, got {len(batch)}.")
-    
+
     return {
         key: pad_sequence(
             [b[key] for b in batch], 
             batch_first=True, 
-            padding_value=float("nan") if batch[0][key].is_floating_point() else 0
+            padding_value=float("nan") if batch[0][key].is_floating_point() else -1
             )
         for key in batch[0].keys()  
     }

@@ -71,7 +71,7 @@ class TransferDataModule(pl.LightningDataModule):
         self.robots, self.tasks, self.files = get_files(self.data_dir, robots, tasks) # all hdf5 files containg given robot(s) and task(s)
         self.metadata = get_metadata(self.meta_dir, self.files)
         self.dataframe_gripper = pd.read_csv(self.meta_dir / "gripper_state_robot.csv")
-        self.demo_map, self.window_size = get_demo_dict(self.metadata, self.files, self.window_size) # Tuple[Dict[str, List[Tuple[str, str, int]]], int]
+        self.demo_map, _ = get_demo_dict(self.metadata, self.files) # Tuple[Dict[str, List[Tuple[str, str, int]]], int]
             
         self.train_dataset = None
         self.val_dataset = None
