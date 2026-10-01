@@ -96,14 +96,14 @@ class SkillConditionedActionDecoder(pl.LightningModule):
         
         loss_bc = self.dit(batch["actions"], conditions, batch["actions_idxs"], batch["conditions_idxs"]) 
               
-        loss_sat = self.sat()
+        # loss_sat = self.sat()
         
-        loss = loss_bc + loss_sat
+        # loss = loss_bc + loss_sat
         
         self.log_dict({
-            f"{stage}/loss_sat": loss_sat,
+            #  f"{stage}/loss_sat": loss_sat,
             f"{stage}/loss_bc": loss_bc,
-            f"{stage}/loss": loss,
+            # f"{stage}/loss": loss,
 
         },                            
         logger=True, 
