@@ -152,7 +152,7 @@ def get_demo_list(metadata: pd.DataFrame, files: List[Union[str,os.PathLike]], w
     
     return demo_map, window
 
-def get_demo_dict(metadata: pd.DataFrame, files: List[Union[str, os.PathLike]], window: int) -> Tuple[Dict[str, List[Tuple[str, str, int]]], int]: 
+def get_demo_dict(metadata: pd.DataFrame, files: List[Union[str, os.PathLike]], window: Optional[int]=16) -> Tuple[Dict[str, List[Tuple[str, str, int]]], int]: 
     demo_dict: Dict[str, List[Tuple[str, str, int]]] = {}
     min_horizon = float("inf")
     
