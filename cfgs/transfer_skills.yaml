@@ -129,7 +129,7 @@ callbacks:
     _target_: lightning.pytorch.callbacks.ModelCheckpoint 
     monitor: val/loss_bc
     dirpath: outputs/checkpoints/${logger.project}
-    filename: 'best-checkpoint-{epoch:02d}-{val/loss:.2f}'
+    filename: 'best-checkpoint-{epoch:02d}-{val_loss:.2f}'
     save_top_k: 1 
     mode: min 
     save_last: true
