@@ -184,7 +184,7 @@ class TransformerEncoder(nn.Module):
         self, 
         x: TensorType["batch*chunk, window", "d_model"], 
         idxs: Optional[TensorType["batch", "chunk", "window"]]=None, 
-        src_key_padding_mask: Optional[TensorType["batch", "max_steps", "d_model"]]=None
+        src_key_padding_mask: Optional[TensorType["batch", "n_steps", "d_model"]]=None
         ) -> torch.Tensor: 
         
         cls_token = self.cls_token.expand(x.shape[0], -1, -1) # [batch*chunk, 1, d_model]
@@ -193,14 +193,11 @@ class TransformerEncoder(nn.Module):
         x = self.pe(x, idxs) # [batch*chunk, 1+window, d_model]
         
         if src_key_padding_mask is not None: 
-            x = self.transformerEncoder(x, src_key_padding_mask=src_key_padding_mask)  # [batch_size, max_steps, d_model]
+            x = self.transformerEncoder(x, src_key_padding_mask=src_key_padding_mask)  # [batch_size, n_steps, d_model]
+            x = x.view(-1, x.shape[-1])
+            x = self.head(x)  # [batch_size, n_steps, d_model]
             
-            batch_size, max_steps, d_model = x.shape
-            x = x.contiguous().view(-1, d_model)
-            
-            x = self.head(x)  
-            x = x.view(batch_size, max_steps, -1) # [batch_size, max_steps, d_model]
-                
+                            
         else:
             x = self.transformerEncoder(x) # [batch*chunk, 1+window, d_model]
             x = x[:, 0, :] # [batch*chunk, d_model]

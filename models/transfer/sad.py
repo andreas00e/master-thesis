@@ -45,7 +45,7 @@ class SkillConditionedActionDecoder(pl.LightningModule):
           
         self.tse = SkillEncoder.load_from_checkpoint(self.tse_ckpt)
         self.tse.requires_grad_(False)
-        self.tse.eval() 
+        self.tse.eval()
         
         # Trainable models 
         self.obs_down = nn.Linear(512, self.d_model)
@@ -58,7 +58,7 @@ class SkillConditionedActionDecoder(pl.LightningModule):
         
         self.rce = RobotConditionedEncoder(**self.rce_kwargs)
         self.dit = DiffusionTransformer(**self.dit_kwargs)
-        self.sat = SkillAllignmentTransformer(self.obs_encoder, self.tse,  **self.sat_kwargs)
+        self.sat = SkillAllignmentTransformer(**self.sat_kwargs)
         self.attention_pooling = CrossAttentionQueryPooling(**self.pool_kwargs)
 
     def configure_optimizers(self):
@@ -92,18 +92,19 @@ class SkillConditionedActionDecoder(pl.LightningModule):
         gripper_emb = self.gripperEncoder(batch["g_qpos"]) # [batch, observation_horizon, d_model]
 
         conditions = [rgb_one, rgb_two, rce_emb, gripper_emb] 
-        conditions = self.attention_pooling(conditions) # [batch, observation_horizon, k, d_model] 
+        conditions = self.attention_pooling(conditions) # [batch, observation_horizon, m, d_model] 
         
-        loss_bc = self.dit(batch["actions"], conditions, batch["actions_idxs"], batch["conditions_idxs"]) 
-              
-        # loss_sat = self.sat()
+        loss_bc = self.dit(batch["actions"], conditions, batch["actions_idxs"], batch["conditions_idxs"])         
         
-        # loss = loss_bc + loss_sat
+        z_tilde = self.tse.predict_step(batch) # [batch, observation_horizon, k]
+        loss_sat = self.sat(z_tilde, conditions) # []
+        
+        loss = loss_bc + loss_sat
         
         self.log_dict({
-            #  f"{stage}/loss_sat": loss_sat,
+            f"{stage}/loss_sat": loss_sat,
             f"{stage}/loss_bc": loss_bc,
-            # f"{stage}/loss": loss,
+            f"{stage}/loss": loss,
 
         },                            
         logger=True, 

@@ -147,25 +147,31 @@ class SkillEncoder(pl.LightningModule):
     
     def predict_step(self, batch: Any):
         with torch.no_grad(): 
-            batch_size, chunk, window = batch["rgb_one"].shape[:3]
-            n = batch_size*chunk
+            batch_size, condition_horizon, channels, height, width = batch["rgb_one"].shape
             
+            padding_mask = torch.all(torch.isnan(batch["rgb_one"]), dim=(-1, -2, -3))
+            padding_mask = torch.cat((torch.zeros(size=(batch_size, 1), device=self.device), padding_mask), dim=1)
+
+            rgb_one = batch["rgb_one"].view(-1, channels, height, width)
+            rgb_two = batch["rgb_two"].view(-1, channels, height, width)
+                       
             # 1. Feature Extraction 
-            emb_one = self.visionEncoder(batch["rgb_one"]) # [batch_size*chunk*window, d_model]
-            emb_two = self.visionEncoder(batch["rgb_two"]) # [batch_size*chunk*window, d_model]
+            emb_one = self.visionEncoder(rgb_one) # [batch_size*condition_horizon, d_model]
+            emb_two = self.visionEncoder(rgb_two) # [batch_size*condition_horizon, d_model]
             
             if self.with_both_viewpoints: 
-                emb_rgb = torch.cat(tensors=(emb_one, emb_two), dim=-1) # [batch_size*chunk*window, d_model*2]            
+                emb_rgb = torch.cat(tensors=(emb_one, emb_two), dim=-1) # [batch_size*condition_hoirzon, d_model*2]            
                 emb_rgb = self.down_emb(emb_rgb)
 
             # Sequential Transformer Encoding 
-            emb_rgb = self.sequential(emb_rgb.view(n, window, -1), idxs=batch["idxs"]) # [n, d_model]: robot0_eye_in_hand_view
+            emb_rgb = self.sequential(emb_rgb.view(batch_size, condition_horizon, -1), idxs=batch["conditions_idxs"].unsqueeze(1), src_key_padding_mask=padding_mask) # [n, d_model]: robot0_eye_in_hand_view
+            emb_rgb = emb_rgb.view(batch_size, condition_horizon+1, self.d_model)
             
             # Unit Sphere Normalization 
-            z_rgb = F.normalize(emb_rgb, dim=-1) # [n, d_model]
+            z_rgb = F.normalize(emb_rgb, dim=-1) # [batch_horizon, condition_horizon, d_model]
             
-            z_rgb = self.C(z_rgb) # [n, k] 
-
+            z_rgb = self.C(z_rgb) # [batch_size, condition_horizon, k] 
+            
             return z_rgb
     
     def train(self, mode: bool = True):

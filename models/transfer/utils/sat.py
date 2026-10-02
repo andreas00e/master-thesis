@@ -1,47 +1,44 @@
 from omegaconf import DictConfig
 
-import torch.nn as nn 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F 
 from torchtyping import TensorType
 
 
 class SkillAllignmentTransformer(nn.Module): 
     def __init__(
-        self, 
-        tse: nn.Module, 
-        obs_encoder: nn.Module, 
+        self,  
         encoder_layer_kwargs: DictConfig, 
         transformer_encoder_kwargs: DictConfig,
         pe_kwargs: DictConfig,   
         ) -> None:
         super().__init__() 
-        
-        self.tse = tse
-        self.obs_encoder = obs_encoder
+
         self.sat_layer_kwargs = encoder_layer_kwargs
         self.sat_kwargs = transformer_encoder_kwargs
         self.pe_kwargs = pe_kwargs
+        self.d_model = encoder_layer_kwargs.d_model
         
-        self.linear = nn.Linear(1000, 256)
-        
+        self.x_down = nn.Linear(int(self.d_model*3/2), self.d_model)
+                
         self.encoder_layer = nn.TransformerEncoderLayer(**self.sat_layer_kwargs)
         self.encoder_transformer = nn.TransformerEncoder(self.encoder_layer, **self.sat_kwargs)
         
+        self.encoder_down = nn.Linear(256, 128)
+        
     def forward(
         self, 
-        item,
+        z_tilde: TensorType["batch", "observation_horizon", "d_model"],
+        conditions: TensorType["batch", "observation_horizon", "m", "d_model"] 
         ) -> TensorType["batch_size", "dim"]:
         
-        print("Currently in the Skill Alignment Transformer")
-        a = self.tse.predict_step(item)
-        print(a.shape)
+        conditions = torch.sum(conditions, dim=-2) # [batch, observation_horizon, d_model] 
+        z_tilde = z_tilde[:, 1:, :]
+        x = torch.cat((z_tilde, conditions), dim=-1) # [batch, observation_horizon, d_model*2] 
+        x = self.x_down(x)
+        z_hat = self.encoder_transformer(x) # [batch_size, observation_horizon, d_model]
+        z_hat = self.encoder_down(z_hat)
         
-        # rgb_obs = rgb_obs.view(-1, *rgb_obs_shape[2:]) # [batch_size*steps, channels, height, width]
-        # z_hat = self.obs_encoder(rgb_obs) # [batch_size*steps, d_model]
-        # z_hat = z_hat.view(*rgb_obs_shape[:2], -1) # [batch_size, steps, d_model
-        # z_hat = self.linear(z_hat) # [1000, 256]
-        # # z_hat = self.pe(z_hat, )
-        # z_hat = self.encoder_transformer(z_hat) # [batch_size, steps, d_model]
-        # z_tilde = torch.rand_like(z_hat)  # [batch_size, steps, d_model], TODO: REPLACE WITH TSE EMBEDDINGS!
-        
-        # loss = F.mse_loss(z_tilde, z_hat)
-        return a
+        loss = F.mse_loss(z_tilde, z_hat)
+        return loss
