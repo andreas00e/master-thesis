@@ -80,7 +80,7 @@ class TimeContrastiveLoss(nn.Module):
         tcn_denom = tcn_nom + torch.exp(torch.sum((p_ix * p_iz), dim=-1) / self.temp_time_contrastive) # [batch_size]
         tcn_loss = -torch.sum(torch.log(tcn_nom / tcn_denom)) 
         
-        tcn_loss /= x.shape[0]
+        tcn_loss = tcn_loss / x.shape[0]
         
         return tcn_loss
     

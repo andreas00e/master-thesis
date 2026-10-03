@@ -158,8 +158,7 @@ class TransformerEncoder(nn.Module):
         
         self.head = nn.Sequential(
             nn.Linear(self.d_model, self.d_model * 2, bias=False),
-            nn.BatchNorm1d(self.d_model * 2),
-            nn.ReLU(inplace=True), 
+            nn.ReLU(), 
             nn.Linear(self.d_model * 2, self.d_model)
             )      
         
