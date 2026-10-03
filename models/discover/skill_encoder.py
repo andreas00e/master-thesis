@@ -43,6 +43,7 @@ class SkillEncoder(pl.LightningModule):
         sinkhorn_kwargs: DictConfig, 
         queue_kwargs: DictConfig, 
         tsne_kwargs: DictConfig, 
+        log_every_n_steps: Optional[int]=50, 
         ) -> None: 
         
         super().__init__()
@@ -65,6 +66,7 @@ class SkillEncoder(pl.LightningModule):
         self.sinkhorn_kwargs = sinkhorn_kwargs        
         self.queue_kwargs = queue_kwargs
         self.tsne_kwargs = tsne_kwargs
+        self.log_every_n_steps = log_every_n_steps
         
         if vision_encoder_ckpt is not None: 
             self.visionEncoder = FineTunerVisual.load_from_checkpoint(vision_encoder_ckpt)                
@@ -264,8 +266,8 @@ class SkillEncoder(pl.LightningModule):
             emb_one_pos = self.visionEncoder(batch["rgb_one_pos"]) # [batch_size*chunk*window, d_model]
             emb_two_pos = self.visionEncoder(batch["rgb_two_pos"]) # [batch_size*chunk*window, d_model]
             
-            emb_one = torch.cat(tensors=(emb_one, emb_two), dim=-1) # [batch_size*chunk*window, d_model*2]
-            emb_two = torch.cat(tensors=(emb_one_pos, emb_two_pos), dim=-1) # [batch_size*chunk*window, d_model*2]
+            emb_one = torch.cat(tensors=(emb_one, emb_two), dim=-1) # anchor: [batch_size*chunk*window, d_model*2]
+            emb_two = torch.cat(tensors=(emb_one_pos, emb_two_pos), dim=-1) # positive sample: [batch_size*chunk*window, d_model*2]
             
             emb_one = self.down_emb(emb_one)
             emb_two = self.down_emb(emb_two)
@@ -281,7 +283,8 @@ class SkillEncoder(pl.LightningModule):
         z_gripper = F.normalize(emb_gripper, dim=-1) # [n, d_model]
         
         z_one_full, z_two_full, z_gripper_full = z_one, z_two, z_gripper
-                
+        
+        # Enqueue and/ or Dequeue elements to the FIFO Queue         
         if self.current_epoch >= self.queue_start_epochs and self.queue is not None:
             if self.queue.is_full and stage == "train": # only use queue once it is completely filled
                 queue_features = self.queue.get() # get all features 
@@ -301,10 +304,24 @@ class SkillEncoder(pl.LightningModule):
         
         # 4. Sinkhorn Assignment (Over current batch + queue)
         with torch.no_grad():
-            q = {k: self.sinkhorn(s)[:n] for k, s in c.items()} # [n || n + capacity, k] each: targets
+            q = {k: self.sinkhorn(v)[:n] for k, v in c.items()} # [n || n + capacity, k] each: targets
             
         # Softmax probabilities for current batch elements 
-        p = {k: F.log_softmax(s[:n] / self.prototype_kwargs.tau, dim=-1) for k, s in c.items()} # [n, k]: predictions 
+        p = {k: F.softmax(v[:n] / self.prototype_kwargs.tau, dim=-1) for k, v in c.items()} # [n, k]: predictions 
+        
+        if self.logger is not None and self.training: 
+            if self.global_step % self.log_every_n_steps == 0:
+                p_histogram = wandb.Histogram(
+                    torch.median(p["one"], dim=0).values.detach().cpu().numpy(), 
+                    num_bins=c_one.shape[-1]
+                )
+                
+                self.logger.experiment.log(
+                    {"prototype_histogram": p_histogram}, 
+                    step=self.global_step
+                )
+
+        log_p = {k: torch.log(v) for k, v in p.items()} # [n, k]: predictions 
 
         # Time Contrastive Loss (TCN) - Only computed on current batch elements 
         if self.time_contrastive: 
@@ -316,11 +333,11 @@ class SkillEncoder(pl.LightningModule):
                 f"{stage}/time_contrastive_loss": tcn_loss.detach()
             })
 
-        # one loss per predicting stream: it predicts the codes of the other two
+        # One loss per prediction stream, one code predicts the other two codes
         swav_losses = {}
         for target in c.keys():
-            predictions = [s for s in c.keys() if s != target]
-            swav_losses[target] = torch.mean(torch.stack([torch.mean(-torch.sum((q[prediction] * p[target]), dim=-1)) for prediction in predictions]))
+            predictions = [k for k in c.keys() if k != target]
+            swav_losses[target] = torch.mean(torch.stack([torch.mean(-torch.sum((q[prediction] * log_p[target]), dim=-1)) for prediction in predictions]))
 
         losses.extend(swav_losses.values()) # 3 (+1 TCN) -> num_losses: 4
     
@@ -346,7 +363,6 @@ class SkillEncoder(pl.LightningModule):
             prog_bar=True,
             on_step=(stage == "train"), 
             on_epoch=True,
-            sync_dist=True,
         )
         
         return loss
