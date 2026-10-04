@@ -27,14 +27,14 @@ datamodule:
   consistent_batch: true 
   positive_window_size: 4
   negative_window_size: 12  
-  batch_size: 32
+  batch_size: 128
                     
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
   _recursive_: false
 
   d_model: ${d_model}
-  num_plot: 1000
+  num_plot: 2000
   queue_start_epochs: 5
   freeze_c_epochs: 5 
 
@@ -115,7 +115,7 @@ logger:
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  overfit_batches: 2
+  # overfit_batches: 2
   log_every_n_steps: 1
   accelerator: gpu   
   devices: 
