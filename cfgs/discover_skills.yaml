@@ -27,7 +27,7 @@ datamodule:
   consistent_batch: true 
   positive_window_size: 4
   negative_window_size: 12  
-  batch_size: 128
+  batch_size: 32
                     
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
@@ -37,14 +37,13 @@ model:
   num_plot: 1000
   queue_start_epochs: 5
   freeze_c_epochs: 5 
-  with_both_viewpoints: true 
 
   time_contrastive: true
   temp_time_contrastive: 0.5
 
   with_uncertainty_weighting: true
   uncertainty_weighting_kwargs: 
-    num_losses: 4
+    num_losses: 3
   
   vision_encoder_ckpt: null 
   gripper_encoder_ckpt: null 
@@ -97,7 +96,7 @@ model:
     num_iterations: 3 
 
   queue_kwargs:
-    num_modalities: 3
+    num_modalities: 2
     capacity: 3840
     feature_dim: ${d_model}
 
@@ -110,13 +109,13 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: without_batch_norm_freeze_c
+  name: 128_prototypes
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  # overfit_batches: 2
+  overfit_batches: 2
   log_every_n_steps: 1
   accelerator: gpu   
   devices: 
