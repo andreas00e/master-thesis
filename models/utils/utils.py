@@ -71,7 +71,7 @@ class SinusoidalEmbedding(nn.Module):
     def forward(self, x: TensorType["n", "1"]) -> TensorType["n", "new_d"]:
         if x.ndim != 2: 
             raise ValueError(f"Expected input to be two-dimensional, got {x.ndim}.") 
-        if x.shape[1] != 1: 
+        if x.shape[-1] != 1: 
             raise ValueError(f"Expected feature dimension of input to be one, got {x.shape[1]}") 
         
         new_x = torch.empty(size=(x.shape[0], self.new_d), dtype=x.dtype, device=x.device) # [n, d]

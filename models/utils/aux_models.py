@@ -195,11 +195,10 @@ class TransformerEncoder(nn.Module):
             x = self.transformerEncoder(x, src_key_padding_mask=src_key_padding_mask)  # [batch_size, n_steps, d_model]
             x = x.view(-1, x.shape[-1])
             x = self.head(x)  # [batch_size, n_steps, d_model]
-            
-                            
+                     
         else:
             x = self.transformerEncoder(x) # [batch*chunk, 1+window, d_model]
             x = x[:, 0, :] # [batch*chunk, d_model]
             x = self.head(x) # [batch*chunk, d_model]
         
-        return x        
+        return x              
