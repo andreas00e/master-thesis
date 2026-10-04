@@ -164,7 +164,9 @@ class MimicGenRobotDataset(Dataset):
             rgb_two_pos = self.positive_transforms(rgb_two) # positive sample
             rgb_two_pos = rgb_two_pos[inv].view(*idxs.shape, *rgb_two_pos.shape[1:]) 
             
-            g_qpos_pos = torch.clamp(g_qpos + self.noise_level * torch.randn_like(g_qpos), 0.0, 1.0) # positive sample
+            edge_damping = g_qpos * (1.0 - g_qpos) 
+            noise = self.noise_level * torch.randn_like(g_qpos) * edge_damping
+            g_qpos_pos = torch.clamp(g_qpos + noise, 0.0, 1.0)
             
             item["rgb_one_pos"] = rgb_one_pos
             item["rgb_two_pos"] = rgb_two_pos
