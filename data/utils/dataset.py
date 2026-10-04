@@ -155,7 +155,7 @@ class MimicGenRobotDataset(Dataset):
             
         g_qpos = np.mean(g_qpos, axis=-1) # [uniq]
         g_qpos = g_qpos[inv].reshape(*idxs.shape, 1) # [chunk, window, 1]
-        g_qpos = torch.from_numpy(g_qpos).to(torch.float32)
+        g_qpos = torch.from_numpy(g_qpos).to(torch.float32) 
                 
         if self.contrastive_transforms and hasattr(self, "positive_transforms"):      
             rgb_one_pos = self.positive_transforms(rgb_one) # positive sample
@@ -164,11 +164,11 @@ class MimicGenRobotDataset(Dataset):
             rgb_two_pos = self.positive_transforms(rgb_two) # positive sample
             rgb_two_pos = rgb_two_pos[inv].view(*idxs.shape, *rgb_two_pos.shape[1:]) 
             
-            g_qpos_plus = torch.clamp(g_qpos + self.noise_level * torch.randn_like(g_qpos), 0.0, 1.0) # positive sample
+            g_qpos_pos = torch.clamp(g_qpos + self.noise_level * torch.randn_like(g_qpos), 0.0, 1.0) # positive sample
             
             item["rgb_one_pos"] = rgb_one_pos
             item["rgb_two_pos"] = rgb_two_pos
-            item["g_qpos_plus"] = g_qpos_plus
+            item["g_qpos_pos"] = g_qpos_pos
 
         if hasattr(self, "transforms"): 
             rgb_one = self.transforms(rgb_one)
