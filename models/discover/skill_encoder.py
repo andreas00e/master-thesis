@@ -34,6 +34,7 @@ class SkillEncoder(pl.LightningModule):
         freeze_c_epochs: int, 
         time_contrastive: bool, 
         temp_time_contrastive: float, 
+        gripper_dropout_p: float, 
         with_uncertainty_weighting: bool, 
         uncertainty_weighting_kwargs: DictConfig,
         vision_encoder_ckpt: Optional[str],  
@@ -45,7 +46,7 @@ class SkillEncoder(pl.LightningModule):
         sinkhorn_kwargs: DictConfig, 
         queue_kwargs: DictConfig, 
         tsne_kwargs: DictConfig, 
-        log_every_n_steps: Optional[int]=50, 
+        _log_every_n_steps: Optional[int]=10, 
         ) -> None: 
         
         super().__init__()
@@ -56,7 +57,8 @@ class SkillEncoder(pl.LightningModule):
         self.queue_start_epochs = queue_start_epochs
         self.freeze_c_epochs = freeze_c_epochs
         self.time_contrastive = time_contrastive
-        self.temp_time_contrastive = temp_time_contrastive 
+        self.temp_time_contrastive = temp_time_contrastive
+        self.gripper_dropout_p = gripper_dropout_p 
         self.with_uncertainty_weighting = with_uncertainty_weighting
         self.uncertainty_weighting_kwargs = uncertainty_weighting_kwargs
         self.vision_encoder_ckpt = vision_encoder_ckpt
@@ -68,7 +70,7 @@ class SkillEncoder(pl.LightningModule):
         self.sinkhorn_kwargs = sinkhorn_kwargs        
         self.queue_kwargs = queue_kwargs
         self.tsne_kwargs = tsne_kwargs
-        self.log_every_n_steps = log_every_n_steps
+        self._log_every_n_steps = _log_every_n_steps
         
         if vision_encoder_ckpt is not None: 
             self.visionEncoder = FineTunerVisual.load_from_checkpoint(vision_encoder_ckpt)                
@@ -83,9 +85,8 @@ class SkillEncoder(pl.LightningModule):
             self.gripperEncoder = nn.Sequential(
                 nn.Linear(self.d_model, self.d_model * 2), 
                 nn.ReLU(), 
-                nn.Linear(self.d_model * 2, self.d_model)
-            )  
-            
+                nn.Linear(self.d_model * 2, self.d_model),
+            )
         self.sinusoidal_embedding = SinusoidalEmbedding(d_new=self.d_model)
         
         self.sequential = TransformerEncoder(**self.sequential_kwargs)
@@ -104,6 +105,9 @@ class SkillEncoder(pl.LightningModule):
         if self.time_contrastive: 
             self.timeContrastiveLoss = TimeContrastiveLoss(self.temp_time_contrastive)
         
+        k = self.prototype_kwargs.model.out_features
+        self.register_buffer("prototype_usage_ema", torch.full((k,), 1.0 / k)) # [k]    
+
         self.softDTW = None
         
         self.queue = FIFOQueue(**self.queue_kwargs)
@@ -164,14 +168,14 @@ class SkillEncoder(pl.LightningModule):
     def on_train_batch_end(self, outputs: Any, batch: Any, batch_idx: int) -> None:
         with torch.no_grad():
             self.C.weight.copy_(F.normalize(self.C.weight, dim=1))
-    
-    def on_validation_epoch_start(self) -> None:   
+            
+    def on_validation_epoch_start(self):
         self._c_val.clear()
         self._target_val.clear()
         self._idxs_val.clear()
         self._task_val.clear()
         self._robot_val.clear()
-    
+        
     def on_validation_epoch_end(self) -> None:
         if len(self._c_val) != 0:
             c_all = torch.cat(self._c_val)
@@ -194,8 +198,8 @@ class SkillEncoder(pl.LightningModule):
                     fname=fname
                     )
                 
-                if isinstance(self.logger, pl.loggers.WandbLogger): 
-                    self.logger.experiment.log({"tsne_plot": wandb.Image(fname)})
+            if isinstance(self.logger, pl.loggers.WandbLogger):
+                self.logger.experiment.log({"tsne_plot": wandb.Image(fname)})
                     
             os.remove(fname)
     
@@ -222,7 +226,6 @@ class SkillEncoder(pl.LightningModule):
         
         z_anc_full, z_pos_full = z_anc, z_pos
         
-        # Enqueue and/ or Dequeue elements to the FIFO Queue  
         with torch.no_grad():        
             if self.current_epoch >= self.queue_start_epochs and self.queue is not None:
                 if self.queue.is_full and stage == "train": # only use queue once it is completely filled
@@ -233,50 +236,61 @@ class SkillEncoder(pl.LightningModule):
             if self.queue is not None and stage == "train":     
                 self.queue.enqueue(torch.stack([z_anc.detach(), z_pos.detach()], dim=0))
                 
-        # 3. Prototype Mapping
         c_one = self.C(z_anc_full) # [n || n + capacity, k] 
         c_two = self.C(z_pos_full) # [n || n + capacity, k]
         
         c = {"one": c_one, "two": c_two}
 
-        # 4. Sinkhorn Assignment (Over current batch + queue)
         with torch.no_grad():
             q = {k: self.sinkhorn(v)[:n] for k, v in c.items()} # [n || n + capacity, k] each: targets
             
-        # Softmax probabilities for current batch elements 
         p = {k: F.softmax(v[:n] / self.prototype_kwargs.tau, dim=-1) for k, v in c.items()} # [n, k]: predictions 
         log_p = {k: F.log_softmax(v[:n] / self.prototype_kwargs.tau, dim=-1) for k, v in c.items()} # [n, k]: predictions 
               
-        if self.logger is not None and stage == "train": 
-            if self.global_step % self.log_every_n_steps == 0:
+        if self.logger is not None: 
                 with torch.no_grad(): 
                     _n, k = q["one"].shape
                     protoype_assignments = q["one"].argmax(dim=-1) # [n]
-                    prototype_counts = torch.bincount(protoype_assignments, minlength=k).float()
-                    prototype_fraction = prototype_counts / _n
+                    prototype_counts = torch.bincount(protoype_assignments, minlength=k).float() 
+                    prototype_fraction = prototype_counts / _n # [k]
                     
-                    prototype_histogram = wandb.Histogram(np_histogram=(prototype_fraction.cpu().numpy(), np.arange(k+1)))
-                    num_dead_prototypes = torch.sum(prototype_counts == 0).cpu().item()
-                    top_prototype_fraction = torch.max(prototype_fraction).cpu().item()
+                    if stage == "train":
+                        self.prototype_usage_ema.mul_(0.99).add_(0.01 * prototype_fraction)                    
+                    num_dead_prototypes = torch.sum(self.prototype_usage_ema < 0.1 / k) # []
                     
-                    prototype_mean = torch.mean(q["one"], dim=0) # [n]
+                    top_prototype_fraction = torch.max(prototype_fraction)
+                    
+                    prototype_mean = torch.mean(q["one"].float(), dim=0) # [k]
                     prototype_entropy = -torch.sum((prototype_mean * torch.log(prototype_mean+1e-8))) # []
-                    prototype_perplexity = torch.exp(prototype_entropy).cpu().item() # []
+                    prototype_perplexity = torch.exp(prototype_entropy) / k # []
                     
-                    prediction_mean = torch.mean(p["one"], dim=0) # [n]
+                    prediction_mean = torch.mean(p["one"].float(), dim=0) # [k]
                     prediction_entropy = -torch.sum((prediction_mean * torch.log(prediction_mean+1e-8))) # []
-                    prediction_perplexity = torch.exp(prediction_entropy).cpu().item() # []
+                    prediction_perplexity = torch.exp(prediction_entropy) / k # []
+                    
+                    per_sample_entropy = torch.mean(-torch.sum(p["one"] * log_p["one"], dim=-1) / math.log(k)) # normalized per sample entropy                      
                             
-                    self.logger.experiment.log({
-                        "train/prototype_histogram": prototype_histogram, 
-                        "train/num_dead_prototypes": num_dead_prototypes, 
-                        "train/top_prototype_fraction": top_prototype_fraction, 
-                        "train/prototype_perplexity": prototype_perplexity, 
-                        "train/prediction_perplexity": prediction_perplexity, 
-                        "trainer/global_step": self.global_step
-                    })
+                    self.log_dict({
+                        f"{stage}/num_dead_prototypes": num_dead_prototypes, 
+                        f"{stage}/top_prototype_fraction": top_prototype_fraction, 
+                        f"{stage}/prototype_perplexity": prototype_perplexity, 
+                        f"{stage}/prediction_perplexity": prediction_perplexity, 
+                        f"{stage}/per_sample_entropy": per_sample_entropy, 
+                        
+                    },
+                    logger=True, 
+                    prog_bar=False,
+                    on_step=(stage == "train"),
+                    on_epoch=True,
+                    sync_dist=True
+                    )
+                    
+                    if stage == "train" and self.global_step % self._log_every_n_steps == 0:
+                        prototype_histogram = wandb.Histogram(np_histogram=(prototype_fraction.cpu().numpy(), np.arange(k+1)))
+                        self.logger.experiment.log({
+                            "train/prototype_histogram": prototype_histogram
+                        })
 
-        # Time Contrastive Loss (TCN) - Only computed on current batch elements 
         if self.time_contrastive: 
             t_one = c["one"][:n].view(batch_size, chunk, -1) # [batch_size, chunk, k]
             tcn_loss = self.timeContrastiveLoss(t_one) # []
@@ -284,9 +298,14 @@ class SkillEncoder(pl.LightningModule):
             
             self.log_dict({
                 f"{stage}/time_contrastive_loss": tcn_loss.detach()
-            })
+                },
+                logger=True, 
+                prog_bar=True,
+                on_step=(stage == "train"),
+                on_epoch=True,
+                sync_dist=True
+            )
 
-        # One loss per prediction stream
         swav_losses = {}
         for target in c.keys():
             predictions = [k for k in c.keys() if k != target]
@@ -314,8 +333,9 @@ class SkillEncoder(pl.LightningModule):
             },
             logger=True, 
             prog_bar=True,
-            on_step=(stage=="train"), 
+            on_step=(stage == "train"), 
             on_epoch=True,
+            sync_dist=True
         )
         
         return loss
@@ -331,14 +351,18 @@ class SkillEncoder(pl.LightningModule):
         batch_size, chunk, window = rgb_one.shape[:3]
         n = batch_size*chunk
                 
-        # 1. Feature Extraction 
         emb_one = self.visionEncoder(rgb_one) # [batch_size*chunk*window, d_model]
         emb_two = self.visionEncoder(rgb_two) # [batch_size*chunk*window, d_model]
         emb_gripper = self.gripperEncoder(self.sinusoidal_embedding(g_qpos.view(-1, 1))) # [batch_size*chunk*window, d_model]
         
+        if self.training and self.gripper_dropout_p > 0:
+            keep_p = 1.0 - self.gripper_dropout_p
+            keep = torch.bernoulli(torch.full((n, 1, 1), keep_p, device=emb_gripper.device, dtype=emb_gripper.dtype))
+            emb_gripper = (emb_gripper.view(n, window, -1) * keep / keep_p).view(n * window, -1)
+        
         emb = torch.cat(tensors=(emb_one, emb_two, emb_gripper), dim=-1) # [batch_size*chunk*window, d_model*3]
         emb = self.down_emb(emb)
-        emb = self.sequential(emb.view(n, window, -1), idxs=idxs) # [n, d_model]: anchor 
+        emb = self.sequential(emb.reshape(n, window, -1), idxs=idxs) # [n, d_model]: anchor 
         
         z = F.normalize(emb, dim=-1) # [n, d_model]
         
