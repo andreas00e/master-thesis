@@ -158,6 +158,7 @@ class TransferDataModule(pl.LightningDataModule):
                 action_horizon=self.action_horizon, 
                 condition_horizon=self.condition_horizon, 
                 crop_factor=self.crop_factor, 
+                seed=self.seed
             )
             for task in self.tasks 
             for robot in self.robots
