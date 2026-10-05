@@ -43,7 +43,7 @@ class PositionalEncoding(nn.Module):
                 return x + pe 
             
             else: 
-                raise ValueError(f"Sequence index tensor should have 2 or 3 dimensions, got {seq_idxs.ndim()}")
+                raise ValueError(f"Sequence index tensor should have 2 or 3 dimensions, got {seq_idxs.ndim}")
                 
         else:  
             pe_idxs = torch.arange(x.shape[1], dtype=torch.long, device=x.device) # [1+window]
