@@ -1,5 +1,5 @@
 import os 
-from typing import Any
+from typing import Any, Dict
 from omegaconf import DictConfig
 
 import torch
@@ -73,31 +73,32 @@ class SkillConditionedActionDecoder(pl.LightningModule):
             }
         }   
     
-    def forward(self, batch: Any, batch_idx: int, stage: str) -> torch.Tensor:
+    def forward(self, batch: Dict[str, Any], stage: str) -> torch.Tensor:
         conditions = []
         
-        batch_size, seq_len = batch["rgb_one"].shape[:2]
+        batch_size, num_steps, condition_horizon, = batch["rgb_one"].shape[:3]
                 
-        rgb_one = batch["rgb_one"].view(-1, *batch["rgb_one"].shape[2:]) # [batch*observation_horizon, channels=3, height=224, width=224]
-        rgb_one = self.obs_encoder(rgb_one) # [batch*observation_horizon, *]
-        rgb_one = self.obs_down(rgb_one) # [batch*observation_horizon, d_model]
-        rgb_one = rgb_one.view(batch_size, seq_len, -1) # [batch, observation_horizon, d_model]
+        rgb_one = batch["rgb_one"].view(-1, *batch["rgb_one"].shape[3:]) # [batch*num_steps*condition_horizon, channels=3, height=224, width=224]
+        rgb_one = self.obs_encoder(rgb_one) # [batch*num_steps*condition_horizon, *]
+        rgb_one = self.obs_down(rgb_one) # [batch*num_steps*condition_horizon, d_model]
+        rgb_one = rgb_one.view(batch_size, num_steps, condition_horizon, -1) # [batch, num_steps, condition_horizon, d_model]
         
-        rgb_two = batch["rgb_two"].view(-1, *batch["rgb_two"].shape[2:]) # [batch*observation_horizon, channels=3, height=224, width=224]
-        rgb_two = self.obs_encoder(rgb_two) # [batch*observation_horizon, *]
-        rgb_two = self.obs_down(rgb_two) # [batch*observation_horizon, d_model]
-        rgb_two = rgb_two.view(batch_size, seq_len, -1) # [batch, observation_horizon, d_model]
+        rgb_two = batch["rgb_two"].view(-1, *batch["rgb_two"].shape[3:]) # [batch*num_steps*condition_horizon, channels=3, height=224, width=224]
+        rgb_two = self.obs_encoder(rgb_two) # [batch*num_steps*condition_horizon, *]
+        rgb_two = self.obs_down(rgb_two) # [batch*num_steps*condition_horizon, d_model]
+        rgb_two = rgb_two.view(batch_size, num_steps, condition_horizon, -1) # [batch, num_steps, condition_horizon, d_model]
         
-        rce_emb = self.rce(batch["joint_dsc"], batch["joint_obs"]) # [batch, observation_horizon, d_model]
-        gripper_emb = self.gripperEncoder(batch["g_qpos"]) # [batch, observation_horizon, d_model]
-
+        rce_emb = self.rce(batch["joint_dsc"], batch["joint_obs"]) # [batch, num_steps, condition_horizon, d_model]
+        gripper_emb = self.gripperEncoder(batch["g_qpos"]) # [batch, num_steps, condition_horizon, d_model]
+        
         conditions = [rgb_one, rgb_two, rce_emb, gripper_emb] 
-        conditions = self.attention_pooling(conditions) # [batch, observation_horizon, m, d_model] 
+        conditions = self.attention_pooling(conditions) # [batch, num_steps, condition_horizon, m, d_model] 
         
-        loss_bc = self.dit(batch["actions"], conditions, batch["actions_idxs"], batch["conditions_idxs"])         
+        loss_bc = self.dit(batch["actions"], torch.mean(conditions, dim=1), batch["actions_idxs"], batch["conditions_idxs"][:, 0, ...])         
         
-        z_tilde = self.tse.predict_step(batch) # [batch, observation_horizon, k]
-        loss_sat = self.sat(z_tilde, conditions) # []
+        z_tilde = self.tse.predict_step(batch) # [batch*condition_horizon, k]
+        z_tilde = z_tilde.view(batch_size, num_steps, -1) # [batch, condition_horizon, k]
+        loss_sat = self.sat(z_tilde, torch.mean(conditions, dim=2)) # []
         
         loss = loss_bc + loss_sat
         
@@ -114,10 +115,10 @@ class SkillConditionedActionDecoder(pl.LightningModule):
         sync_dist=True,
         )
         
-        return loss_bc 
+        return loss 
     
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
-        return self(batch, batch_idx, stage="train")
+        return self(batch, stage="train")
         
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
-        return self(batch, batch_idx, stage="val")
+        return self(batch, stage="val")

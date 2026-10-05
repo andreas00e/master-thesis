@@ -215,7 +215,7 @@ class SkillEncoder(pl.LightningModule):
     
     def predict_step(self, batch: Any) -> TensorType["*"]:
         with torch.no_grad(): 
-            z = self(batch["rgb_one"], batch["rgb_two"], batch["g_qpos"],  batch["conditions_idxs"]) 
+            z = self(batch["rgb_one"], batch["rgb_two"], batch["g_qpos"], batch["conditions_idxs"]) 
             c = self.C(z) # [batch_size, k]
 
             return c

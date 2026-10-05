@@ -103,7 +103,7 @@ class DiffusionTransformer(nn.Module):
         timesteps: TensorType["batch"], 
         tgt_padding_mask: Optional[TensorType["batch", "action_horizon"]]=None, 
         ) -> TensorType["batch", "action_horizon", "action_dim"]: 
-                        
+                 
         conditions = torch.sum(conditions, dim=-2) # [batch, condition_horizon, d_model]
         memory_padding_mask = torch.all(torch.isnan(conditions), dim=-1) # [batch, condition_horizon]
         conditions = self.positional_encoding(conditions, seq_idxs=conditions_idxs)
@@ -117,7 +117,7 @@ class DiffusionTransformer(nn.Module):
         tgt = noisy_actions_emb + timesteps_emb # [batch, n_steps, d_model] 
         
         tgt_mask = nn.Transformer.generate_square_subsequent_mask(self.action_horizon, device=conditions.device)
-
+        
         out = self.decoder(
             tgt=tgt, # self.action_horizon to predict actions 
             memory=conditions, # self.condition_horizon last observations
