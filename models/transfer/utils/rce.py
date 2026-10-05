@@ -68,17 +68,17 @@ class RobotConditionedEncoder(nn.Module):
     def forward(
         self, 
         joint_dsc: TensorType["batch", "joints", "dsc_features"], 
-        joint_obs: TensorType["batch", "steps", "joints", "obs_features"]
-        ) -> TensorType["batch", "steps", "d_model"]:
+        joint_obs: TensorType["batch", "num_steps", "condition_horizon" "joints", "obs_features"]
+        ) -> TensorType["batch", "num_steps", "condition_horizon", "d_model"]:
         
         dsc_emb = self.dsc_encoder(joint_dsc) # [batch, joints, d_model]
         dsc_emb = torch.exp(dsc_emb / (self.tau + self.epsilon))  # [batch, jonts, d_model]
         dsc_emb = dsc_emb / torch.sum(dsc_emb, dim=-1, keepdim=True) # [batch, joints, d_model]
-        dsc_emb = dsc_emb.unsqueeze(1).repeat(1, joint_obs.shape[1], 1, 1) # [batch, steps, joints, d_model]
+        dsc_emb = dsc_emb[:, None, None, ...].repeat(1, joint_obs.shape[1], joint_obs.shape[2], 1, 1) # [batch, num_step, condition_horizon, joints, d_model]
 
-        obs_emb = self.obs_encoder(joint_obs) # [batch, steps, joints, d_model]
+        obs_emb = self.obs_encoder(joint_obs) # [batch, num_step, condition_horizon, joints, d_model]
 
-        emb = dsc_emb * obs_emb # [batch, steps, joints, d_model]
-        emb = torch.sum(emb, dim=-2) # [batch, steps, d_model]
+        emb = dsc_emb * obs_emb # [batch, num_step, condition_horizon, joints, d_model]
+        emb = torch.sum(emb, dim=-2) # [batch, condition_horizon, num_step, d_model]
         
         return emb
