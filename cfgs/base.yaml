@@ -19,7 +19,7 @@ datamodule:
 
   robots: null # [iiwa, panda, sawyer, ur5e]
   tasks: null # [square, threading]
-  data_distribution: d0 # d1, both
+  data_distribution: d0 # d0, d1, both
   data_portion: 1.0
   window_size: 8 # > 0
   chunk_size: 1
@@ -29,7 +29,6 @@ datamodule:
   num_workers: 0
   pin_memory: true
   persistent_workers: false
-  drop_last: true
 
   dataset_lengths: 
   - 0.8

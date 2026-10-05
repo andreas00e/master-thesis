@@ -56,6 +56,6 @@ class SameRobotBatchSampler(Sampler):
             if self.drop_last:
                 total_batches += n // self.batch_size
             else:
-                total_batches += math.ceil(n / self.batch_size)  # Exact batch count including partials                
-        
+                total_batches += math.ceil(n / self.batch_size)  # Exact batch count including partials    
+            
         return total_batches

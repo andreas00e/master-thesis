@@ -19,7 +19,7 @@ datamodule:
 
   robots: 
    - iiwa
-   - panda
+   - ur5e
   tasks: 
     - square
 
@@ -40,6 +40,7 @@ model:
 
   time_contrastive: true
   temp_time_contrastive: 0.5
+  gripper_dropout_p: 0.05
 
   with_uncertainty_weighting: true
   uncertainty_weighting_kwargs: 
@@ -76,7 +77,7 @@ model:
     _target_: torch.optim.AdamW
     _recursive_: False
 
-    lr: 1e-4
+    lr: 3e-4
     weight_decay: 1e-6
 
   lr_scheduler_kwargs: 
@@ -109,18 +110,18 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: 128_prototypes
+  name: square_d0
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
 trainer: 
   _target_: lightning.pytorch.Trainer
   # overfit_batches: 2
-  log_every_n_steps: 1
+  log_every_n_steps: 5
   accelerator: gpu   
   devices: 
     - 0
-  max_epochs: 200 
+  max_epochs: 500 
   num_sanity_val_steps: 2
   enable_progress_bar: true
   profiler: simple 
@@ -134,8 +135,8 @@ callbacks:
   model_checkpoint: 
     _target_: lightning.pytorch.callbacks.ModelCheckpoint 
     monitor: val/loss
-    dirpath: outputs/checkpoints/${logger.project}
-    filename: 'best-checkpoint-{epoch:02d}-{val/loss:.2f}'
+    dirpath: outputs/checkpoints/${logger.project}/${logger.name}
+    filename: best-checkpoint
     save_top_k: 1 
     mode: min 
-    save_last: true
+    save_last: false

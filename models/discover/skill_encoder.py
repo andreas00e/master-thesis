@@ -347,7 +347,7 @@ class SkillEncoder(pl.LightningModule):
         g_qpos: TensorType["batch", "chunk", "window", "1"], 
         idxs: TensorType["batch", "chunk", "window"]
         ) -> torch.Tensor:
-
+        
         batch_size, chunk, window = rgb_one.shape[:3]
         n = batch_size*chunk
                 

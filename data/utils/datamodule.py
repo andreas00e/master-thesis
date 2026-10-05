@@ -37,7 +37,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         num_workers: int=0, 
         pin_memory: bool=False, 
         persistent_workers: bool=True,
-        drop_last: bool=False, 
         dataset_lengths: List[float]=[0.8, 0.1, 0.1],
         seed: int=42, 
         ) -> None:
@@ -69,7 +68,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.num_workers = num_workers if num_workers < os.cpu_count() else max(1, os.cpu_count())
         self.pin_memory = pin_memory
         self.persistent_workers = persistent_workers
-        self.drop_last = drop_last
         self.dataset_lengths = dataset_lengths
         self.seed = seed
         
@@ -120,6 +118,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             datasets_validate = self._make_dataset(demo_map["validate"], "validate")
             self.train_dataset = ConcatDataset(datasets_fit)
             self.val_dataset = ConcatDataset(datasets_validate)
+            print(len(self.val_dataset))
 
         if stage == "test" or stage is None: 
             datasets_test = self._make_dataset(demo_map["test"], "test")
@@ -175,16 +174,16 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             
         return dataset 
         
-    def _make_dataloader(self, dataset, shuffle: bool, collate_fn: Callable) -> DataLoader:                 
+    def _make_dataloader(self, dataset, shuffle: bool, drop_last: bool,  collate_fn: Callable) -> DataLoader:                 
         if self.consistent_batch: 
             batch_sampler = SameRobotBatchSampler(
                 concat_dataset=dataset, 
                 n_robots=len(self.robots),
                 batch_size=self.batch_size, 
                 shuffle=shuffle, 
-                drop_last=self.drop_last
+                drop_last=drop_last
             )
-            
+                  
             return DataLoader(
                 dataset=dataset, 
                 batch_sampler=batch_sampler, 
@@ -201,16 +200,15 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,  
             pin_memory=self.pin_memory, 
             persistent_workers=self.persistent_workers if self.num_workers > 0 else False,
-            drop_last=self.drop_last,
+            drop_last=drop_last,
             collate_fn=collate_fn, 
             )
     
     def train_dataloader(self) -> DataLoader:
-        return self._make_dataloader(self.train_dataset, shuffle=self.shuffle, collate_fn=collate_discover)
+        return self._make_dataloader(self.train_dataset, shuffle=self.shuffle, drop_last=True, collate_fn=collate_discover)
     
     def val_dataloader(self) -> DataLoader:
-        return self._make_dataloader(self.val_dataset, shuffle=False, collate_fn=collate_discover)
+        return self._make_dataloader(self.val_dataset, shuffle=False, drop_last=False, collate_fn=collate_discover)
 
     def test_dataloader(self) -> DataLoader:
-        # return self._make_dataloader(self.test_dataset, shuffle=False, collate_fn=collate_discover_test)
-        return self._make_dataloader(self.test_dataset, shuffle=False, collate_fn=collate_discover)
+        return self._make_dataloader(self.test_dataset, shuffle=False, drop_last=False, collate_fn=collate_discover)
