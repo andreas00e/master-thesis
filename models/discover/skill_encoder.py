@@ -10,6 +10,7 @@ from omegaconf import DictConfig
 import torch
 import torch.nn as nn 
 import torch.nn.functional as F
+from torchtyping import TensorType
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 
 import lightning.pytorch as pl 
@@ -212,9 +213,12 @@ class SkillEncoder(pl.LightningModule):
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
         return self._shared_step(batch, stage="val")
     
-    # def predict_step(self, batch: Any, batch_idxs: int):
-    #     with torch.no_grad(): 
-    #         return self(batch["rgb_one"], batch["rgb_two"], batch["g_qpos"], batch["conditions_idxs"]) 
+    def predict_step(self, batch: Any) -> TensorType["*"]:
+        with torch.no_grad(): 
+            z = self(batch["rgb_one"], batch["rgb_two"], batch["g_qpos"],  batch["conditions_idxs"]) 
+            c = self.C(z) # [batch_size, k]
+
+            return c
         
     def _shared_step(self, batch: Dict[str, Any], stage: str) -> torch.Tensor: 
         losses = []
@@ -362,7 +366,7 @@ class SkillEncoder(pl.LightningModule):
         
         emb = torch.cat(tensors=(emb_one, emb_two, emb_gripper), dim=-1) # [batch_size*chunk*window, d_model*3]
         emb = self.down_emb(emb)
-        emb = self.sequential(emb.reshape(n, window, -1), idxs=idxs) # [n, d_model]: anchor 
+        emb = self.sequential(emb.view(n, window, -1), idxs=idxs) # [n, d_model]: anchor 
         
         z = F.normalize(emb, dim=-1) # [n, d_model]
         
