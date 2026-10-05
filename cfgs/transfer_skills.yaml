@@ -1,5 +1,5 @@
 seed: 42
-d_model: 256
+d_model: 512
 
 cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
 data_dir: ${cwd}/imports/mimicgen/datasets/robot
@@ -24,8 +24,8 @@ datamodule:
   tasks:
     - square
 
-  action_horizon: 8 
-  condition_horizon: 10
+  action_horizon: 16
+  condition_horizon: 8
 
   batch_size: 4
 
@@ -38,7 +38,7 @@ model:
   _target_: models.transfer.sad.SkillConditionedActionDecoder
   
   d_model: ${d_model}
-  tse_ckpt: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/outputs/checkpoints/skill_discovery/last-v8.ckpt
+  tse_ckpt: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/outputs/checkpoints/skill_discovery/square_d0/best-checkpoint-epoch=189-val_loss=0.00.ckpt
   
   rce_kwargs:
     dsc_kwargs: 
@@ -103,17 +103,15 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-
-  name: a_new_hope
+  name: transfer_like_its_hot
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_transfer
 
 trainer: 
   _target_: lightning.pytorch.Trainer
   accelerator: gpu   
-  # strategy: ddp # delete to run on single gpu
-  devices: # for ddp: -1 
-    - 0 # single gpu 
+  devices: 
+    - 0 
   max_epochs: 400 
   num_sanity_val_steps: 2
   enable_progress_bar: true
@@ -128,8 +126,8 @@ callbacks:
   model_checkpoint: 
     _target_: lightning.pytorch.callbacks.ModelCheckpoint 
     monitor: val/loss_bc
-    dirpath: outputs/checkpoints/${logger.project}
-    filename: 'best-checkpoint-{epoch:02d}-{val_loss:.2f}'
+    dirpath: outputs/checkpoints/${logger.project}/${logger.name}
+    filename: best-checkpoint
     save_top_k: 1 
     mode: min 
     save_last: true

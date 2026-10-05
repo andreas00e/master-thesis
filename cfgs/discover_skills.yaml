@@ -17,11 +17,8 @@ datamodule:
     - normalize     
   contrastive_transforms: true 
 
-  robots: 
-   - iiwa
-   - ur5e
-  tasks: 
-    - square
+  robots: null
+  tasks: null
 
   data_portion: 1.0
   consistent_batch: true 
@@ -52,12 +49,12 @@ model:
   sequential_kwargs: 
     encoder_layer_kwargs: 
       d_model: ${d_model}
-      nhead: 2 
+      nhead: 4 
       dim_feedforward: ${d_model}
       batch_first: True
 
     transformer_encoder_kwargs:
-      num_layers: 4
+      num_layers: 8
       norm: null
       enable_nested_tensor: False 
       mask_check: False
@@ -110,18 +107,18 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: square_d0
+  name: everything
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  # overfit_batches: 2
+  # overfit_batches: 10
   log_every_n_steps: 5
   accelerator: gpu   
   devices: 
     - 0
-  max_epochs: 500 
+  max_epochs: 1000 
   num_sanity_val_steps: 2
   enable_progress_bar: true
   profiler: simple 
