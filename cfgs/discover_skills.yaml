@@ -17,7 +17,9 @@ datamodule:
     - normalize     
   contrastive_transforms: true 
 
-  robots: null
+  robots: 
+    - iiwa 
+    - panda
   tasks: null
 
   data_portion: 1.0
@@ -32,6 +34,7 @@ model:
 
   d_model: ${d_model}
   num_plot: 2000
+  abs_pe: False
   queue_start_epochs: 5
   freeze_c_epochs: 5 
 
@@ -107,7 +110,7 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: everything
+  name: gripper_relative_pe_d0
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
