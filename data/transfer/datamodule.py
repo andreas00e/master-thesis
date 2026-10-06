@@ -77,7 +77,7 @@ class TransferDataModule(pl.LightningDataModule):
         self.val_dataset = None
         self.test_dataset = None
         
-        self.joint_dsc = self._get_joint_dsc()
+        self.joint_dsc = get_joint_dsc(self.cfgs_dir)
        
     def setup(self, stage: Optional[str]=None) -> None:
         rng = random.Random(self.seed)
@@ -205,16 +205,16 @@ class TransferDataModule(pl.LightningDataModule):
     def test_dataloader(self) -> DataLoader:
         return self._make_dataloader(self.test_dataset, shuffle=False, collate_fn=collate_transfer)
 
-    def _get_joint_dsc(self): 
-        cfgs = [os.path.join(self.cfgs_dir, cfg) for cfg in os.listdir(self.cfgs_dir)] 
+def get_joint_dsc(cfgs_dir: str): 
+    cfgs = [os.path.join(cfgs_dir, cfg) for cfg in os.listdir(cfgs_dir)] 
+    
+    joint_dsc = {}
+    for cfg in cfgs: 
+        cfg = OmegaConf.load(cfg)
+        robot = next(iter(cfg.keys()))
+        values = list(cfg[robot].values())
+        values = torch.tensor(values)
         
-        joint_dsc = {}
-        for cfg in cfgs: 
-            cfg = OmegaConf.load(cfg)
-            robot = next(iter(cfg.keys()))
-            values = list(cfg[robot].values())
-            values = torch.tensor(values)
-            
-            joint_dsc[robot] = values
-        
-        return joint_dsc  
+        joint_dsc[robot] = values
+    
+    return joint_dsc  

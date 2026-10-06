@@ -1,5 +1,15 @@
-data_dir: /home/bing_TUM/ehrensberger/master-thesis/imports/mimicgen/datasets/robot
+cwd: /home/ehre/Documents
+# cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
+data_dir: ${cwd}/imports/mimicgen/datasets/robot
+meta_dir: ${cwd}/master-thesis/data/metadata
+cfgs_dir: ${cwd}/master-thesis/cfgs/dh_cfgs
+
 robot: Panda
+
+transforms_list: 
+  - to_image 
+  - resize_cnn
+  - to_dtype_cnn
 
 env_kwargs: 
   env_name: Square_D0
@@ -11,10 +21,10 @@ env_kwargs:
     - agentview
     - robot0_eye_in_hand
   camera_heights: 
-    - 1080 
-    - 64 
+    - 84 
+    - 84 
   camera_widths: 
-    - 1000
-    - 64
+    - 84
+    - 84
   control_freq: 20               
   horizon: 400 
