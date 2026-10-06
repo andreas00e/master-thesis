@@ -1,5 +1,6 @@
 seed: 42
 d_model: 512
+d_prototypes: 64
 
 cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
 data_dir: ${cwd}/imports/mimicgen/datasets/robot
@@ -81,7 +82,8 @@ model:
     m: 4 
     d_model: ${d_model}
 
-  sat_kwargs: 
+  sat_kwargs:
+    d_prototypes: ${d_prototypes}
     encoder_layer_kwargs: 
       d_model: ${d_model} 
       nhead: 4 
