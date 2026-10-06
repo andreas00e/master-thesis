@@ -10,7 +10,7 @@ from torchtyping import TensorType
 # https://discuss.pytorch.org/t/how-to-modify-the-positional-encoding-in-torch-nn-transformer/104308
 
 class PositionalEncoding(nn.Module): 
-    def __init__(self, d_model: int, max_len: int) -> None:
+    def __init__(self, d_model: int, max_len: int=300) -> None:
         super().__init__()
         
         if not isinstance(d_model, int) or d_model % 2 != 0: 
@@ -51,6 +51,9 @@ class PositionalEncoding(nn.Module):
             
         pe_idxs = torch.clamp(pe_idxs, max=self.max_len-1)
         pe = self.pe[pe_idxs] # [batch*chunk, 1+window, d_model]
+              
+        # print(f"Positional encoding mean: {torch.mean(pe)}")
+        print(f"Input mean: {torch.mean(x)}")
     
         return x + pe # [batch*chunk, 1+window, d_model]
 

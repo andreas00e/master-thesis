@@ -16,7 +16,7 @@ datamodule:
     - to_image 
     - resize_cnn
     - to_dtype_cnn
-    - normalize 
+    # - normalize 
   
   robots: 
     - iiwa 

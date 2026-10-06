@@ -3,30 +3,30 @@ defaults:
   - _self_ 
 
 d_model: 512
-d_prototypes: 128
+d_prototypes: 64
 
 datamodule: 
   transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
     - to_image
     - rotate 
-    - resize_cnn
     - color_jitter
-    - grayscale 
     - gaussian_blur
+    - resize_cnn
     - to_dtype_cnn
-    - normalize     
+    # - normalize     
   contrastive_transforms: true 
 
   robots: 
     - iiwa 
     - panda
-  tasks: null
+  tasks: 
+    - square 
 
   data_portion: 1.0
   consistent_batch: true 
   positive_window_size: 4
   negative_window_size: 12  
-  batch_size: 128
+  batch_size: 32
                     
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
@@ -39,8 +39,8 @@ model:
   freeze_c_epochs: 5 
 
   time_contrastive: true
-  temp_time_contrastive: 0.5
-  gripper_dropout_p: 0.05
+  temp_time_contrastive: 0.1
+  gripper_dropout_p: 0.1
 
   with_uncertainty_weighting: true
   uncertainty_weighting_kwargs: 
@@ -52,12 +52,12 @@ model:
   sequential_kwargs: 
     encoder_layer_kwargs: 
       d_model: ${d_model}
-      nhead: 4 
+      nhead: 2 
       dim_feedforward: ${d_model}
       batch_first: True
 
     transformer_encoder_kwargs:
-      num_layers: 8
+      num_layers: 4
       norm: null
       enable_nested_tensor: False 
       mask_check: False
@@ -77,7 +77,7 @@ model:
     _target_: torch.optim.AdamW
     _recursive_: False
 
-    lr: 3e-4
+    lr: 1e-4
     weight_decay: 1e-6
 
   lr_scheduler_kwargs: 
@@ -110,15 +110,15 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: gripper_relative_pe_d0
+  name: gripper_relative_pe_d0_p_0_1
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  # overfit_batches: 10
-  log_every_n_steps: 5
-  accelerator: gpu   
+  overfit_batches: 6
+  log_every_n_steps: 1
+  accelerator: cpu   
   devices: 
     - 0
   max_epochs: 1000 

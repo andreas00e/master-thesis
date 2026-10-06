@@ -24,7 +24,7 @@ class CNN(nn.Module):
             nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(6400, self.d_model) 
+            nn.Linear(6400, self.d_model), 
         )
 
     def forward(
@@ -32,6 +32,7 @@ class CNN(nn.Module):
         x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
         ) -> TensorType["batch*chunk*window", "d_model"]:
         
+
         x = x.view(-1, *x.shape[-3:]) # [batch*chunk*window, channels, height, width]
         x = self.model(x) # [batch*chunk*window, feature_dim]
         
@@ -181,8 +182,8 @@ class TransformerEncoder(nn.Module):
             
     def forward(
         self, 
-        x: TensorType["batch*chunk, window", "d_model"], 
-        idxs: Optional[TensorType["batch", "chunk", "window"]]=None, 
+        x: TensorType["batch*(chunk/num_steps), window", "d_model"], 
+        idxs: Optional[TensorType["batch", "(chunk/num_steps)", "window"]]=None, 
         src_key_padding_mask: Optional[TensorType["batch", "n_steps", "d_model"]]=None
         ) -> torch.Tensor: 
         
@@ -200,5 +201,5 @@ class TransformerEncoder(nn.Module):
             x = self.transformerEncoder(x) # [batch*chunk, 1+window, d_model]
             x = x[:, 0, :] # [batch*chunk, d_model]
             x = self.head(x) # [batch*chunk, d_model]
-        
+                    
         return x              

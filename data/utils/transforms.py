@@ -46,23 +46,24 @@ TRANSFORMS = {
         lambda: v2.RandomApply(
             [
             v2.ColorJitter(
-            brightness=(0.2, 0.4), 
-            contrast=(0.2, 0.4), 
-            saturation=(0.2, 0.4), 
-            hue=(0.1, 0.2))
-            ]
+            brightness=0.4,
+            contrast=0.4, 
+            saturation=0.1,  
+            hue=0.1)
+            ], 
+            p=0.8
         ), 
 
     "rotate": 
         lambda: v2.RandomRotation(
-            degrees=(-45, 45)
+            degrees=(-10, 10)
         ), 
 
     
     "solarize": 
         lambda: v2.RandomSolarize(
             threshold=0.5,             
-            p=0.5 
+            p=0.2 
         ),   
 
     "normalize":

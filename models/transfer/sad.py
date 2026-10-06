@@ -1,4 +1,5 @@
 import os 
+import numpy as np
 from typing import Any, Dict
 from omegaconf import DictConfig
 
@@ -6,14 +7,13 @@ import torch
 import torch.nn as nn
 import lightning.pytorch as pl
 
-from r3m import load_r3m
-
 from models.transfer.utils.dit import DiffusionTransformer
 from models.transfer.utils.pooling import CrossAttentionQueryPooling
 from models.transfer.utils.rce import RobotConditionedEncoder
 from models.transfer.utils.sat import SkillAllignmentTransformer
 
 from models.discover.skill_encoder import SkillEncoder
+from models.utils.aux_models import CNN
 
 
 class SkillConditionedActionDecoder(pl.LightningModule): 
@@ -38,22 +38,18 @@ class SkillConditionedActionDecoder(pl.LightningModule):
         self.sat_kwargs = sat_kwargs
         self.optimizer_kwargs = optimizer_kwargs
         
-        # Frozen models
-        self.obs_encoder = load_r3m("resnet18")
-        self.obs_encoder.requires_grad_(False)
-        self.obs_encoder.eval()
-          
+        # Frozen model          
         self.tse = SkillEncoder.load_from_checkpoint(self.tse_ckpt)
         self.tse.requires_grad_(False)
         self.tse.eval()
         
         # Trainable models 
-        self.obs_down = nn.Linear(512, self.d_model)
+        self.obs_encoder = CNN(self.d_model)
         
         self.gripperEncoder = nn.Sequential(
-            nn.Linear(1, self.d_model // 2), 
+            nn.Linear(1, self.d_model*2), 
             nn.ReLU(), 
-            nn.Linear(self.d_model // 2, self.d_model)
+            nn.Linear(self.d_model*2, self.d_model)
         )  
         
         self.rce = RobotConditionedEncoder(**self.rce_kwargs)
@@ -77,15 +73,16 @@ class SkillConditionedActionDecoder(pl.LightningModule):
         conditions = []
         
         batch_size, num_steps, condition_horizon, = batch["rgb_one"].shape[:3]
+        
+        z_tilde = self.tse.predict_step(batch) # [batch*num_steps, k]
+        z_tilde = z_tilde.view(batch_size, num_steps, -1) # [batch, num_steps, k]
                 
         rgb_one = batch["rgb_one"].view(-1, *batch["rgb_one"].shape[3:]) # [batch*num_steps*condition_horizon, channels=3, height=224, width=224]
-        rgb_one = self.obs_encoder(rgb_one) # [batch*num_steps*condition_horizon, *]
-        rgb_one = self.obs_down(rgb_one) # [batch*num_steps*condition_horizon, d_model]
+        rgb_one = self.obs_encoder(rgb_one) # [batch*num_steps*condition_horizon, d_model]
         rgb_one = rgb_one.view(batch_size, num_steps, condition_horizon, -1) # [batch, num_steps, condition_horizon, d_model]
         
         rgb_two = batch["rgb_two"].view(-1, *batch["rgb_two"].shape[3:]) # [batch*num_steps*condition_horizon, channels=3, height=224, width=224]
-        rgb_two = self.obs_encoder(rgb_two) # [batch*num_steps*condition_horizon, *]
-        rgb_two = self.obs_down(rgb_two) # [batch*num_steps*condition_horizon, d_model]
+        rgb_two = self.obs_encoder(rgb_two) # [batch*num_steps*condition_horizon, d_model]
         rgb_two = rgb_two.view(batch_size, num_steps, condition_horizon, -1) # [batch, num_steps, condition_horizon, d_model]
         
         rce_emb = self.rce(batch["joint_dsc"], batch["joint_obs"]) # [batch, num_steps, condition_horizon, d_model]
@@ -93,13 +90,9 @@ class SkillConditionedActionDecoder(pl.LightningModule):
         
         conditions = [rgb_one, rgb_two, rce_emb, gripper_emb] 
         conditions = self.attention_pooling(conditions) # [batch, num_steps, condition_horizon, m, d_model] 
-        
+    
+        loss_sat = self.sat(z_tilde, conditions) # []
         loss_bc = self.dit(batch["actions"], torch.mean(conditions, dim=1), batch["actions_idxs"], batch["conditions_idxs"][:, 0, ...])         
-        
-        z_tilde = self.tse.predict_step(batch) # [batch*condition_horizon, k]
-        z_tilde = z_tilde.view(batch_size, num_steps, -1) # [batch, condition_horizon, k]
-        loss_sat = self.sat(z_tilde, torch.mean(conditions, dim=2)) # []
-        
         loss = loss_bc + loss_sat
         
         self.log_dict({

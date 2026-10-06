@@ -85,15 +85,15 @@ class SkillEncoder(pl.LightningModule):
             raise NotImplementedError
         else: 
             self.gripperEncoder = nn.Sequential(
-                nn.Linear(self.d_model, self.d_model * 2), 
+                nn.Linear(self.d_model, self.d_model // 2), 
                 nn.ReLU(), 
-                nn.Linear(self.d_model * 2, self.d_model),
+                nn.Linear(self.d_model // 2, self.d_model),
             )
+            
         self.sinusoidal_embedding = SinusoidalEmbedding(d_new=self.d_model)
-        
         self.sequential = TransformerEncoder(**self.sequential_kwargs)
         
-        self.C = nn.Linear(**self.prototype_kwargs.model) # [d_model, k]: config: bias=False 
+        self.C = nn.Linear(**self.prototype_kwargs.model) # [k, d_model]: config: bias=False 
         nn.init.xavier_uniform_(self.C.weight)
         
         with torch.no_grad():
@@ -210,12 +210,12 @@ class SkillEncoder(pl.LightningModule):
     
     def predict_step(self, batch: Dict[str, Any], batch_idx: int, dataloader_idx:int=0) -> TensorType["batch_size", "k"]:
         with torch.no_grad(): 
-            z = self(batch["rgb_one"], batch["rgb_two"], batch["g_qpos"], batch["conditions_idxs"]) 
+            z = self(batch["rgb_one"], batch["rgb_two"], batch["g_qpos"]) 
             c = self.C(z) # [batch_size, k]: prototypes
 
             return c
         
-    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
+    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         return self._shared_step(batch, stage="train")
         
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
@@ -277,6 +277,16 @@ class SkillEncoder(pl.LightningModule):
                     prediction_entropy = -torch.sum((prediction_mean * torch.log(prediction_mean+1e-8))) # []
                     prediction_perplexity = torch.exp(prediction_entropy) / k # []
                     
+                    z = F.normalize(z_anc.detach().float(), p=2, dim=1) # [n, d_model]
+                    sim = z @ z.T # [n, n]
+                    off_diag = (torch.sum(sim) - torch.sum(torch.diagonal(sim))) / (n * (n-1))
+                    z_std = torch.mean(torch.std(z, dim=0))            
+                    c_std = torch.mean(torch.std(c["one"].detach()))
+                
+                    W = self.C.weight.detach()          # [k, d_model], rows already unit-norm
+                    sim_c = W @ W.T
+                    c_cos = (sim_c.sum() - sim_c.diagonal().sum()) / (k * (k - 1))
+                    
                     per_sample_entropy = torch.mean(-torch.sum(p["one"] * log_p["one"], dim=-1) / math.log(k)) # normalized per sample entropy                      
                             
                     self.log_dict({
@@ -285,7 +295,11 @@ class SkillEncoder(pl.LightningModule):
                         f"{stage}/prototype_perplexity": prototype_perplexity, 
                         f"{stage}/prediction_perplexity": prediction_perplexity, 
                         f"{stage}/per_sample_entropy": per_sample_entropy, 
-                        
+                        f"{stage}/off_diag": off_diag, 
+                        f"{stage}/z_std": z_std,             
+                        f"{stage}/c_std": c_std,            
+                        f"{stage}/c_cos": c_cos,            
+                       
                     },
                     logger=True, 
                     prog_bar=False,
@@ -351,19 +365,26 @@ class SkillEncoder(pl.LightningModule):
     
     def forward(
         self, 
-        rgb_one: TensorType["batch", "chunk", "window", "channels", "height", "width"], 
-        rgb_two: TensorType["batch", "chunk", "window", "channels", "height", "width"], 
-        g_qpos: TensorType["batch", "chunk", "window", "1"], 
+        rgb_one: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"], 
+        rgb_two: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"], 
+        g_qpos: TensorType["batch", "chunk/num_steps", "window", "1"], 
         gripper_dropout_p: float=0.0, 
-        idxs: Optional[TensorType["batch", "chunk", "window"]]=None
+        idxs: Optional[TensorType["batch", "chunk/num_steps", "window"]]=None
         ) -> torch.Tensor:
         
         batch_size, chunk, window = rgb_one.shape[:3]
         n = batch_size*chunk
-                
-        emb_one = self.visionEncoder(rgb_one) # [batch_size*chunk*window, d_model]
+        
+        print(f"Mean of rgb_one: {rgb_one.mean().detach()}")
+        print(f"Mean of rgb_two: {rgb_two.mean().detach()}")
+
+        emb_one = self.visionEncoder(rgb_one) # [batch_size*chunk*window, d_model]    
         emb_two = self.visionEncoder(rgb_two) # [batch_size*chunk*window, d_model]
         emb_gripper = self.gripperEncoder(self.sinusoidal_embedding(g_qpos.view(-1, 1))) # [batch_size*chunk*window, d_model]
+        
+        print(f"Mean of robot_view: {torch.mean(emb_one.abs().detach())}")
+        print(f"Mean of agent_view: {torch.mean(emb_two.abs().detach())}")
+        print(f"Mean of emb_gripper: {torch.mean(emb_gripper.abs().detach())}")
         
         if self.training and gripper_dropout_p > 0.0:
             keep_p = 1.0 - gripper_dropout_p
@@ -371,7 +392,8 @@ class SkillEncoder(pl.LightningModule):
             emb_gripper = (emb_gripper.view(n, window, -1) * keep / keep_p).view(n * window, -1)
         
         emb = torch.cat(tensors=(emb_one, emb_two, emb_gripper), dim=-1) # [batch_size*chunk*window, d_model*3]
-        emb = self.down_emb(emb)
+        emb = self.down_emb(emb) # [batch_size*chunk*window, d_model]
+        emb = emb * math.sqrt(self.d_model) 
         emb = self.sequential(emb.view(n, window, -1), idxs=idxs) # [n, d_model]
         
         z = F.normalize(emb, dim=-1) # [n, d_model]
