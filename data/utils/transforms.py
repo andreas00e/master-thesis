@@ -24,12 +24,18 @@ TRANSFORMS = {
         lambda: v2.Resize(
             size=(112, 112)
         ),
+        
+    "resize_crop_cnn":
+        lambda: v2.RandomResizedCrop(
+            size=(112, 112), 
+            scale=(0.1, 1.0)
+         ),
     
     "resize_r3m": 
         lambda: v2.Resize(
-            size=(224, 224) # for r3m 
+            size=(224, 224)
         ),
-        
+
     "grayscale": 
         lambda: v2.RandomGrayscale(p=0.2), 
     
