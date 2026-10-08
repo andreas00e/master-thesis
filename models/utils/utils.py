@@ -51,10 +51,7 @@ class PositionalEncoding(nn.Module):
             
         pe_idxs = torch.clamp(pe_idxs, max=self.max_len-1)
         pe = self.pe[pe_idxs] # [batch*chunk, 1+window, d_model]
-              
-        # print(f"Positional encoding mean: {torch.mean(pe)}")
-        print(f"Input mean: {torch.mean(x)}")
-    
+                  
         return x + pe # [batch*chunk, 1+window, d_model]
 
 

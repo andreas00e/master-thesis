@@ -6,27 +6,25 @@ d_model: 512
 d_prototypes: 64
 
 datamodule: 
-  transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
+  transforms_list:
     - to_image
     - rotate 
     - color_jitter
     - gaussian_blur
-    - resize_cnn
+    - resize_crop_cnn
     - to_dtype_cnn
-    # - normalize     
   contrastive_transforms: true 
 
   robots: 
-    - iiwa 
+    - iiwa
     - panda
-  tasks: 
-    - square 
+  tasks: null
 
   data_portion: 1.0
   consistent_batch: true 
   positive_window_size: 4
   negative_window_size: 12  
-  batch_size: 32
+  batch_size: 128
                     
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
@@ -34,15 +32,15 @@ model:
 
   d_model: ${d_model}
   num_plot: 2000
-  abs_pe: False
-  queue_start_epochs: 5
-  freeze_c_epochs: 5 
+  abs_pe: false
+  queue_start_epochs: 10
+  freeze_c_epochs: 15
 
   time_contrastive: true
   temp_time_contrastive: 0.1
-  gripper_dropout_p: 0.1
+  gripper_dropout_p: 0.2
 
-  with_uncertainty_weighting: true
+  with_uncertainty_weighting: false
   uncertainty_weighting_kwargs: 
     num_losses: 3
   
@@ -54,13 +52,13 @@ model:
       d_model: ${d_model}
       nhead: 2 
       dim_feedforward: ${d_model}
-      batch_first: True
+      batch_first: true
+      norm_first: true
 
     transformer_encoder_kwargs:
       num_layers: 4
-      norm: null
-      enable_nested_tensor: False 
-      mask_check: False
+      enable_nested_tensor: false 
+      mask_check: false
 
     pe_kwargs: 
       d_model: ${d_model}
@@ -75,7 +73,7 @@ model:
 
   optimizer_kwargs: 
     _target_: torch.optim.AdamW
-    _recursive_: False
+    _recursive_: false
 
     lr: 1e-4
     weight_decay: 1e-6
@@ -93,7 +91,7 @@ model:
       eta_min: 1e-6
 
   sinkhorn_kwargs: 
-    epsilon: 0.01
+    epsilon: 0.1
     num_iterations: 3 
 
   queue_kwargs:
@@ -110,15 +108,15 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: gripper_relative_pe_d0_p_0_1
+  name: queue_10_c_15_d0_s01
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  overfit_batches: 6
+  overfit_batches: 10
   log_every_n_steps: 1
-  accelerator: cpu   
+  accelerator: gpu   
   devices: 
     - 0
   max_epochs: 1000 

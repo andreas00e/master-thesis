@@ -95,7 +95,7 @@ class SkillEncoder(pl.LightningModule):
         
         self.C = nn.Linear(**self.prototype_kwargs.model) # [k, d_model]: config: bias=False 
         nn.init.xavier_uniform_(self.C.weight)
-        
+
         with torch.no_grad():
             self.C.weight.copy_(F.normalize(self.C.weight, dim=1)) # normalize rows!
             
@@ -121,6 +121,15 @@ class SkillEncoder(pl.LightningModule):
         self._idxs_val = []
         self._task_val = []
         self._robot_val = []
+        
+        for m in [self.gripperEncoder, self.down_emb]:
+             m.apply(self._init_weights)
+
+    def _init_weights(self, module): 
+        if isinstance(module, nn.Linear): 
+            nn.init.kaiming_normal_(module.weight, nonlinearity="relu")
+            if module.bias is not None: 
+                nn.init.zeros_(module.bias)               
                 
     def configure_optimizers(self) -> Dict[str, Any]:
         trainable_parameters = filter(lambda p: p.requires_grad, self.parameters())        
@@ -277,16 +286,11 @@ class SkillEncoder(pl.LightningModule):
                     prediction_entropy = -torch.sum((prediction_mean * torch.log(prediction_mean+1e-8))) # []
                     prediction_perplexity = torch.exp(prediction_entropy) / k # []
                     
-                    z = F.normalize(z_anc.detach().float(), p=2, dim=1) # [n, d_model]
+                    z = z_anc_full
                     sim = z @ z.T # [n, n]
-                    off_diag = (torch.sum(sim) - torch.sum(torch.diagonal(sim))) / (n * (n-1))
-                    z_std = torch.mean(torch.std(z, dim=0))            
-                    c_std = torch.mean(torch.std(c["one"].detach()))
-                
-                    W = self.C.weight.detach()          # [k, d_model], rows already unit-norm
-                    sim_c = W @ W.T
-                    c_cos = (sim_c.sum() - sim_c.diagonal().sum()) / (k * (k - 1))
-                    
+                    off_diag = (torch.sum(sim) - torch.sum(torch.diagonal(sim))) / (z_anc_full.shape[0] * (z_anc_full.shape[0]-1))
+                    z_std = z_anc_full.std(dim=-1).mean()
+                                    
                     per_sample_entropy = torch.mean(-torch.sum(p["one"] * log_p["one"], dim=-1) / math.log(k)) # normalized per sample entropy                      
                             
                     self.log_dict({
@@ -297,8 +301,6 @@ class SkillEncoder(pl.LightningModule):
                         f"{stage}/per_sample_entropy": per_sample_entropy, 
                         f"{stage}/off_diag": off_diag, 
                         f"{stage}/z_std": z_std,             
-                        f"{stage}/c_std": c_std,            
-                        f"{stage}/c_cos": c_cos,            
                        
                     },
                     logger=True, 
@@ -375,16 +377,19 @@ class SkillEncoder(pl.LightningModule):
         batch_size, chunk, window = rgb_one.shape[:3]
         n = batch_size*chunk
         
-        print(f"Mean of rgb_one: {rgb_one.mean().detach()}")
-        print(f"Mean of rgb_two: {rgb_two.mean().detach()}")
-
-        emb_one = self.visionEncoder(rgb_one) # [batch_size*chunk*window, d_model]    
+        emb_one = self.visionEncoder(rgb_one) # [batch_size*chunk*window, d_model] 
+        emb_one = emb_one * math.sqrt(self.d_model)   
         emb_two = self.visionEncoder(rgb_two) # [batch_size*chunk*window, d_model]
+        emb_two = emb_two * math.sqrt(self.d_model)   
         emb_gripper = self.gripperEncoder(self.sinusoidal_embedding(g_qpos.view(-1, 1))) # [batch_size*chunk*window, d_model]
         
-        print(f"Mean of robot_view: {torch.mean(emb_one.abs().detach())}")
-        print(f"Mean of agent_view: {torch.mean(emb_two.abs().detach())}")
-        print(f"Mean of emb_gripper: {torch.mean(emb_gripper.abs().detach())}")
+        # print(f"mean of emb_one: {emb_one.detach().mean()}")
+        # print(f"mean of emb_two: {emb_two.detach().mean()}")
+        # print(f"mean of emb_gripper: {emb_gripper.detach().mean()}")
+
+        # print(f"std of emb_one: {emb_one.detach().std(dim=-1).mean()}")
+        # print(f"std of emb_two: {emb_two.detach().std(dim=-1).mean()}")
+        # print(f"std of emb_gripper: {emb_gripper.detach().std(dim=-1).mean()}")
         
         if self.training and gripper_dropout_p > 0.0:
             keep_p = 1.0 - gripper_dropout_p
@@ -393,9 +398,11 @@ class SkillEncoder(pl.LightningModule):
         
         emb = torch.cat(tensors=(emb_one, emb_two, emb_gripper), dim=-1) # [batch_size*chunk*window, d_model*3]
         emb = self.down_emb(emb) # [batch_size*chunk*window, d_model]
-        emb = emb * math.sqrt(self.d_model) 
         emb = self.sequential(emb.view(n, window, -1), idxs=idxs) # [n, d_model]
         
         z = F.normalize(emb, dim=-1) # [n, d_model]
+        
+        # print(f"mean of z: {z.detach().mean()}")
+        # print(f"std of z: {z.detach().std(dim=-1).mean()}")
         
         return z
