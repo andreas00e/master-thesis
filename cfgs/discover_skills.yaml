@@ -24,7 +24,7 @@ datamodule:
   consistent_batch: true 
   positive_window_size: 4
   negative_window_size: 12  
-  batch_size: 128
+  batch_size: 32
                     
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
@@ -91,7 +91,7 @@ model:
       eta_min: 1e-6
 
   sinkhorn_kwargs: 
-    epsilon: 0.1
+    epsilon: 0.01
     num_iterations: 3 
 
   queue_kwargs:

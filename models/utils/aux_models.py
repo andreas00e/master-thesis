@@ -168,11 +168,11 @@ class TransformerEncoder(nn.Module):
         self.pe = PositionalEncoding(**self.pe_kwargs)
         
         self.apply(self._init_weights)
-        nn.init.normal_(self.cls_token, std=0.02)
+        nn.init.kaiming_normal_(self.cls_token, std=0.02)
 
     def _init_weights(self, module): 
         if isinstance(module, nn.Linear): 
-            nn.init.kaiming_normal_(module.weight, nonlinearity="relu")
+            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
             if module.bias is not None: 
                 nn.init.zeros_(module.bias)       
                 
