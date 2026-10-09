@@ -111,18 +111,15 @@ class Expander(nn.Module):
         in_dim: int, 
         h_dim: int, 
         out_dim: int, 
-        batch_norm_kwargs: DictConfig, 
         ) -> None:
         super().__init__() 
         
-        self.in_dim = int(in_dim)
-        self.h_dim = int(h_dim)
-        self.out_dim = int(out_dim)
-        self.batch_norm_kwargs = batch_norm_kwargs
+        self.in_dim = in_dim
+        self.h_dim = h_dim
+        self.out_dim = out_dim
                 
         self.model = nn.Sequential(
             nn.Linear(in_features=self.in_dim, out_features=self.h_dim), 
-            nn.BatchNorm1d(num_features=self.h_dim, **self.batch_norm_kwargs), 
             nn.ReLU(), 
             nn.Linear(in_features=self.h_dim, out_features=self.out_dim)
         ) 
@@ -187,13 +184,13 @@ class TransformerEncoder(nn.Module):
         
         cls_token = self.cls_token.expand(x.shape[0], -1, -1) # [batch*(chunk/num_steps), 1, d_model]
                 
-        x = (cls_token, x).cat(dim=1) # [batch*(chunk/num_steps), 1+window, d_model]
+        x = torch.cat((cls_token, x), dim=1) # [batch*(chunk/num_steps), 1+window, d_model]
         x = self.pe(x, idxs) # [batch*(chunk/num_steps), 1+window, d_model]
         
         if src_key_padding_mask is not None: 
             x = self.transformerEncoder(x, src_key_padding_mask=src_key_padding_mask) # [batch_size, num_steps, d_model]
-            x = x.view(-1, x.shape[-1])
-            x = self.head(x) # [batch_size, num_steps, d_model]
+            x = x.reshape(-1, x.shape[-1]) # [batch_size*num_steps, d_model]
+            x = self.head(x) # [batch_size*num_steps, d_model]
                      
         else:
             x = self.transformerEncoder(x) # [batch*(chunk/num_steps), 1+window, d_model]

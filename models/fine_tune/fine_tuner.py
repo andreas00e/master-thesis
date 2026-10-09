@@ -3,15 +3,14 @@ from omegaconf import DictConfig
 from typing import Any, Dict, Optional, Tuple
 
 import torch
-import torch.nn as nn 
-import torch.nn.functional as F 
+from torchtyping import TensorType
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 
 import lightning.pytorch as pl
 
 from models.utils.vicreg import VICReg
-from models.utils.aux_models import VisionEncoder, Expander
+from models.utils.aux_models import CNN, Expander
 from models.fine_tune.tests import _pair_metrics
         
 
@@ -34,7 +33,7 @@ class FineTunerVisual(pl.LightningModule):
         self.expander_kwargs = expander_kwargs
         self.vic_reg_kwargs = vic_reg_kwargs
         
-        self.visionEncoder = VisionEncoder(**self.vision_encoder_kwargs)
+        self.visionEncoderOne = CNN(**self.vision_encoder_kwargs)        
         self.visionExpander = Expander(**self.expander_kwargs)
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
         self.r3m_baseline = None # only needed for testing 
@@ -182,23 +181,28 @@ class FineTunerVisual(pl.LightningModule):
             on_step=False, 
             on_epoch=True
         )
+        
+    def _shared_step(self, batch: Dict[str, Any]) -> Tuple[TensorType["*"], TensorType["*"]]: 
+        rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model]: robot0_eye_in_hand_image 
+        rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model]: agentview_image 
+        
+        return rgb_one_y, rgb_two_y
 
     def predict_step(self, batch: Any, batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor]: 
-        rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model] robot0_eye_in_hand_image 
-        rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model] agentview_image 
+        rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model]: robot0_eye_in_hand_image 
+        rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model]: agentview_image 
         
         return rgb_one_y, rgb_two_y
     
     def forward(self, batch: Any, batch_idx: int, stage: str) -> torch.Tensor:  
-        rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model] robot0_eye_in_hand_image 
-        rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model] agentview_image 
+        rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model]: robot0_eye_in_hand_image 
+        rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model]: agentview_image 
         
-        if stage == "train" and self.logger is not None and self.global_step % 50 == 0: 
+        if all(stage == "train", self.logger is not None, isinstance(self.logger, pl.logger.WandbLogger), self.global_step % 50 == 0): 
             with torch.no_grad(): 
-                y_centered = rgb_one_y - torch.mean(rgb_one_y, dim=0)
-                
+                y_centered = rgb_one_y - rgb_one_y.mean(dim=0)
                 _, S, _ = torch.linalg.svd(y_centered)
-                p = S / torch.sum(S)
+                p = S / S.sum()
                 eff_rank = torch.exp(-torch.sum(p*torch.log(p + 1e-12))).item() # effective Rank (Shannon entropy of a singular value)
                 
                 self.log(
@@ -209,9 +213,9 @@ class FineTunerVisual(pl.LightningModule):
                     sync_dist=False
                     )
             
-        rgb_one_z = self.visionExpander(rgb_one_y) # [n, d_model*x]
-        rgb_two_z = self.visionExpander(rgb_two_y) # [n, d_model*x]
-
+        rgb_one_z = self.visionExpander(rgb_one_y) # [n, d_model]
+        rgb_two_z = self.visionExpander(rgb_two_y) # [n, d_model]
+        
         loss, logs_ = self.vicReg(rgb_one_z, rgb_two_z)
 
         self.log_dict(

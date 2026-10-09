@@ -43,9 +43,6 @@ model:
   with_uncertainty_weighting: false
   uncertainty_weighting_kwargs: 
     num_losses: 3
-  
-  vision_encoder_ckpt: null 
-  gripper_encoder_ckpt: null 
 
   sequential_kwargs: 
     encoder_layer_kwargs: 

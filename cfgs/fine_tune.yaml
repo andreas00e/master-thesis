@@ -7,8 +7,8 @@ d_model: 128
 datamodule:
   transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
     - to_image
-    - resize_r3m
-    - to_dtype_r3m
+    - resize_cnn # resize_r3m
+    - to_dtype_cnn # to_dtype_r3m
 
   robots: null
   tasks: null
@@ -52,8 +52,6 @@ model_vision:
     in_dim: ${d_model}
     h_dim: ${eval:"${d_model}"}
     out_dim: ${eval:"${d_model}"}
-    batch_norm_kwargs: 
-      momentum: 0.1 
 
   vic_reg_kwargs: 
     log_every_n_steps: 50 
