@@ -26,7 +26,6 @@ class VICReg(nn.Module):
         
         self.logger = logger
         self.log_every_n_steps = log_every_n_steps
-        self._global_step = 0
         
         self.lambda_ = lambda_
         self.mu = mu 
@@ -34,11 +33,9 @@ class VICReg(nn.Module):
         self.gamma = gamma
         self.eps = eps
     
-    def _invariance_loss(self, x: TensorType["n", "d"], x_: TensorType["n", "d"]) -> torch.Tensor: 
-        n = x.shape[0]
-        
-        out = (1 / n) * ((x - x_) ** 2).sum() # []
-        
+    def _invariance_loss(self, x: TensorType["n", "d"], x_: TensorType["n", "d"]) -> torch.Tensor:         
+        out = F.mse_loss(x, x_) # []
+                
         return out
         
     def _variance_loss(self, x: TensorType["n", "d"]) -> torch.Tensor: 
@@ -73,7 +70,7 @@ class VICReg(nn.Module):
         tot_loss = self.lambda_ * inv_loss + self.mu * var_loss + self.nu * cov_loss # []
         
         if all([self.logger is not None, isinstance(self.logger, pl.loggers.WandbLogger), self.training]): 
-            if self._global_step % self.log_every_n_steps == 0:
+            if self.logger.experiment.step % self.log_every_n_steps == 0:
                 with torch.no_grad(): 
                     cov_np = cov.detach().cpu().numpy()
 
@@ -89,15 +86,13 @@ class VICReg(nn.Module):
                 self.logger.experiment.log({
                     "train/var_histogram_z": wandb.Histogram(var.detach().cpu().numpy()), 
                     "train/var_histogram_z_": wandb.Histogram(var_.detach().cpu().numpy()), 
-                    "train/covariance_matrix_z": wandb.Image(cov_viz, caption=f"Covariance Matrix step {self._global_step}")
+                    "train/covariance_matrix_z": wandb.Image(cov_viz, caption=f"Covariance Matrix step {self.logger.experiment.step}")
                 })
-                                
-        self._global_step += 1 
-                
+                                                
         logs_ = {
-            "inv_loss": self.lambda_ * inv_loss.detach().cpu(), 
-            "var_loss": self.mu * var_loss.detach().cpu(), 
-            "cov_loss":  self.nu * cov_loss.detach().cpu() 
+            "inv_loss": (self.lambda_ * inv_loss).detach(), 
+            "var_loss": (self.mu * var_loss).detach(), 
+            "cov_loss": (self.nu * cov_loss).detach()
         }
              
         return tot_loss, logs_

@@ -1,5 +1,6 @@
+from itertools import chain
 from omegaconf import DictConfig
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import torch
 from torch.optim import AdamW
@@ -30,8 +31,11 @@ class FineTunerVisual(pl.LightningModule):
         self.expander_kwargs = expander_kwargs
         self.vic_reg_kwargs = vic_reg_kwargs
         
-        self.visionEncoder = CNN(**self.vision_encoder_kwargs)        
-        self.visionExpander = Expander(**self.expander_kwargs)
+        self.visionEncoderOne = CNN(**self.vision_encoder_kwargs)  
+        self.visionEncoderTwo = CNN(**self.vision_encoder_kwargs)      
+        self.visionExpanderOne = Expander(**self.expander_kwargs)
+        self.visionExpanderTwo = Expander(**self.expander_kwargs)
+        
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
                 
     def setup(self, stage: Optional[str]=None) -> None:
@@ -58,8 +62,8 @@ class FineTunerVisual(pl.LightningModule):
         return scheduler
                    
     def configure_optimizers(self):
-        encoder_parameters = list(filter(lambda p: p.requires_grad, self.visionEncoder.parameters()))
-        expander_parameters = list(filter(lambda p: p.requires_grad, self.visionExpander.parameters())) 
+        encoder_parameters = list(filter(lambda p: p.requires_grad, chain(self.visionEncoderOne.parameters(), self.visionEncoderTwo.parameters())))
+        expander_parameters = list(filter(lambda p: p.requires_grad, chain(self.visionExpanderOne.parameters(), self.visionExpanderTwo.parameters()))) 
 
         param_groups = [
             {"params": encoder_parameters, **self.optimizer_kwargs.encoder},
@@ -87,14 +91,14 @@ class FineTunerVisual(pl.LightningModule):
         return self(batch, batch_idx, stage="val")
     
     def predict_step(self, batch: Any, batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor]: 
-        rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model]: robot0_eye_in_hand_image 
-        rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model]: agentview_image 
+        rgb_one_y = self.visionEncoderOne(batch["rgb_one"]) # [n, d_model]: robot0_eye_in_hand_image 
+        rgb_two_y = self.visionEncoderTwo(batch["rgb_two"]) # [n, d_model]: agentview_image 
         
         return rgb_one_y, rgb_two_y
     
     def forward(self, batch: Any, batch_idx: int, stage: str) -> torch.Tensor:  
-        rgb_one_y = self.visionEncoder(batch["rgb_one"]) # [n, d_model]: robot0_eye_in_hand_image 
-        rgb_two_y = self.visionEncoder(batch["rgb_two"]) # [n, d_model]: agentview_image 
+        rgb_one_y = self.visionEncoderOne(batch["rgb_one"]) # [n, d_model]: robot0_eye_in_hand_image 
+        rgb_two_y = self.visionEncoderTwo(batch["rgb_two"]) # [n, d_model]: agentview_image 
         
         if all([stage == "train", self.logger is not None, isinstance(self.logger, pl.loggers.WandbLogger), self.global_step % 50 == 0]): 
             with torch.no_grad(): 
@@ -102,7 +106,7 @@ class FineTunerVisual(pl.LightningModule):
                 _, S, _ = torch.linalg.svd(y_centered) # [n, n]: singular values
                 p = S / S.sum() # linear normalization 
                 
-                shannon_entropy = - (p * (p + 1e-12).log()).sum() # Shannon-Entropy of linearly normalized singular values
+                shannon_entropy = -(p * (p + 1e-12).log()).sum() # Shannon-Entropy of linearly normalized singular values
                 eff_rank = shannon_entropy.exp() # effective rank of a singular value 
                 
                 self.log(
@@ -113,8 +117,8 @@ class FineTunerVisual(pl.LightningModule):
                     sync_dist=False
                     )
             
-        rgb_one_z = self.visionExpander(rgb_one_y) # [n, d_model*x]
-        rgb_two_z = self.visionExpander(rgb_two_y) # [n, d_model*x]
+        rgb_one_z = self.visionExpanderOne(rgb_one_y) # [n, d_model*x]
+        rgb_two_z = self.visionExpanderTwo(rgb_two_y) # [n, d_model*x]
         
         loss, logs_ = self.vicReg(rgb_one_z, rgb_two_z)
 

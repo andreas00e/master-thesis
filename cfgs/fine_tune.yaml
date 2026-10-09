@@ -53,15 +53,15 @@ model_vision:
 
   expander_kwargs: 
     in_dim: ${d_model}
-    h_dim: ${eval:"${d_model}*3/2"}
-    out_dim: ${eval:"${d_model}*2"}
+    h_dim: ${eval:"${d_model}"}
+    out_dim: ${eval:"${d_model}"}
 
   vic_reg_kwargs: 
     log_every_n_steps: 50 
 
-    lambda_: 0.05 # invariance
-    mu: 1 # variance
-    nu: 0.1 # covariance
+    lambda_: 25.0 # invariance
+    mu: 25.0 # variance
+    nu: 1.0 # covariance
     gamma: 1 # desired variance
     eps: 1e-4 # umerical stability
 
