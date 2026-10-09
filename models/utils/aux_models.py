@@ -1,7 +1,7 @@
 from r3m import load_r3m 
 from  peft import LoraConfig, get_peft_model
 from omegaconf import  DictConfig
-from typing import Optional
+from typing import Optional, Union
 
 import torch 
 import torch.nn as nn 
@@ -108,15 +108,15 @@ class VisionEncoder(nn.Module):
 class Expander(nn.Module): 
     def __init__(
         self, 
-        in_dim: int, 
-        h_dim: int, 
-        out_dim: int, 
+        in_dim: Union[int, float], 
+        h_dim: Union[int, float], 
+        out_dim: Union[int, float], 
         ) -> None:
         super().__init__() 
         
-        self.in_dim = in_dim
-        self.h_dim = h_dim
-        self.out_dim = out_dim
+        self.in_dim = int(in_dim)
+        self.h_dim = int(h_dim)
+        self.out_dim = int(out_dim)
                 
         self.model = nn.Sequential(
             nn.Linear(in_features=self.in_dim, out_features=self.h_dim), 
@@ -132,7 +132,7 @@ class Expander(nn.Module):
             if module.bias is not None: 
                 nn.init.zeros_(module.bias)
         
-    def forward(self, x: torch.Tensor) -> torch.Tensor: 
+    def forward(self, x: TensorType["n", "in_dim"]) -> TensorType["n", "out_dim"]:
         return self.model(x)  
     
 class TransformerEncoder(nn.Module): 
