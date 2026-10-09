@@ -29,12 +29,11 @@ class CNN(nn.Module):
 
     def forward(
         self, 
-        x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
-        ) -> TensorType["batch*chunk*window", "d_model"]:
-        
+        x: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"]
+        ) -> TensorType["batch*(chunk/num_steps)*window", "d_model"]:
 
-        x = x.view(-1, *x.shape[-3:]) # [batch*chunk*window, channels, height, width]
-        x = self.model(x) # [batch*chunk*window, feature_dim]
+        x = x.view(-1, *x.shape[-3:]) # [batch*(chunk/num_steps)*window, channels, height, width]
+        x = self.model(x) # [batch*(chunk/num_steps)*window, feature_dim]
         
         return x
 
@@ -151,12 +150,10 @@ class TransformerEncoder(nn.Module):
         self.encoder_layer_kwargs = encoder_layer_kwargs
         self.transformer_encoder_kwargs = transformer_encoder_kwargs
         self.pe_kwargs = pe_kwargs
-        
         self.d_model = int(encoder_layer_kwargs.d_model)
-    
+        
         encoder_layer = nn.TransformerEncoderLayer(**self.encoder_layer_kwargs)
-        norm = nn.LayerNorm(self.d_model)
-        self.transformerEncoder = nn.TransformerEncoder(encoder_layer, norm=norm, **self.transformer_encoder_kwargs)
+        self.transformerEncoder = nn.TransformerEncoder(encoder_layer, norm=nn.LayerNorm(self.d_model), **self.transformer_encoder_kwargs)
         
         self.head = nn.Sequential(
             nn.Linear(self.d_model, self.d_model*2),
@@ -164,11 +161,12 @@ class TransformerEncoder(nn.Module):
             nn.Linear(self.d_model*2, self.d_model)
             )      
         
-        self.cls_token = nn.Parameter(data=torch.empty(size=(1, 1, self.d_model), dtype=torch.float32))
+        self.cls_token = nn.Parameter(data=torch.empty(size=(1, 1, self.d_model), dtype=torch.float32)) # [1, 1, d_model]
+        
         self.pe = PositionalEncoding(**self.pe_kwargs)
         
         self.apply(self._init_weights)
-        nn.init.kaiming_normal_(self.cls_token, std=0.02)
+        nn.init.kaiming_uniform_(self.cls_token)
 
     def _init_weights(self, module): 
         if isinstance(module, nn.Linear): 
@@ -184,30 +182,22 @@ class TransformerEncoder(nn.Module):
         self, 
         x: TensorType["batch*(chunk/num_steps), window", "d_model"], 
         idxs: Optional[TensorType["batch", "(chunk/num_steps)", "window"]]=None, 
-        src_key_padding_mask: Optional[TensorType["batch", "n_steps", "d_model"]]=None
+        src_key_padding_mask: Optional[TensorType["batch", "num_steps", "d_model"]]=None
         ) -> torch.Tensor: 
         
-        cls_token = self.cls_token.expand(x.shape[0], -1, -1) # [batch*chunk, 1, d_model]
-        
-        # print(f"mean of x before transformer: {x.detach().mean()}")
-        # print(f"std of x before transformer: {x.detach().std(dim=-1).mean()}")
-        
-        # x = torch.cat(tensors=(cls_token, x), dim=1) # [batch*chunk, 1+window, d_model]
-        # x = self.pe(x, idxs) # [batch*chunk, 1+window, d_model]
-        x = self.pe(x)
+        cls_token = self.cls_token.expand(x.shape[0], -1, -1) # [batch*(chunk/num_steps), 1, d_model]
+                
+        x = (cls_token, x).cat(dim=1) # [batch*(chunk/num_steps), 1+window, d_model]
+        x = self.pe(x, idxs) # [batch*(chunk/num_steps), 1+window, d_model]
         
         if src_key_padding_mask is not None: 
-            x = self.transformerEncoder(x, src_key_padding_mask=src_key_padding_mask)  # [batch_size, n_steps, d_model]
+            x = self.transformerEncoder(x, src_key_padding_mask=src_key_padding_mask) # [batch_size, num_steps, d_model]
             x = x.view(-1, x.shape[-1])
-            x = self.head(x)  # [batch_size, n_steps, d_model]
+            x = self.head(x) # [batch_size, num_steps, d_model]
                      
         else:
-            x = self.transformerEncoder(x) # [batch*chunk, 1+window, d_model]
-            # x = x[:, 0, :] # [batch*chunk, d_model]
-            x = x.mean(1) # # [batch*chunk, d_model]: mean pooling 
-            x = self.head(x) # [batch*chunk, d_model]
+            x = self.transformerEncoder(x) # [batch*(chunk/num_steps), 1+window, d_model]
+            x = x.mean(1) # [batch*(chunk/num_steps), d_model]: mean pooling 
+            x = self.head(x) # [batch*(chunk/num_steps), d_model]
     
-        # print(f"mean of x after transformer: {x.detach().mean()}")
-        # print(f"std of x after transformer: {x.detach().std(dim=-1).mean()}")
-                    
         return x              
