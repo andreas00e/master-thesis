@@ -19,7 +19,7 @@ datamodule:
 
   robots: null # [iiwa, panda, sawyer, ur5e]
   tasks: null # [square, threading]
-  data_distribution: d0 # d0, d1, both
+  data_distribution: both # d0, d1, both
   data_portion: 1.0
   window_size: 8 # > 0
   chunk_size: 1
@@ -45,11 +45,12 @@ logger:
 
 trainer: 
   _target_: lightning.pytorch.Trainer
+  # overfit_batches: 1
   log_every_n_steps: 1 
   accelerator: gpu   
   devices: 
     - 0
-  max_epochs: 200 
+  max_epochs: 1000 
   num_sanity_val_steps: 2
   enable_progress_bar: true
   profiler: simple 

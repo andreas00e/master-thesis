@@ -148,13 +148,7 @@ class SkillEncoder(pl.LightningModule):
                 "frequency": 1
             }
         }
-    
-    def train(self, mode: bool = True):
-        super().train(mode)
-        if self.vision_encoder_ckpt is not None:
-            self.visionEncoder.eval()
-        return self
-    
+
     def on_train_epoch_start(self):
         if self.current_epoch < self.freeze_c_epochs:  
             self._set_freeze(True)
@@ -328,13 +322,13 @@ class SkillEncoder(pl.LightningModule):
                 self._c_val.append(c_one[:n].detach().cpu()) # [n, k]
                 self._target_val.append(q["one"][:n].detach().cpu()) # [n, k]
                 self._idxs_val.append(batch["idxs"][:, :, 0].reshape(n).cpu()) # [n]: first index of sequence window
-                self._task_val.append(batch["task"].unsqueeze(1).expand(-1, chunk).reshape(n).cpu()) # [n]
+                self._task_val.append(batch["task"].reshape(n).cpu()) # [n]
                 self._robot_val.append(batch["robot"].reshape(n).cpu()) # [n]: consistent robot over batch 
         
         if self.with_uncertainty_weighting: 
             loss = self.uncertainty_weighting(losses) # []
         else: 
-            loss = torch.stack(losses.stack).mean()
+            loss = torch.stack(losses).mean()
             
         self.log_dict(
             {

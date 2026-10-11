@@ -26,6 +26,14 @@ class CNN(nn.Module):
             nn.Flatten(),
             nn.Linear(6400, self.d_model), 
         )
+        
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module): 
+        if isinstance(module, nn.Linear): 
+            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
+            if module.bias is not None: 
+                nn.init.zeros_(module.bias)       
 
     def forward(
         self, 
@@ -120,6 +128,10 @@ class Expander(nn.Module):
                 
         self.model = nn.Sequential(
             nn.Linear(in_features=self.in_dim, out_features=self.h_dim), 
+            nn.BatchNorm1d(num_features=self.h_dim),
+            nn.ReLU(), 
+            nn.Linear(in_features=self.h_dim, out_features=self.h_dim), 
+            nn.BatchNorm1d(num_features=self.h_dim),
             nn.ReLU(), 
             nn.Linear(in_features=self.h_dim, out_features=self.out_dim)
         ) 
@@ -131,6 +143,10 @@ class Expander(nn.Module):
             nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain("relu"))
             if module.bias is not None: 
                 nn.init.zeros_(module.bias)
+                
+        if isinstance(module, nn.BatchNorm1d): 
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
         
     def forward(self, x: TensorType["n", "in_dim"]) -> TensorType["n", "out_dim"]:
         return self.model(x)  

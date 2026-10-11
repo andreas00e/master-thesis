@@ -2,22 +2,29 @@ defaults:
   - base 
   - _self_ 
 
-d_model: 64
+d_model: 512
 
 datamodule:
   transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
     - to_image
-    - resize_cnn # resize_r3m
-    - to_dtype_cnn # to_dtype_r3m
+    - rotate 
+    - color_jitter
+    - gaussian_blur
+    - resize_crop_cnn
+    - to_dtype_cnn
+
+  contrastive_transforms: true
+
 
   robots: 
     - panda 
     - iiwa 
   tasks: 
     - square
+    - threading
 
   window_size: 1 # > 0
-  batch_size: 64
+  batch_size: 512
   
 model_vision: 
   _target_: models.fine_tune.fine_tuner.FineTunerVisual
@@ -25,10 +32,10 @@ model_vision:
 
   optimizer_kwargs: 
     encoder: 
-      lr: 1e-3
+      lr: 1e-4
       weight_decay: 1e-3
     expander: 
-      lr: 1e-3
+      lr: 1e-4
       weight_decay: 1e-3
 
   scheduler_kwargs: 
@@ -62,11 +69,11 @@ model_vision:
     lambda_: 25.0 # invariance
     mu: 25.0 # variance
     nu: 1.0 # covariance
-    gamma: 1 # desired variance
+    gamma: 1.0 # desired variance
     eps: 1e-4 # umerical stability
 
 logger: 
-  name: all_robots_all_tasks
+  name: expander_512
   project: fine_tune
 
 callbacks: 
