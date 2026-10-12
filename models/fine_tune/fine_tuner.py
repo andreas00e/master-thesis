@@ -97,7 +97,7 @@ class FineTunerVisual(pl.LightningModule):
         return rgb_one_y, rgb_two_y
     
     def forward(self, batch: Any, batch_idx: int, stage: str) -> torch.Tensor:  
-        rgb_one_y = self.visionEncoderOne(batch["rgb_one"]) # [n, d_model]: robot0_eye_in_hand_image 
+        rgb_one_y = self.visionEncoderOne(batch["rgb_one_pos"]) # [n, d_model]: robot0_eye_in_hand_image 
         rgb_two_y = self.visionEncoderTwo(batch["rgb_two_pos"]) # [n, d_model]: agentview_image 
         
         if all([stage == "train", self.logger is not None, isinstance(self.logger, pl.loggers.WandbLogger), self.global_step % 50 == 0]): 

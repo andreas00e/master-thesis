@@ -50,7 +50,7 @@ trainer:
   accelerator: gpu   
   devices: 
     - 0
-  max_epochs: 1000 
+  max_epochs: 200
   num_sanity_val_steps: 2
   enable_progress_bar: true
   profiler: simple 

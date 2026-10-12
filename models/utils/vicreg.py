@@ -90,9 +90,9 @@ class VICReg(nn.Module):
                 })
                                                 
         logs_ = {
-            "inv_loss": (self.lambda_ * inv_loss).detach(), 
-            "var_loss": (self.mu * var_loss).detach(), 
-            "cov_loss": (self.nu * cov_loss).detach()
+            "inv_loss": inv_loss.detach(), 
+            "var_loss": var_loss.detach(), 
+            "cov_loss": cov_loss.detach()
         }
              
         return tot_loss, logs_
