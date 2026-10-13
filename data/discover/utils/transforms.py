@@ -28,7 +28,9 @@ TRANSFORMS = {
     "resize_crop_cnn":
         lambda: v2.RandomResizedCrop(
             size=(112, 112), 
-            scale=(0.1, 1.0)
+            scale=(0.7, 1.0), 
+            ratio=(0.9, 1.1), 
+            antialias=True, 
          ),
     
     "resize_r3m": 

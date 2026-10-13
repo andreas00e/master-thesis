@@ -9,9 +9,9 @@ datamodule:
     - to_image
     - rotate 
     - color_jitter
-    - gaussian_blur
     - resize_crop_cnn
     - to_dtype_cnn
+    - normalize
 
   contrastive_transforms: true
 
@@ -66,13 +66,13 @@ model_vision:
     log_every_n_steps: 50 
 
     lambda_: 15 # invariance
-    mu: 25.0 # variance
-    nu: 5.0 # covariance
+    mu: 30.0 # variance
+    nu: 1.0 # covariance
     gamma: 1.0 # desired variance
     eps: 1e-4 # umerical stability
 
 logger: 
-  name: exp_1024_l_15_m_25_n_5
+  name: exp_1024_l_25_m_30_n_1_new_aug_norm
   project: fine_tune
 
 callbacks: 

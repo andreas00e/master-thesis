@@ -1,8 +1,9 @@
 from itertools import chain
 from omegaconf import DictConfig
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 
@@ -49,14 +50,16 @@ class FineTunerVisual(pl.LightningModule):
         ) -> Any: # torch.optim.lr_scheduler.LRScheduler
         
         warmup_percentage = self.scheduler_kwargs.get("warmup_percentage", 0.1)
-        warmup_steps = int(warmup_percentage * total_steps)
-        decay_steps = total_steps - warmup_steps
+        warmup_steps = max(int(warmup_percentage * total_steps), 1)
+        decay_steps = max(total_steps - warmup_steps, 1)
         
-        self.scheduler_kwargs.linear.total_iters = warmup_steps
-        self.scheduler_kwargs.cosine_annealing.T_max = decay_steps 
-        
-        scheduler_one = LinearLR(optimizer, **self.scheduler_kwargs.linear)
-        scheduler_two = CosineAnnealingLR(optimizer, **self.scheduler_kwargs.cosine_annealing)
+        linear_kwargs = dict(self.scheduler_kwargs.linear)
+        cosine_kwargs = dict(self.scheduler_kwargs.cosine_annealing)
+        linear_kwargs["total_iters"] = warmup_steps
+        cosine_kwargs["T_max"] = decay_steps
+            
+        scheduler_one = LinearLR(optimizer, **linear_kwargs)
+        scheduler_two = CosineAnnealingLR(optimizer, **cosine_kwargs)
         scheduler = SequentialLR(optimizer, schedulers=[scheduler_one, scheduler_two],  milestones=[warmup_steps])
         
         return scheduler
@@ -66,8 +69,12 @@ class FineTunerVisual(pl.LightningModule):
         expander_parameters = list(filter(lambda p: p.requires_grad, chain(self.visionExpanderOne.parameters(), self.visionExpanderTwo.parameters()))) 
 
         param_groups = [
-            {"params": encoder_parameters, **self.optimizer_kwargs.encoder},
-            {"params": expander_parameters, **self.optimizer_kwargs.expander}, 
+            {
+                "params": encoder_parameters, **self.optimizer_kwargs.encoder
+                },
+            {
+                "params": expander_parameters, **self.optimizer_kwargs.expander
+                }, 
         ]
 
         optimizer = AdamW(params=param_groups)
@@ -84,11 +91,37 @@ class FineTunerVisual(pl.LightningModule):
             "lr_scheduler": scheduler
             }
         
-    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
         return self(batch, batch_idx, stage="train")
-    
-    def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
+            
+    def validation_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
         return self(batch, batch_idx, stage="val")
+    
+    def test_step(self, batch: Dict[str, Any], batch_idx: int) -> None: 
+        with torch.no_grad(): 
+            rgb_one_y = self.visionEncoderOne(batch["rgb_one"]) # [n, d_model]: robot0_eye_in_hand_image 
+            rgb_two_y = self.visionEncoderTwo(batch["rgb_two"]) # [n, d_model]: agentview_image
+            
+            rgb_one_y = F.normalize(rgb_one_y, p=2, dim=-1) # [n, d_model]
+            rgb_two_y = F.normalize(rgb_two_y, p=2, dim=-1) # [n, d_model]
+
+            sim = rgb_one_y @ rgb_two_y.T # [n, n]
+            sim_same = sim.diagonal().mean().cpu() # []
+            
+            n = sim.shape[0]
+            off_diag = sim[~torch.eye(n, dtype=torch.bool, device=sim.device)]
+            sim_diff = off_diag.mean()
+            
+            self.log_dict(
+                {
+                    "test/sim_same": sim_same, 
+                    "test/sim_diff": sim_diff
+                    }, 
+                logger=True, 
+                on_step=False, 
+                on_epoch=True, 
+                sync_dist=True  
+            )
     
     def predict_step(self, batch: Any, batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor]: 
         rgb_one_y = self.visionEncoderOne(batch["rgb_one"]) # [n, d_model]: robot0_eye_in_hand_image 
@@ -102,16 +135,26 @@ class FineTunerVisual(pl.LightningModule):
         
         if all([stage == "train", self.logger is not None, isinstance(self.logger, pl.loggers.WandbLogger), self.global_step % 50 == 0]): 
             with torch.no_grad(): 
-                y_centered = rgb_one_y - rgb_one_y.mean(dim=0) # [n, d_model]
-                _, S, _ = torch.linalg.svd(y_centered) # [n, n]: singular values
-                p = S / S.sum() # linear normalization 
+                y_centered_one = rgb_one_y - rgb_one_y.mean(dim=0) # [n, d_model]
+                y_centered_two = rgb_two_y - rgb_two_y.mean(dim=0) 
+
+                S_one = torch.linalg.svdvals(y_centered_one.float()) # [n, n]: singular values
+                S_two = torch.linalg.svdvals(y_centered_two.float()) 
+
+                p_one = S_one / S_one.sum() # linear normalization 
+                p_two = S_two / S_two.sum() 
                 
-                shannon_entropy = -(p * (p + 1e-12).log()).sum() # Shannon-Entropy of linearly normalized singular values
-                eff_rank = shannon_entropy.exp() # effective rank of a singular value 
-                
-                self.log(
-                    "train/eff_rank", 
-                    eff_rank.cpu().item(), 
+                shannon_entropy_one = -(p_one * (p_one + 1e-12).log()).sum() # Shannon-Entropy of linearly normalized singular values
+                shannon_entropy_two = -(p_two * (p_two + 1e-12).log()).sum() 
+
+                eff_rank_one = shannon_entropy_one.exp() # effective rank of a singular value 
+                eff_rank_two = shannon_entropy_two.exp() # effective rank of a singular value 
+
+                self.log_dict(
+                    {
+                        "train/eff_rank_one": eff_rank_one.cpu().item(),
+                        "train/eff_rank_two": eff_rank_two.cpu().item(),
+                    },
                     on_step=True, 
                     on_epoch=False,
                     sync_dist=False
@@ -136,4 +179,4 @@ class FineTunerVisual(pl.LightningModule):
             sync_dist=True, 
         )
 
-        return loss 
+        return loss
