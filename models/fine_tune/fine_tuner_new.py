@@ -1,4 +1,4 @@
-from itertools import chain
+import wandb
 from omegaconf import DictConfig
 from typing import Any, Dict, Optional, Tuple
 
@@ -11,7 +11,8 @@ from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import lightning.pytorch as pl
 
 from models.utils.vicreg import VICReg
-from models.utils.aux_models import CNN, CNNStackChannels, Expander
+from models.utils.aux_models import Expander
+from models.utils.cnns import ThreeLayerCNN, plot_feature_maps
         
 
 class FineTunerVisual(pl.LightningModule): 
@@ -33,7 +34,7 @@ class FineTunerVisual(pl.LightningModule):
         self.expander_kwargs = expander_kwargs
         self.vic_reg_kwargs = vic_reg_kwargs
         
-        self.visionEncoder = CNNStackChannels(**self.vision_encoder_kwargs)  
+        self.visionEncoder = ThreeLayerCNN(**self.vision_encoder_kwargs)  
         self.visionExpander = Expander(**self.expander_kwargs)
         
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
@@ -132,11 +133,31 @@ class FineTunerVisual(pl.LightningModule):
         return self((batch["rgb_one"]), (batch["rgb_one_pos"]))
         
     def forward(self, rgb_one: TensorType["*"], rgb_two: TensorType["*"]) -> Tuple[TensorType["n", "d_model"], TensorType["n", "d_model"]]:  
-        anc_y = self.visionEncoder(rgb_one) # [n, d_model]: robot0_eye_in_hand_image 
-        pos_y = self.visionEncoder(rgb_two) # [n, d_model]: agentview_image 
+            anc_y_one, anc_y_two, anc_y_three, anc_y_out = self.visionEncoder(rgb_one) # [n, d_model]: robot0_eye_in_hand_image 
+            pos_y_one, pos_y_two, pos_y_three, pos_y_out = self.visionEncoder(rgb_two) # [n, d_model]: agentview_image 
+            
+            if all([self.training, self.logger is not None, isinstance(self.logger, pl.loggers.WandbLogger), self.global_step % 50 == 0]): 
+                anc_y_one_fm = plot_feature_maps(anc_y_one, title="Anchor feature map (layer one)")
+                anc_y_two_fm = plot_feature_maps(anc_y_two, title="Anchor feature map (layer two)")
+                anc_y_three_fm = plot_feature_maps(anc_y_three, title="Anchor feature map (layer three)")
+                pos_y_one_fm = plot_feature_maps(pos_y_one, title="Positive feature map (layer one)")
+                pos_y_two_fm = plot_feature_maps(pos_y_two, title="Positive feature map (layer two)")
+                pos_y_three_fm = plot_feature_maps(pos_y_three, title="Positive feature map (layer three)")
+                    
+                if isinstance(self.logger, pl.loggers.WandbLogger):
+                    self.logger.experiment.log(
+                        {
+                            "anc_y_one_fm": wandb.Image(anc_y_one_fm), 
+                            "anc_y_two_fm": wandb.Image(anc_y_two_fm), 
+                            "anc_y_three_fm": wandb.Image(anc_y_three_fm), 
+                            "pos_y_three_fm": wandb.Image(pos_y_one_fm), 
+                            "pos_y_two_fm": wandb.Image(pos_y_two_fm), 
+                            "pos_y_three_fm": wandb.Image(pos_y_three_fm), 
+                        }
+                    )
+                
+            return anc_y_out, pos_y_out
         
-        return anc_y, pos_y
-    
     def _effective_rank(self, x: torch.Tensor) -> float:
         x_centered = x - x.mean(dim=0)
         s = torch.linalg.svdvals(x_centered.float())

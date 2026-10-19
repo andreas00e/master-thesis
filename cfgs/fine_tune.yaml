@@ -2,7 +2,7 @@ defaults:
   - base 
   - _self_ 
 
-d_model: 256
+d_model: 128
 
 datamodule:
   transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
@@ -11,7 +11,7 @@ datamodule:
     - color_jitter
     # - resize_crop_cnn
     # 
-    - resize_cnn
+    # - resize_cnn
     - to_dtype_cnn
 
   contrastive_transforms: true
@@ -21,7 +21,7 @@ datamodule:
     - iiwa 
   tasks: 
     - square
-    - threading
+    # - threading
 
   window_size: 1 # > 0
   batch_size: 64
@@ -50,8 +50,11 @@ model_vision:
   
   vision_encoder_kwargs: 
     # model_name: resnet18
-    d_model: ${d_model}
-    in_channels: 3 # 24
+    with_vis: true
+    feature_dim: 128
+
+    # d_model: ${d_model}
+    # in_channels: 3 # 24
 
     # start_layer: 1 # {3, 4}
   
