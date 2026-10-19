@@ -157,7 +157,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 demo_map=demo_map[f"{task}{robot}"],
                 dataframe_gripper=self.dataframe_gripper, 
                 transforms_list=self.transforms_list, 
-                contrastive_transforms=None if stage == "test" else self.contrastive_transforms, 
+                contrastive_transforms=self.contrastive_transforms, 
                 window_size=self.window_size,
                 chunk_size=self.chunk_size, 
                 #window_size=None if stage == "test" else self.window_size,

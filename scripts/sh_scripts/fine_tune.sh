@@ -3,7 +3,6 @@
 #SBATCH --output=outputs/fine_tune/output/training_%j.log
 #SBATCH --error=outputs/fine_tune/error/training_%j.err
 #SBATCH --time=20:00:00
-#SBATCH --partition=lrz-v100x2
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32GB
 

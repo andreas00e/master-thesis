@@ -1,10 +1,11 @@
 from r3m import load_r3m 
 from  peft import LoraConfig, get_peft_model
 from omegaconf import  DictConfig
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import torch 
 import torch.nn as nn 
+from torchvision.models import resnet18
 from torchtyping import TensorType
 
 from models.utils.utils import PositionalEncoding
@@ -34,6 +35,89 @@ class CNN(nn.Module):
             nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
             if module.bias is not None: 
                 nn.init.zeros_(module.bias)       
+
+    def forward(
+        self, 
+        x: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"]
+        ) -> TensorType["batch*(chunk/num_steps)*window", "d_model"]:
+
+        x = x.view(-1, *x.shape[-3:]) # [batch*(chunk/num_steps)*window, channels, height, width]
+        x = self.model(x) # [batch*(chunk/num_steps)*window, feature_dim]
+        
+        return x
+    
+class CNNStackChannels(nn.Module):
+    def __init__(
+        self, 
+        d_model: int, 
+        in_channels: int=24, 
+        input_size: Tuple[int, int]=(84, 84) # (112, 112)
+        ) -> None:
+        super().__init__()
+
+        self.d_model = d_model
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.ReLU(),
+            nn.Flatten()
+        )
+
+        with torch.no_grad():
+            dummy = torch.zeros(1, in_channels, *input_size)
+            n_flat = self.conv(dummy).shape[-1]
+
+        self.down = nn.Linear(n_flat, self.d_model)
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module: nn.Module) -> None:
+        if isinstance(module, (nn.Linear, nn.Conv2d)):
+            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+    def forward(
+        self,
+        x: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"],
+        ) -> TensorType["batch*(chunk/num_steps)*window", "d_model"]:
+        x = x.reshape(-1, *x.shape[-3:])
+        # x = x.reshape(-1, x.shape[2]*x.shape[3], *x.shape[-2:])
+        x = self.conv(x)
+        x = self.down(x)
+        
+        return x
+    
+class ConvEncoder(nn.Module):
+    def __init__(self, d_model: int=256):
+        super().__init__()
+        
+        self.d_model = d_model
+        self.model = nn.Sequential(
+            nn.Conv2d(3, 32, 4, stride=2, padding=1),
+            nn.GroupNorm(8, 32),
+            nn.SiLU(),
+
+            nn.Conv2d(32, 64, 3, stride=2, padding=1),
+            nn.GroupNorm(8, 64),
+            nn.SiLU(),
+
+            nn.Conv2d(64, 128, 3, stride=2, padding=1),
+            nn.GroupNorm(8, 128),
+            nn.SiLU(),
+
+            nn.Conv2d(128, 256, 3, stride=2, padding=1),
+            nn.GroupNorm(8, 256),
+            nn.SiLU(),
+
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(256, self.d_model)
+        )
 
     def forward(
         self, 
@@ -186,10 +270,6 @@ class TransformerEncoder(nn.Module):
             nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
             if module.bias is not None: 
                 nn.init.zeros_(module.bias)       
-                
-        if isinstance(module, nn.BatchNorm1d): 
-            nn.init.ones_(module.weight)
-            nn.init.zeros_(module.bias)
             
     def forward(
         self, 
@@ -199,7 +279,7 @@ class TransformerEncoder(nn.Module):
         ) -> torch.Tensor: 
         
         cls_token = self.cls_token.expand(x.shape[0], -1, -1) # [batch*(chunk/num_steps), 1, d_model]
-                
+                    
         x = torch.cat((cls_token, x), dim=1) # [batch*(chunk/num_steps), 1+window, d_model]
         x = self.pe(x, idxs) # [batch*(chunk/num_steps), 1+window, d_model]
         
@@ -210,7 +290,8 @@ class TransformerEncoder(nn.Module):
                      
         else:
             x = self.transformerEncoder(x) # [batch*(chunk/num_steps), 1+window, d_model]
-            x = x.mean(1) # [batch*(chunk/num_steps), d_model]: mean pooling 
+            x = x[:, 0, :] # [batch*(chunk/num_steps), d_model]: CLS token
+            # x = x.mean(1) # [batch*(chunk/num_steps), d_model]: mean pooling 
             x = self.head(x) # [batch*(chunk/num_steps), d_model]
     
         return x              

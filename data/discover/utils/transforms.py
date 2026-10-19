@@ -22,7 +22,8 @@ TRANSFORMS = {
 
     "resize_cnn": 
         lambda: v2.Resize(
-            size=(112, 112)
+            # size=(112, 112)
+            size=(84, 84)
         ),
         
     "resize_crop_cnn":

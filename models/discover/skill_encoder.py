@@ -15,13 +15,11 @@ from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import lightning.pytorch as pl 
 from torchtyping import TensorType
 
-from models.fine_tune.fine_tuner import FineTunerVisual
 from models.discover.utils.queue import FIFOQueue
 from models.discover.utils.sinkhorn import Sinkhorn
 from models.discover.utils.visualize import Visualize
-from models.utils.aux_models import TransformerEncoder, VisionEncoder, CNN
+from models.utils.aux_models import TransformerEncoder, CNN
 from models.utils.loss import UncertaintyWeighting, TimeContrastiveLoss
-from models.utils.soft_dtw_cuda import SoftDTW
 from models.utils.utils import SinusoidalEmbedding
 
 
@@ -112,14 +110,18 @@ class SkillEncoder(pl.LightningModule):
         self._task_val = []
         self._robot_val = []
         
-        for m in [self.gripperEncoder, self.downEmb]:
+        for m in [self.gripperEncoder, self.downEmb, self.lnVisionOne, self.lnVisionTwo, self.lnGripper, self.lnDown]:
              m.apply(self._init_weights)
 
     def _init_weights(self, module): 
         if isinstance(module, nn.Linear): 
             nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
             if module.bias is not None: 
-                nn.init.zeros_(module.bias)               
+                nn.init.zeros_(module.bias)      
+                
+        if isinstance(module, nn.LayerNorm): 
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)         
                 
     def configure_optimizers(self) -> Dict[str, Any]:
         trainable_parameters = filter(lambda p: p.requires_grad, self.parameters())        
@@ -150,11 +152,7 @@ class SkillEncoder(pl.LightningModule):
         }
 
     def on_train_epoch_start(self):
-        if self.current_epoch < self.freeze_c_epochs:  
-            self._set_freeze(True)
-        
-        elif self.current_epoch == self.freeze_c_epochs: 
-            self._set_freeze(False)
+        self._set_freeze(self.current_epoch < self.freeze_c_epochs)
     
     def _set_freeze(self, freeze: bool) -> None: 
         for p in self.C.parameters(): 
@@ -232,8 +230,8 @@ class SkillEncoder(pl.LightningModule):
                     z_anc_full = torch.cat([z_anc, queue_features[0]], dim=0) # [n+capacity, d_model]
                     z_pos_full = torch.cat([z_pos, queue_features[1]], dim=0) # [n+capacity, d_model]
                     
-            if self.queue is not None and stage == "train":     
-                self.queue.enqueue(torch.stack([z_anc.detach(), z_pos.detach()], dim=0))
+                if self.queue is not None and stage == "train":     
+                    self.queue.enqueue(torch.stack([z_anc.detach(), z_pos.detach()], dim=0))
                 
         c_one = self.C(z_anc_full) # [n or n + capacity, k] 
         c_two = self.C(z_pos_full) # [n or n + capacity, k]
@@ -267,7 +265,7 @@ class SkillEncoder(pl.LightningModule):
                     prediction_perplexity = prediction_entropy.exp() / k # []
                     
                     sim = z_anc @ z_anc.T # [n, n]
-                    off_diag = (sim.sum() - (sim.diagonal().sum())) / (z_anc_full.shape[0] * (z_anc_full.shape[0]-1))
+                    off_diag = (sim.sum() - sim.diagonal().sum()) / (n * (n - 1))
                     z_std = z_anc_full.std(dim=0).mean()
                                     
                     per_sample_entropy = (-(p["one"] * log_p["one"])).sum(dim=-1).mean() / math.log(k) # normalized per sample entropy                      
@@ -357,10 +355,17 @@ class SkillEncoder(pl.LightningModule):
         n = batch_size*chunk
         
         emb_one = self.lnVisionOne(self.visionEncoderOne(rgb_one)) # [batch_size*chunk*window, d_model] 
+        print(f"emb_one mean : {emb_one.mean().detach()}")
+        print(f"emb_one std: {emb_one.std(-1).mean().detach()}")
         emb_two = self.lnVisionTwo(self.visionEncoderTwo(rgb_two)) # [batch_size*chunk*window, d_model]
+        print(f"emb_two mean: {emb_two.mean().detach()}")
+        print(f"emb_two std: {emb_two.std(-1).mean().detach()}")
         emb_gripper = self.lnGripper(self.gripperEncoder(self.sinusoidal_embedding(g_qpos.reshape(-1, 1)))) # [batch_size*chunk*window, d_model]
+        print(f"emb_gripper mean: {emb_gripper.mean().detach()}")
+        print(f"emb_gripper std: {emb_gripper.std(-1).mean().detach()}")
+        print("####################################")
         
-        if self.training and gripper_dropout_p > 0.0:
+        if all([self.training, gripper_dropout_p is not None, gripper_dropout_p > 0.0]):
             keep_p = 1.0 - gripper_dropout_p
             keep = torch.bernoulli(torch.full((n, 1, 1), keep_p, device=emb_gripper.device, dtype=emb_gripper.dtype)) # [n, 1, 1]
             emb_gripper = (emb_gripper.view(n, window, -1) * keep / keep_p).view(n * window, -1) # [n*window, d_model]

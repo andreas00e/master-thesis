@@ -1,7 +1,5 @@
 import hydra
 import multiprocessing
-from r3m import load_r3m
-from peft import PeftModel
 from hydra.utils import instantiate
 
 import lightning.pytorch as pl
@@ -24,7 +22,7 @@ def main(cfg):
     logger = instantiate(cfg.logger)
     
     model = FineTunerVisual.load_from_checkpoint(
-        "outputs/checkpoints/fine_tune/best-checkpoint-epoch=53-val_loss=0.00.ckpt",       
+        "/dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/outputs/checkpoints/fine_tune/exp_1024_l_15_m_25_n_2/best-checkpoint-epoch=44-val_loss=0.00.ckpt",       
         strict=False
         )
     

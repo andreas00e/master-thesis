@@ -10,7 +10,6 @@ datamodule:
     - to_image
     - rotate 
     - color_jitter
-    - gaussian_blur
     - resize_crop_cnn
     - to_dtype_cnn
   contrastive_transforms: true 
@@ -18,7 +17,9 @@ datamodule:
   robots: 
     - iiwa
     - panda
-  tasks: null
+  tasks: 
+    - square 
+    - threading
 
   data_portion: 1.0
   consistent_batch: true 
@@ -38,7 +39,7 @@ model:
 
   time_contrastive: true
   temp_time_contrastive: 0.1
-  gripper_dropout_p: 0.2
+  gripper_dropout_p: 0.05
 
   with_uncertainty_weighting: false
   uncertainty_weighting_kwargs: 
@@ -105,13 +106,13 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: queue_10_c_15_d0_s01
+  name: queue_new
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  overfit_batches: 10
+  # overfit_batches: 15
   log_every_n_steps: 1
   accelerator: gpu   
   devices: 

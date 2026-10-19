@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn 
 import torch.nn.functional as F
 from torchtyping import TensorType
+from lightning.pytorch.loggers import WandbLogger
 
 import lightning.pytorch as pl 
 
@@ -38,14 +39,14 @@ class VICReg(nn.Module):
                 
         return out
         
-    def _variance_loss(self, x: TensorType["n", "d"]) -> torch.Tensor: 
+    def _variance_loss(self, x: TensorType["n", "d"]) -> Tuple[torch.Tensor, TensorType["d"]]: 
         var = x.var(dim=0, unbiased=False) # [d]
         std = (var + self.eps).sqrt() # [d]
         out = F.relu(self.gamma - std).mean() # []
 
         return out, var
     
-    def _covariance_loss(self, x: TensorType["n", "d"]) -> torch.Tensor: 
+    def _covariance_loss(self, x: TensorType["n", "d"]) -> tuple[torch.Tensor, TensorType["d", "d"]]: 
         n, d = x.shape 
         if n <= 1: 
             raise ValueError(f"Calculating the sample variance requires more than one sample, got {n} sample(s)")
@@ -53,11 +54,11 @@ class VICReg(nn.Module):
         x_centered = x - x.mean(dim=0)
         cov = (x_centered.T @ x_centered) / (n - 1) # [d, d]: sample variance
         off_diag = ~torch.eye(d, dtype=torch.bool, device=x.device)
-        out = (cov[off_diag] ** 2).sum() / d
+        out = (cov[off_diag] ** 2).sum() / d # []
         
         return out, cov
     
-    def forward(self, z: TensorType["n", "d"], z_: TensorType["n", "d"]) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]: 
+    def forward(self, z: TensorType["n", "d"], z_: TensorType["n", "d"], step: Optional[int]=None) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]: 
         inv_loss = self._invariance_loss(z, z_) # []
         
         var_loss_z, var = self._variance_loss(z)
@@ -69,8 +70,7 @@ class VICReg(nn.Module):
         cov_loss = cov_loss_z + cov_loss_z_ # []
         tot_loss = self.lambda_ * inv_loss + self.mu * var_loss + self.nu * cov_loss # []
         
-        if all([self.logger is not None, isinstance(self.logger, pl.loggers.WandbLogger), self.training]): 
-            if self.logger.experiment.step % self.log_every_n_steps == 0:
+        if self.training and step is not None and step % self.log_every_n_steps == 0 and isinstance(self.logger, pl.loggers.WandbLogger): 
                 with torch.no_grad(): 
                     cov_np = cov.detach().cpu().numpy()
 
@@ -86,7 +86,8 @@ class VICReg(nn.Module):
                 self.logger.experiment.log({
                     "train/var_histogram_z": wandb.Histogram(var.detach().cpu().numpy()), 
                     "train/var_histogram_z_": wandb.Histogram(var_.detach().cpu().numpy()), 
-                    "train/covariance_matrix_z": wandb.Image(cov_viz, caption=f"Covariance Matrix step {self.logger.experiment.step}")
+                    "train/covariance_matrix_z": wandb.Image(cov_viz, caption=f"Covariance Matrix step {self.logger.experiment.step}"), 
+                    "trainer/global_step": step
                 })
                                                 
         logs_ = {

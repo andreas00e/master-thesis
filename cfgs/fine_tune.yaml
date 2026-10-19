@@ -9,9 +9,10 @@ datamodule:
     - to_image
     - rotate 
     - color_jitter
-    - resize_crop_cnn
+    # - resize_crop_cnn
+    # 
+    - resize_cnn
     - to_dtype_cnn
-    - normalize
 
   contrastive_transforms: true
 
@@ -23,10 +24,10 @@ datamodule:
     - threading
 
   window_size: 1 # > 0
-  batch_size: 512
+  batch_size: 64
   
 model_vision: 
-  _target_: models.fine_tune.fine_tuner.FineTunerVisual
+  _target_: models.fine_tune.fine_tuner_new.FineTunerVisual
   _recursive_: False
 
   optimizer_kwargs: 
@@ -50,6 +51,8 @@ model_vision:
   vision_encoder_kwargs: 
     # model_name: resnet18
     d_model: ${d_model}
+    in_channels: 3 # 24
+
     # start_layer: 1 # {3, 4}
   
     # r: 64
@@ -65,15 +68,28 @@ model_vision:
   vic_reg_kwargs: 
     log_every_n_steps: 50 
 
-    lambda_: 15 # invariance
-    mu: 30.0 # variance
-    nu: 1.0 # covariance
-    gamma: 1.0 # desired variance
+    lambda_: 25.0 # invariance
+    mu: 25.0 # variance
+    nu: 3.0 # covariance
+    gamma: 1 # desired variance
     eps: 1e-4 # umerical stability
 
 logger: 
-  name: exp_1024_l_25_m_30_n_1_new_aug_norm
+  name: CNN_25_25_3
   project: fine_tune
+
+trainer: 
+  _target_: lightning.pytorch.Trainer
+  overfit_batches: 4
+  log_every_n_steps: 1 
+  accelerator: gpu   
+  devices: 
+    - 0
+  max_epochs: 200
+  num_sanity_val_steps: 2
+  enable_progress_bar: true
+  profiler: simple 
+  default_root_dir: outputs/logs/${logger.project}
 
 callbacks: 
   learning_rate_monitor: 
@@ -81,4 +97,10 @@ callbacks:
     logging_interval: step 
 
   model_checkpoint: 
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint 
     monitor: val/tot_loss
+    dirpath: outputs/checkpoints/${logger.project}/${logger.name}
+    filename: 'best-checkpoint-{epoch:02d}-{val_loss:.2f}'
+    save_top_k: 1 
+    mode: min 
+    save_last: true
