@@ -5,7 +5,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torchtyping import TensorType
 
   
-def collate_discover(batch: List[TensorType]) -> Dict[str, TensorType["*"]]:
+def collate_fn(batch: List[TensorType]) -> Dict[str, TensorType["*"]]:
     if len(batch) <= 0: raise ValueError(f"Batch has to contain at least one element, got {len(batch)}.")
         
     return {
