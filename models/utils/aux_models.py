@@ -92,43 +92,6 @@ class CNNStackChannels(nn.Module):
         x = self.down(x)
         
         return x
-    
-class ConvEncoder(nn.Module):
-    def __init__(self, d_model: int=256):
-        super().__init__()
-        
-        self.d_model = d_model
-        self.model = nn.Sequential(
-            nn.Conv2d(3, 32, 4, stride=2, padding=1),
-            nn.GroupNorm(8, 32),
-            nn.SiLU(),
-
-            nn.Conv2d(32, 64, 3, stride=2, padding=1),
-            nn.GroupNorm(8, 64),
-            nn.SiLU(),
-
-            nn.Conv2d(64, 128, 3, stride=2, padding=1),
-            nn.GroupNorm(8, 128),
-            nn.SiLU(),
-
-            nn.Conv2d(128, 256, 3, stride=2, padding=1),
-            nn.GroupNorm(8, 256),
-            nn.SiLU(),
-
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(256, self.d_model)
-        )
-
-    def forward(
-        self, 
-        x: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"]
-        ) -> TensorType["batch*(chunk/num_steps)*window", "d_model"]:
-
-        x = x.view(-1, *x.shape[-3:]) # [batch*(chunk/num_steps)*window, channels, height, width]
-        x = self.model(x) # [batch*(chunk/num_steps)*window, feature_dim]
-        
-        return x
 
 class VisionEncoder(nn.Module): 
     def __init__(
@@ -221,7 +184,6 @@ class Expander(nn.Module):
         if isinstance(module, nn.BatchNorm1d): 
             nn.init.ones_(module.weight)
             nn.init.zeros_(module.bias)
-
     
     def forward(self, x: TensorType["batch", "input_dim"]) -> TensorType["batch", "output_dim"]: 
         x = self.model(x)
