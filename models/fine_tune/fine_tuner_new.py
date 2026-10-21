@@ -12,7 +12,7 @@ import lightning.pytorch as pl
 
 from models.utils.vicreg import VICReg
 from models.utils.aux_models import Expander
-from models.utils.cnns import ThreeLayerCNN, plot_feature_maps
+from models.utils.cnns import ThreeLayerCNN, Resnet18, plot_feature_maps
         
 
 class FineTunerVisual(pl.LightningModule): 
@@ -34,7 +34,7 @@ class FineTunerVisual(pl.LightningModule):
         self.expander_kwargs = expander_kwargs
         self.vic_reg_kwargs = vic_reg_kwargs
         
-        self.visionEncoder = ThreeLayerCNN(**self.vision_encoder_kwargs)  
+        self.visionEncoder = Resnet18(**self.vision_encoder_kwargs)  
         self.visionExpander = Expander(**self.expander_kwargs)
         
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
@@ -133,26 +133,27 @@ class FineTunerVisual(pl.LightningModule):
         return self((batch["rgb_one"]), (batch["rgb_one_pos"]))
         
     def forward(self, rgb_one: TensorType["*"], rgb_two: TensorType["*"]) -> Tuple[TensorType["n", "d_model"], TensorType["n", "d_model"]]:  
-            anc_y_one, anc_y_two, anc_y_three, anc_y_out = self.visionEncoder(rgb_one) # [n, d_model]: robot0_eye_in_hand_image 
-            pos_y_one, pos_y_two, pos_y_three, pos_y_out = self.visionEncoder(rgb_two) # [n, d_model]: agentview_image 
+            anc_y_one, anc_y_two, _, anc_y_four, anc_y_out = self.visionEncoder(rgb_one) # [n, d_model]: robot0_eye_in_hand_image 
+            pos_y_one, pos_y_two, _, pos_y_four, pos_y_out = self.visionEncoder(rgb_two) # [n, d_model]: agentview_image 
             
             if all([self.training, self.logger is not None, isinstance(self.logger, pl.loggers.WandbLogger), self.global_step % 50 == 0]): 
                 anc_y_one_fm = plot_feature_maps(anc_y_one, title="Anchor feature map (layer one)")
                 anc_y_two_fm = plot_feature_maps(anc_y_two, title="Anchor feature map (layer two)")
-                anc_y_three_fm = plot_feature_maps(anc_y_three, title="Anchor feature map (layer three)")
+                anc_y_four_fm = plot_feature_maps(anc_y_four, title="Anchor feature map (layer three)")
                 pos_y_one_fm = plot_feature_maps(pos_y_one, title="Positive feature map (layer one)")
                 pos_y_two_fm = plot_feature_maps(pos_y_two, title="Positive feature map (layer two)")
-                pos_y_three_fm = plot_feature_maps(pos_y_three, title="Positive feature map (layer three)")
-                    
+                pos_y_four_fm = plot_feature_maps(pos_y_four, title="Positive feature map (layer three)")
+                
                 if isinstance(self.logger, pl.loggers.WandbLogger):
                     self.logger.experiment.log(
-                        {
+                        {   
+                            "rgb_one": wandb.Image(rgb_one[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0),
                             "anc_y_one_fm": wandb.Image(anc_y_one_fm), 
                             "anc_y_two_fm": wandb.Image(anc_y_two_fm), 
-                            "anc_y_three_fm": wandb.Image(anc_y_three_fm), 
+                            "anc_y_four_fm": wandb.Image(anc_y_four_fm), 
                             "pos_y_three_fm": wandb.Image(pos_y_one_fm), 
                             "pos_y_two_fm": wandb.Image(pos_y_two_fm), 
-                            "pos_y_three_fm": wandb.Image(pos_y_three_fm), 
+                            "pos_y_four_fm": wandb.Image(pos_y_four_fm), 
                         }
                     )
                 
@@ -167,7 +168,6 @@ class FineTunerVisual(pl.LightningModule):
         return entropy.exp().item()
     
     def _shared_step(self, batch: Dict[str, Any], batch_idx: int, stage: Optional[str]=None) -> torch.Tensor: 
-        rg = batch["rgb_one"]
         anc_y, pos_y = self(batch["rgb_one"], batch["rgb_one_pos"])
             
         anc_z = self.visionExpander(anc_y) # [n, d_model*x]
@@ -179,7 +179,7 @@ class FineTunerVisual(pl.LightningModule):
                     {
                         f"{stage}/eff_rank_encoder_anc": self._effective_rank(anc_y),
                         f"{stage}/eff_rank_encoder_pos": self._effective_rank(pos_y),
-                        f"{stage}/eff_rank_exapnder_anc": self._effective_rank(anc_z),
+                        f"{stage}/eff_rank_expander_anc": self._effective_rank(anc_z),
                         f"{stage}/eff_rank_expander_pos": self._effective_rank(pos_z), 
                         f"{stage}/anc_z_std": anc_z.std(dim=0).mean(), 
                         f"{stage}/pos_z_std": pos_z.std(dim=0).mean(), 
