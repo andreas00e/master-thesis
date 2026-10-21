@@ -1,7 +1,8 @@
-from r3m import load_r3m 
-from  peft import LoraConfig, get_peft_model
+from r3m import load_r3m
+from itertools import chain
 from omegaconf import  DictConfig
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
+from  peft import LoraConfig, get_peft_model
 
 import torch 
 import torch.nn as nn 
@@ -198,30 +199,19 @@ class VisionEncoder(nn.Module):
         return x
     
 class Expander(nn.Module): 
-    def __init__(
-        self, 
-        in_dim: Union[int, float], 
-        h_dim: Union[int, float], 
-        out_dim: Union[int, float], 
-        ) -> None:
-        super().__init__() 
-        
-        self.in_dim = int(in_dim)
-        self.h_dim = int(h_dim)
-        self.out_dim = int(out_dim)
+    def __init__(self, feature_list: List) -> None:
+        super().__init__()
                 
-        self.model = nn.Sequential(
-            nn.Linear(in_features=self.in_dim, out_features=self.h_dim), 
-            nn.BatchNorm1d(num_features=self.h_dim),
-            nn.ReLU(), 
-            nn.Linear(in_features=self.h_dim, out_features=self.h_dim), 
-            nn.BatchNorm1d(num_features=self.h_dim),
-            nn.ReLU(), 
-            nn.Linear(in_features=self.h_dim, out_features=self.out_dim)
-        ) 
+        linear_layers = [nn.Linear(feature_list[i], feature_list[i+1]) for i in range(len(feature_list)-1)]
+        batch_norms = [nn.BatchNorm1d(feature_list[i]) for i in range(1, len(feature_list))]
+        activations = [nn.ReLU() for _ in range(len(feature_list))]
+        
+        sub_modules = list(chain.from_iterable(zip(linear_layers, batch_norms, activations)))[:-2]
+        
+        self.model = nn.Sequential(*sub_modules)
         
         self.apply(self._init_weights)
-        
+
     def _init_weights(self, module): 
         if isinstance(module, nn.Linear): 
             nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain("relu"))
@@ -231,9 +221,12 @@ class Expander(nn.Module):
         if isinstance(module, nn.BatchNorm1d): 
             nn.init.ones_(module.weight)
             nn.init.zeros_(module.bias)
+
+    
+    def forward(self, x: TensorType["batch", "input_dim"]) -> TensorType["batch", "output_dim"]: 
+        x = self.model(x)
         
-    def forward(self, x: TensorType["n", "in_dim"]) -> TensorType["n", "out_dim"]:
-        return self.model(x)  
+        return x 
     
 class TransformerEncoder(nn.Module): 
     def __init__(
