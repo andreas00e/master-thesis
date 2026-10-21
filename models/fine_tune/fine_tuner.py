@@ -1,4 +1,4 @@
-from itertools import chain
+import wandb
 from omegaconf import DictConfig
 from typing import Any, Dict, Optional, Tuple
 
@@ -11,7 +11,8 @@ from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import lightning.pytorch as pl
 
 from models.utils.vicreg import VICReg
-from models.utils.aux_models import CNN, Expander
+from models.utils.aux_models import Expander
+from models.utils.cnns import Resnet18, plot_feature_maps
         
 
 class FineTunerVisual(pl.LightningModule): 
@@ -33,10 +34,8 @@ class FineTunerVisual(pl.LightningModule):
         self.expander_kwargs = expander_kwargs
         self.vic_reg_kwargs = vic_reg_kwargs
         
-        self.visionEncoderOne = CNN(**self.vision_encoder_kwargs)  
-        self.visionEncoderTwo = CNN(**self.vision_encoder_kwargs)      
-        self.visionExpanderOne = Expander(**self.expander_kwargs)
-        self.visionExpanderTwo = Expander(**self.expander_kwargs)
+        self.visionEncoder = Resnet18(**self.vision_encoder_kwargs)  
+        self.visionExpander = Expander(**self.expander_kwargs)
         
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
                 
@@ -66,8 +65,8 @@ class FineTunerVisual(pl.LightningModule):
         return scheduler
                    
     def configure_optimizers(self):
-        encoder_parameters = list(filter(lambda p: p.requires_grad, chain(self.visionEncoderOne.parameters(), self.visionEncoderTwo.parameters())))
-        expander_parameters = list(filter(lambda p: p.requires_grad, chain(self.visionExpanderOne.parameters(), self.visionExpanderTwo.parameters()))) 
+        encoder_parameters = list(filter(lambda p: p.requires_grad, self.visionEncoder.parameters()))
+        expander_parameters = list(filter(lambda p: p.requires_grad, self.visionExpander.parameters()))
 
         param_groups = [
             {
@@ -92,6 +91,11 @@ class FineTunerVisual(pl.LightningModule):
             "lr_scheduler": scheduler
             }
         
+    def on_train_epoch_start(self) -> None:
+        if hasattr(self.trainer.train_dataloader, "batch_sampler"):
+            if hasattr(self.trainer.train_dataloader.batch_sampler, "set_epoch"):
+                self.trainer.train_dataloader.batch_sampler.set_epoch(self.current_epoch)
+        
     def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
         return self._shared_step(batch, batch_idx, stage="train")
             
@@ -100,18 +104,18 @@ class FineTunerVisual(pl.LightningModule):
     
     def test_step(self, batch: Dict[str, Any], batch_idx: int) -> None:
         with torch.no_grad():
-            rgb_one_y, rgb_two_y = self(batch["rgb_one"], batch["rgb_two"])
+            anc_y, pos_y = self(batch["rgb_one"], batch["rgb_one_pos"])
 
-            rgb_one_z = self.visionExpanderOne(rgb_one_y)
-            rgb_two_z = self.visionExpanderTwo(rgb_two_y)
+            anc_z = self.visionExpander(anc_y)
+            pos_z = self.visionExpander(pos_y)
 
             metrics = {}
 
-            for name, one, two in [("encoder", rgb_one_y, rgb_two_y), ("projector", rgb_one_z, rgb_two_z)]:
-                one_norm = F.normalize(one, dim=-1)
-                two_norm = F.normalize(two, dim=-1)
+            for name, anc, pos in [("encoder", anc_y, pos_y), ("projector", anc_z, pos_z)]:
+                anc_norm = F.normalize(anc, dim=-1)
+                pos_norm = F.normalize(pos, dim=-1)
 
-                sim = one_norm @ two_norm.T
+                sim = anc_norm @ pos_norm.T
                 n = sim.shape[0]
                 off_diag = ~torch.eye(n, dtype=torch.bool, device=sim.device)
 
@@ -131,14 +135,35 @@ class FineTunerVisual(pl.LightningModule):
             )
         
     def predict_step(self, batch: Dict[str, Any], batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor]: 
-        return self((batch["rgb_one"]), (batch["rgb_two"]))
+        return self((batch["rgb_one"]), (batch["rgb_one_pos"]))
         
     def forward(self, rgb_one: TensorType["*"], rgb_two: TensorType["*"]) -> Tuple[TensorType["n", "d_model"], TensorType["n", "d_model"]]:  
-        rgb_one_y = self.visionEncoderOne(rgb_one) # [n, d_model]: robot0_eye_in_hand_image 
-        rgb_two_y = self.visionEncoder(rgb_two) # [n, d_model]: agentview_image 
+            anc_y_one, anc_y_two, _, anc_y_four, anc_y_out = self.visionEncoder(rgb_one) # [n, d_model]: robot0_eye_in_hand_image 
+            pos_y_one, pos_y_two, _, pos_y_four, pos_y_out = self.visionEncoder(rgb_two) # [n, d_model]: agentview_image 
+            
+            if all([self.training, self.logger is not None, isinstance(self.logger, pl.loggers.WandbLogger), self.global_step % 50 == 0]): 
+                anc_y_one_fm = plot_feature_maps(anc_y_one, title="Anchor feature map (layer one)")
+                anc_y_two_fm = plot_feature_maps(anc_y_two, title="Anchor feature map (layer two)")
+                anc_y_four_fm = plot_feature_maps(anc_y_four, title="Anchor feature map (layer three)")
+                pos_y_one_fm = plot_feature_maps(pos_y_one, title="Positive feature map (layer one)")
+                pos_y_two_fm = plot_feature_maps(pos_y_two, title="Positive feature map (layer two)")
+                pos_y_four_fm = plot_feature_maps(pos_y_four, title="Positive feature map (layer three)")
+                
+                if isinstance(self.logger, pl.loggers.WandbLogger):
+                    self.logger.experiment.log(
+                        {   
+                            "rgb_one": wandb.Image(rgb_one[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0),
+                            "anc_y_one_fm": wandb.Image(anc_y_one_fm), 
+                            "anc_y_two_fm": wandb.Image(anc_y_two_fm), 
+                            "anc_y_four_fm": wandb.Image(anc_y_four_fm), 
+                            "pos_y_three_fm": wandb.Image(pos_y_one_fm), 
+                            "pos_y_two_fm": wandb.Image(pos_y_two_fm), 
+                            "pos_y_four_fm": wandb.Image(pos_y_four_fm), 
+                        }
+                    )
+                
+            return anc_y_out, pos_y_out
         
-        return rgb_one_y, rgb_two_y
-    
     def _effective_rank(self, x: torch.Tensor) -> float:
         x_centered = x - x.mean(dim=0)
         s = torch.linalg.svdvals(x_centered.float())
@@ -148,30 +173,30 @@ class FineTunerVisual(pl.LightningModule):
         return entropy.exp().item()
     
     def _shared_step(self, batch: Dict[str, Any], batch_idx: int, stage: Optional[str]=None) -> torch.Tensor: 
-        rgb_one_y, rgb_two_y = self(batch["rgb_one"], batch["rgb_one_pos"])
-        
-        rgb_one_z = self.visionExpanderOne(rgb_one_y) # [n, d_model*x]
-        rgb_two_z = self.visionExpanderTwo(rgb_two_y) # [n, d_model*x]
+        anc_y, pos_y = self(batch["rgb_one"], batch["rgb_one_pos"])
+            
+        anc_z = self.visionExpander(anc_y) # [n, d_model*x]
+        pos_z = self.visionExpander(pos_y) # [n, d_model*x]
         
         if all([stage == "train", self.logger is not None, isinstance(self.logger, pl.loggers.WandbLogger), self.global_step % 50 == 0]): 
             with torch.no_grad(): 
                 self.log_dict(
                     {
-                        f"{stage}/eff_rank_encoder_one": self._effective_rank(rgb_one_y),
-                        f"{stage}/eff_rank_encoder_two": self._effective_rank(rgb_two_y),
-                        f"{stage}/eff_rank_projector_one": self._effective_rank(rgb_one_z),
-                        f"{stage}/eff_rank_projector_two": self._effective_rank(rgb_two_z), 
-                        f"{stage}/rgb_one_z_std": rgb_one_z.std(dim=0).mean(), 
-                        f"{stage}/rgb_two_z_std": rgb_two_z.std(dim=0).mean(), 
-                        f"{stage}/rgb_one_z_norm_mean": rgb_one_z.norm(dim=-1).mean(), 
-                        f"{stage}/rgb_two_z_norm_mean": rgb_two_z.norm(dim=-1).mean()
+                        f"{stage}/eff_rank_encoder_anc": self._effective_rank(anc_y),
+                        f"{stage}/eff_rank_encoder_pos": self._effective_rank(pos_y),
+                        f"{stage}/eff_rank_expander_anc": self._effective_rank(anc_z),
+                        f"{stage}/eff_rank_expander_pos": self._effective_rank(pos_z), 
+                        f"{stage}/anc_z_std": anc_z.std(dim=0).mean(), 
+                        f"{stage}/pos_z_std": pos_z.std(dim=0).mean(), 
+                        f"{stage}/anc_z_norm_mean": anc_z.norm(dim=-1).mean(), 
+                        f"{stage}/pos_z_norm_mean": pos_z.norm(dim=-1).mean()
                     },
                     on_step=True, 
                     on_epoch=False,
                     sync_dist=False
                     )
         
-        loss, logs_ = self.vicReg(rgb_one_z, rgb_two_z, step=self.global_step if stage == "train" else None)
+        loss, logs_ = self.vicReg(anc_z, pos_z, step=self.global_step if stage == "train" else None)
 
         self.log_dict(
             {
