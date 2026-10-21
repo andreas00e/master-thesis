@@ -6,6 +6,7 @@ from matplotlib import pyplot as plt
 import torch 
 import torch.nn as nn 
 from torchtyping import TensorType 
+from torchvision.models import resnet18
 
 
 @torch.no_grad()
@@ -65,10 +66,12 @@ class ThreeLayerCNN(nn.Module):
         self.relu3 = nn.LeakyReLU(negative_slope=self.negative_slope)
         self.pool3 = nn.AvgPool2d(kernel_size=2, stride=2) # 64x10x10
         
-        self.spatialSoftmax = SpatialSoftmax(height=10, width=10, channel=64)
+        self.spatialSoftmax = SpatialSoftmax(height=10, width=10)
 
         self.fc = nn.Sequential(
-            nn.Linear(64 * 2, self.feature_dim),
+            nn.Linear(128 * 2, self.feature_dim),
+            nn.LeakyReLU(),
+            nn.Linear(self.feature_dim, self.feature_dim), 
             nn.LeakyReLU(),
             nn.Linear(self.feature_dim, self.feature_dim)
         )
@@ -88,28 +91,73 @@ class ThreeLayerCNN(nn.Module):
             return out1, out2, out3, out4
         else: 
             return out4
-    
+        
+class Resnet18(nn.Module): 
+    def __init__(self, feature_dim: int, with_vis: bool) -> None:
+        super().__init__()
+        
+        self.feature_dim = feature_dim
+        self.with_vis = with_vis
+
+        self.model = resnet18() 
+        self.model.conv1 = nn.Conv2d(
+            in_channels=3, 
+            out_channels=64, 
+            kernel_size=3, 
+            stride=1,
+            padding=1,
+            bias=False
+        )
+        self.model.fc = nn.Linear(1024, self.feature_dim)
+        
+        self.spatialSoftmax = SpatialSoftmax(height=11, width=11)
+                    
+    def forward(
+        self, 
+        x: TensorType["batch", "channel", "height", "width"]
+        ) -> Union[Tuple[TensorType["batch", "feature_dim"], ...], TensorType["batch", "feature_dim"]]:
+        x = x.reshape(-1, *x.shape[-3:])
+        
+        print(x.shape)
+        
+        x = self.model.conv1(x)
+        x = self.model.bn1(x)
+        x = self.model.relu(x)
+        
+        out1 = self.model.layer1(x)
+        out2 = self.model.layer2(out1)
+        out3 = self.model.layer3(out2)
+        out4 = self.model.layer4(out3)
+        
+        out = self.spatialSoftmax(out4)
+        
+        out = self.model.fc(out)
+        
+        if self.with_vis: 
+            return out1, out2, out3, out4, out
+        else: 
+            return out
+        
+        
 class SpatialSoftmax(nn.Module):
     def __init__(
         self, 
         height: int,
         width: int, 
-        channel: int
         ) -> None:
         super().__init__()
         
         self.height = height
         self.width = width
-        self.channel = channel
         
-        pos_x, pos_y = torch.meshgrid(
-            torch.linspace(-1.0, 1.0, self.width),
+        pos_y, pos_x = torch.meshgrid(
             torch.linspace(-1.0, 1.0, self.height),
+            torch.linspace(-1.0, 1.0, self.width),
             indexing="ij"
         )
         
-        self.register_buffer("pos_x", pos_x.reshape(1, 1, height, width))
-        self.register_buffer("pos_y", pos_y.reshape(1, 1, height, width))
+        self.register_buffer("pos_x", pos_x.reshape(1, 1, self.height, self.width))
+        self.register_buffer("pos_y", pos_y.reshape(1, 1, self.height, self.width))
         
         self.softmax2d = nn.Softmax2d()
 
