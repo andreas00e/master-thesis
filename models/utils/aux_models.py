@@ -162,33 +162,36 @@ class VisionEncoder(nn.Module):
         return x
     
 class Expander(nn.Module): 
-    def __init__(self, feature_list: List) -> None:
+    def __init__(self, feature_list: List[int]) -> None:
         super().__init__()
+        
+        self.feature_list = [int(feature) for feature in feature_list]
                 
-        linear_layers = [nn.Linear(feature_list[i], feature_list[i+1]) for i in range(len(feature_list)-1)]
-        batch_norms = [nn.BatchNorm1d(feature_list[i]) for i in range(1, len(feature_list))]
-        activations = [nn.ReLU() for _ in range(len(feature_list))]
+        linear_layers = [nn.Linear(self.feature_list[i], self.feature_list[i+1]) for i in range(len(self.feature_list)-1)]
+        batch_norms   = [nn.BatchNorm1d(self.feature_list[i+1]) for i in range(len(self.feature_list)-1)]
+        activations   = [nn.GELU() for _ in range(len(self.feature_list)-1)]
         
-        sub_modules = list(chain.from_iterable(zip(linear_layers, batch_norms, activations)))[:-2]
-        
+        sub_modules = list(chain.from_iterable(zip(linear_layers, batch_norms, activations)))[:-2]        
         self.model = nn.Sequential(*sub_modules)
         
         self.apply(self._init_weights)
 
-    def _init_weights(self, module): 
+    def _init_weights(self, module: nn.Module) -> None: 
         if isinstance(module, nn.Linear): 
-            nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain("relu"))
+            nn.init.kaiming_uniform_(module.weight, a=0, mode="fan_in", nonlinearity="relu")
             if module.bias is not None: 
                 nn.init.zeros_(module.bias)
                 
-        if isinstance(module, nn.BatchNorm1d): 
-            nn.init.ones_(module.weight)
-            nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.BatchNorm1d): 
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
     
     def forward(self, x: TensorType["batch", "input_dim"]) -> TensorType["batch", "output_dim"]: 
         x = self.model(x)
         
-        return x 
+        return x
     
 class TransformerEncoder(nn.Module): 
     def __init__(
