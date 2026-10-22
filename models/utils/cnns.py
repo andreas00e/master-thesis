@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 import torch 
 import torch.nn as nn 
 from torchtyping import TensorType 
-from torchvision.models import resnet18
+from torchvision.models.resnet import resnet18, BasicBlock
 
 
 @torch.no_grad()
@@ -92,6 +92,64 @@ class ThreeLayerCNN(nn.Module):
         else: 
             return out4
         
+class Resnet18HalfWidth(nn.Module): 
+    def __init__(self, feature_dim: int, with_vis: bool) -> None:
+        super().__init__()
+        
+        self.feature_dim = feature_dim
+        self.with_vis = with_vis
+        self.inplanes = 32
+        
+        self.conv1 = nn.Conv2d(
+            in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1, bias=False
+        )
+        self.bn1 = nn.BatchNorm2d(32)
+        self.relu = nn.ReLU(inplace=True)
+                
+        self.layer1 = self._make_layer(BasicBlock, 32, 2)            # [batch, 32, 84, 84]
+        self.layer2 = self._make_layer(BasicBlock, 64, 2, stride=2)  # [batch, 64, 42, 42]
+        self.layer3 = self._make_layer(BasicBlock, 128, 2, stride=2) # [batch, 128, 21, 21]
+        self.layer4 = self._make_layer(BasicBlock, 256, 2, stride=2) # [batch, 256, 11, 11]
+        
+        self.spatialSoftmax = SpatialSoftmax(height=11, width=11)
+        self.fc = nn.Linear(256 * 2, self.feature_dim)
+        
+    def _make_layer(self, block: BasicBlock, planes: int, blocks: int, stride: int = 1) -> nn.Sequential:
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
+        
+    def forward(
+        self, 
+        x: TensorType["batch", "window", "chunk", "height", "width", "channel"]
+        ) -> TensorType["batch*window*chunk", "feature_dim"]: 
+        x = x.reshape(-1, *x.shape[-3:])
+        x = self.relu(self.bn1(self.conv1(x)))
+        
+        out1 = self.layer1(x)
+        out2 = self.layer2(out1)
+        out3 = self.layer3(out2)
+        out4 = self.layer4(out3)
+        
+        out = self.spatialSoftmax(out4)
+        out = self.fc(out)
+        
+        if self.with_vis: 
+            return out1, out2, out3, out4, out 
+        else: 
+            return out 
+        
 class Resnet18(nn.Module): 
     def __init__(self, feature_dim: int, with_vis: bool) -> None:
         super().__init__()
@@ -117,9 +175,7 @@ class Resnet18(nn.Module):
         x: TensorType["batch", "channel", "height", "width"]
         ) -> Union[Tuple[TensorType["batch", "feature_dim"], ...], TensorType["batch", "feature_dim"]]:
         x = x.reshape(-1, *x.shape[-3:])
-        
-        print(x.shape)
-        
+                
         x = self.model.conv1(x)
         x = self.model.bn1(x)
         x = self.model.relu(x)
