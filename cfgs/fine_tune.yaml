@@ -23,6 +23,8 @@ model_vision:
   _target_: models.fine_tune.fine_tuner.FineTunerVisual
   _recursive_: false
 
+  viewpoint: one 
+
   optimizer_kwargs: 
     encoder: 
       lr: 5e-3
