@@ -12,12 +12,13 @@ import lightning.pytorch as pl
 
 from models.utils.vicreg import VICReg
 from models.utils.aux_models import Expander
-from models.utils.cnns import Resnet18, plot_feature_maps
+from models.utils.cnns import Resnet18HalfWidth, plot_feature_maps
         
 
 class FineTunerVisual(pl.LightningModule): 
     def __init__(
         self, 
+        viewpoint: str, 
         optimizer_kwargs: DictConfig, 
         scheduler_kwargs: DictConfig, 
         vision_encoder_kwargs: DictConfig, 
@@ -27,14 +28,15 @@ class FineTunerVisual(pl.LightningModule):
         
         super().__init__()
         self.save_hyperparameters() 
-                        
+        
+        self.viewpoint = viewpoint                
         self.optimizer_kwargs = optimizer_kwargs
         self.scheduler_kwargs = scheduler_kwargs
         self.vision_encoder_kwargs = vision_encoder_kwargs 
         self.expander_kwargs = expander_kwargs
         self.vic_reg_kwargs = vic_reg_kwargs
         
-        self.visionEncoder = Resnet18(**self.vision_encoder_kwargs)  
+        self.visionEncoder = Resnet18HalfWidth(**self.vision_encoder_kwargs)  
         self.visionExpander = Expander(**self.expander_kwargs)
         
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
@@ -45,9 +47,9 @@ class FineTunerVisual(pl.LightningModule):
 
     def _configure_scheduler(
         self, 
-        optimizer: Any, # torch.optim.Optimizer 
+        optimizer: Any,   # torch.optim.Optimizer 
         total_steps: int,
-        ) -> Any: # torch.optim.lr_scheduler.LRScheduler
+        ) -> Any:         # torch.optim.lr_scheduler.LRScheduler
         
         warmup_percentage = self.scheduler_kwargs.get("warmup_percentage", 0.1)
         warmup_steps = max(int(warmup_percentage * total_steps), 1)
@@ -91,7 +93,7 @@ class FineTunerVisual(pl.LightningModule):
             "lr_scheduler": scheduler
             }
         
-    def on_train_epoch_start(self) -> None:
+    def on_train_epoch_start(self) -> None: # is only used if consistent_batch==True (so basically never ...)
         if hasattr(self.trainer.train_dataloader, "batch_sampler"):
             if hasattr(self.trainer.train_dataloader.batch_sampler, "set_epoch"):
                 self.trainer.train_dataloader.batch_sampler.set_epoch(self.current_epoch)
@@ -104,7 +106,7 @@ class FineTunerVisual(pl.LightningModule):
     
     def test_step(self, batch: Dict[str, Any], batch_idx: int) -> None:
         with torch.no_grad():
-            anc_y, pos_y = self(batch["rgb_one"], batch["rgb_one_pos"])
+            anc_y, pos_y = self(batch[f"rgb_{self.viewpoint}"], batch[f"rgb_{self.viewpoint}_pos"])
 
             anc_z = self.visionExpander(anc_y)
             pos_z = self.visionExpander(pos_y)
@@ -173,7 +175,7 @@ class FineTunerVisual(pl.LightningModule):
         return entropy.exp().item()
     
     def _shared_step(self, batch: Dict[str, Any], batch_idx: int, stage: Optional[str]=None) -> torch.Tensor: 
-        anc_y, pos_y = self(batch["rgb_one"], batch["rgb_one_pos"])
+        anc_y, pos_y = self(batch[f"rgb_{self.viewpoint}"], batch[f"rgb_{self.viewpoint}_pos"])
             
         anc_z = self.visionExpander(anc_y) # [n, d_model*x]
         pos_z = self.visionExpander(pos_y) # [n, d_model*x]
@@ -186,10 +188,12 @@ class FineTunerVisual(pl.LightningModule):
                         f"{stage}/eff_rank_encoder_pos": self._effective_rank(pos_y),
                         f"{stage}/eff_rank_expander_anc": self._effective_rank(anc_z),
                         f"{stage}/eff_rank_expander_pos": self._effective_rank(pos_z), 
+                        f"{stage}/anc_y_std": anc_y.std(dim=0).mean(), 
+                        f"{stage}/pos_y_std": pos_y.std(dim=0).mean(), 
                         f"{stage}/anc_z_std": anc_z.std(dim=0).mean(), 
                         f"{stage}/pos_z_std": pos_z.std(dim=0).mean(), 
-                        f"{stage}/anc_z_norm_mean": anc_z.norm(dim=-1).mean(), 
-                        f"{stage}/pos_z_norm_mean": pos_z.norm(dim=-1).mean()
+                        # f"{stage}/anc_z_norm_mean": anc_z.norm(dim=-1).mean(), 
+                        # f"{stage}/pos_z_norm_mean": pos_z.norm(dim=-1).mean()
                     },
                     on_step=True, 
                     on_epoch=False,
