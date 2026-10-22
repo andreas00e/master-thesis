@@ -8,6 +8,41 @@ TRANSFORMS = {
     "to_image": 
         lambda: v2.ToImage(),
         
+    "rotate": 
+        lambda: v2.RandomRotation(
+            degrees=(-10, 10)
+        ), 
+    
+    "color_jitter": 
+        lambda: v2.RandomApply(
+            [
+            v2.ColorJitter(
+            brightness=0.4,
+            contrast=0.4, 
+            saturation=0.1,  
+            hue=0.1)
+            ], 
+            p=0.8
+        ),  
+
+    "solarize": 
+        lambda: v2.RandomSolarize(
+            threshold=0.5,             
+            p=0.2 
+        ),  
+
+    "gaussian_blur": 
+        lambda: v2.RandomApply(
+            [
+            v2.GaussianBlur(
+            kernel_size=5,
+            sigma=(0.1, 2.0))
+            ]
+        ),  
+
+    "grayscale": 
+        lambda: v2.RandomGrayscale(p=0.2), 
+  
     "to_dtype_cnn": 
         lambda: v2.ToDtype(
             dtype=torch.float32, 
@@ -39,46 +74,10 @@ TRANSFORMS = {
             size=(224, 224)
         ),
 
-    "grayscale": 
-        lambda: v2.RandomGrayscale(p=0.2), 
-    
-    "gaussian_blur": 
-        lambda: v2.RandomApply(
-            [
-            v2.GaussianBlur(
-            kernel_size=5,
-            sigma=(0.1, 2.0))
-            ]
-        ), 
-        
-    "color_jitter": 
-        lambda: v2.RandomApply(
-            [
-            v2.ColorJitter(
-            brightness=0.4,
-            contrast=0.4, 
-            saturation=0.1,  
-            hue=0.1)
-            ], 
-            p=0.8
-        ), 
-
-    "rotate": 
-        lambda: v2.RandomRotation(
-            degrees=(-10, 10)
-        ), 
-
-    
-    "solarize": 
-        lambda: v2.RandomSolarize(
-            threshold=0.5,             
-            p=0.2 
-        ),   
-
     "normalize":
         lambda: v2.Normalize(
             mean=[0.485, 0.456, 0.406], # ImageNet means
-            std=[0.229, 0.224, 0.225] # ImageNet standard deviations
+            std=[0.229, 0.224, 0.225]   # ImageNet standard deviations
         )
 }
 
