@@ -15,14 +15,15 @@ datamodule:
   meta_dir: ${meta_dir}
 
   transforms_list: null 
-  contrastive_transforms: false
+  contrastive_transforms: true
 
   robots: null # [iiwa, panda, sawyer, ur5e]
   tasks: null # [square, threading]
   data_distribution: both # d0, d1, both
   data_portion: 1.0
-  window_size: 8 # > 0
-  chunk_size: 1
+  window_size: 1 # > 0
+  chunk_size: 1 # > 0
+  consistent_batch: false
 
   batch_size: 32
   shuffle: true

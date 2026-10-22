@@ -5,68 +5,55 @@ defaults:
 d_model: 64
 
 datamodule:
-  transforms_list: # r3m model expects unnormalized images with pixel values in [0, 255]
+  transforms_list:
     - to_image
     - rotate 
     - color_jitter
-    # - resize_crop_cnn
-    # 
-    # - resize_cnn
+    - solarize
+    - gaussian_blur 
+    - grayscale
     - to_dtype_cnn
 
-  contrastive_transforms: true
-
-  robots: 
-    - panda 
-    - iiwa 
-  tasks: 
-    - square
-    - threading
-
-  window_size: 1 # > 0
+  robots: null
+  tasks: null
+  data_distribution: both
   batch_size: 256
   
 model_vision: 
-  _target_: models.fine_tune.fine_tuner_new.FineTunerVisual
-  _recursive_: False
+  _target_: models.fine_tune.fine_tuner.FineTunerVisual
+  _recursive_: false
 
   optimizer_kwargs: 
     encoder: 
       lr: 5e-3
       weight_decay: 1e-3
+
     expander: 
       lr: 5e-3
       weight_decay: 1e-3
 
   scheduler_kwargs: 
     warmup_percentage: 5e-2
+
     linear:  
       start_factor: 1e-4
       end_factor: 1.0 
       total_iters: null # adapted dynamically  
+    
     cosine_annealing: 
       T_max: null # adapted dynamically 
       eta_min: 1e-5
   
   vision_encoder_kwargs: 
-    # model_name: resnet18
     with_vis: true
     feature_dim: 64
 
-    # d_model: ${d_model}
-    # in_channels: 3 # 24
-
-    # start_layer: 1 # {3, 4}
-  
-    # r: 64
-    # lora_alpha: 128
-    # lora_dropout: 0.05
-    # bias: lora_only
-
   expander_kwargs: 
-    in_dim: ${d_model}
-    h_dim: ${eval:"${d_model}*2"}
-    out_dim: ${eval:"${d_model}*4"}
+    feature_list: 
+      - ${d_model}
+      - ${eval:"${datamodule.batch_size}*8"} # 2048
+      - ${eval:"${datamodule.batch_size}*8"} # 2048
+      - ${eval:"${datamodule.batch_size}*8"} # 2048
 
   vic_reg_kwargs: 
     log_every_n_steps: 50 
@@ -74,12 +61,12 @@ model_vision:
     lambda_: 25.0 # invariance
     mu: 25.0 # variance
     nu: 1.0 # covariance
-    gamma: 1 # desired variance
-    eps: 1e-4 # umerical stability
+    gamma: 1 # wanted variance
+    eps: 1e-4 
 
 logger: 
   name: resnet_both_tasks_d0
-  project: fine_tune
+  project: fine_tune_eye_in_hand
 
 trainer: 
   _target_: lightning.pytorch.Trainer
