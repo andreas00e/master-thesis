@@ -17,32 +17,31 @@ def plot_feature_maps(
     num_plots: int = 16, 
     title: str = "Feature Maps"
 ) -> Image.Image:
-    """Plots feature maps from a tensor and returns a PIL Image for logging."""
     feature_map = feature_tensor[0].detach().cpu().numpy()
     num_channels = min(num_plots, feature_map.shape[0])
     
     fig, axes = plt.subplots(4, 4, figsize=(8, 8))
     fig.suptitle(title, fontsize=14)
     
-    print(f"Shape of feature mpas: {feature_map.shape}")
-    
+    im = None
     for i, ax in enumerate(axes.flatten()):
         if i < num_channels:
-            ax.imshow(feature_map[i], cmap="viridis")
+            im = ax.imshow(feature_map[i], cmap="viridis")
             ax.axis("off")
             ax.set_title(f"Ch {i+1}", fontsize=8)
         else:
             ax.axis("off")
             
-    plt.tight_layout()
+    if im is not None:
+        cbar = fig.colorbar(im, ax=axes.ravel(), orientation='vertical', shrink=0.8)
+        cbar.set_label("intensity", fontsize=10)
     
-    # Save figure to an in-memory buffer and load as a PIL Image
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight")
     buf.seek(0)
     plt.close(fig)
     
-    pil_img = Image.open(buf)
+    pil_img = Image.open(buf).copy() # .copy() verhindert, dass das Bild geschlossen wird, wenn das Byte-Buffer-Objekt verfällt
     return pil_img
 
 @torch.no_grad()
@@ -60,37 +59,44 @@ def plot_kernels(
     fig, axes = plt.subplots(4, 4, figsize=(8, 8))
     fig.suptitle(title, fontsize=14)
     
+    im = None
     for i, ax in zip(kernels, axes.flatten()): 
-        ax.imshow(kernel[i], cmap="viridis")
+        im = ax.imshow(kernel[i], cmap="viridis")
         ax.axis("off")
         ax.set_title(f"Ch {i+1}", fontsize=8)
-            
-    plt.tight_layout()
+        
+    for ax in axes.flatten()[num_channels:]:
+        ax.axis("off")
+        
+    if im is not None:
+        cbar = fig.colorbar(im, ax=axes.ravel(), orientation="horizontal", shrink=0.8)
+        cbar.set_label("Kernel weights", fontsize=10) 
     
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight")
     buf.seek(0)
     plt.close(fig)
     
+    pil_img = Image.open(buf).copy()
+    return pil_img
+    
 class SpatialSoftmax(nn.Module):
     def __init__(
         self, 
-        height: int,
-        width: int, 
+        size: int
         ) -> None:
         super().__init__()
         
-        self.height = height
-        self.width = width
+        self.size = size
         
         pos_y, pos_x = torch.meshgrid(
-            torch.linspace(-1.0, 1.0, self.height),
-            torch.linspace(-1.0, 1.0, self.width),
+            torch.linspace(-1.0, 1.0, self.size),
+            torch.linspace(-1.0, 1.0, self.size),
             indexing="ij"
         )
         
-        self.register_buffer("pos_x", pos_x.reshape(1, 1, self.height, self.width))
-        self.register_buffer("pos_y", pos_y.reshape(1, 1, self.height, self.width))
+        self.register_buffer("pos_x", pos_x.reshape(1, 1, self.size, self.size))
+        self.register_buffer("pos_y", pos_y.reshape(1, 1, self.size, self.size))
         
         self.softmax2d = nn.Softmax2d()
 
@@ -123,22 +129,23 @@ class BuildAResnet18(nn.Module):
         self.feature_dim = out_dim
         self.num_layers = num_layers 
         self.what_to_plot = what_to_plot
-        self.inplanes = int(64*self.width)
+        self.inplanes = int(64 * self.width)
         
         self.conv1 = nn.Conv2d(
-            in_channels=3, out_channels=int(64*self.width), kernel_size=3, stride=1, padding=1, bias=False
+            in_channels=3, out_channels=int(64 * self.width), kernel_size=3, stride=1, padding=1, bias=False
         )
-        self.bn1 = nn.BatchNorm2d(int(64*self.width))
+        self.bn1 = nn.BatchNorm2d(int(64 * self.width))
         self.relu = nn.ReLU(inplace=True)
         
         for i in range(1, self.num_layers+1): # [32, 84, 84], [64, 42, 42], [128, 21, 21], [256, 11, 11]
             stride = 1 if i == 1 else 2
-            setattr(self, f"layer{i}", self._make_layer(BasicBlock, int((32*2**i)*self.width), 2, stride=stride))
+            setattr(self, f"layer{i}", self._make_layer(BasicBlock, int((32 * 2 ** i) * self.width), 2, stride=stride))
             
         size = int(math.ceil(84/2**(self.num_layers-1)))
-        channel = int((32*2**self.num_layers)*self.width)
-        self.spatialSoftmax = SpatialSoftmax(size=size, channel=channel)
-        self.fc = nn.Linear(channel*2, self.feature_dim)
+        self.spatialSoftmax = SpatialSoftmax(size=size)
+        
+        num_channels = int((32 * 2 ** self.num_layers) * self.width)
+        self.fc = nn.Linear(num_channels * 2, self.feature_dim)
         
     def _make_layer(self, block: BasicBlock, planes: int, blocks: int, stride: int = 1) -> nn.Sequential:
         downsample = None
