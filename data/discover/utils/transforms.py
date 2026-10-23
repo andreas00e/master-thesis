@@ -6,21 +6,21 @@ from torchvision.transforms import v2
 
 TRANSFORMS = {  
     "to_image": 
-        lambda: v2.ToImage(),
+        lambda _: v2.ToImage(),
     
     "erasing": 
-        lambda: v2.RandomErasing(
-            p=0.2, 
+        lambda x: v2.RandomErasing(
+            p=min(0.2*x, 1.0),
             scale=(0.05, 0.15)            
             ), 
         
     "rotate": 
-        lambda: v2.RandomRotation(
-            degrees=(-10, 10)
+        lambda x: v2.RandomRotation(
+            degrees=(max(-30, -10*x), min(10*x, 30))
         ), 
     
     "color_jitter": 
-        lambda: v2.RandomApply(
+        lambda x: v2.RandomApply(
             [
             v2.ColorJitter(
             brightness=0.4,
@@ -28,17 +28,17 @@ TRANSFORMS = {
             saturation=0.1,  
             hue=0.1)
             ], 
-            p=0.8
+            p=min(0.8*x, 1)
         ),  
 
     "solarize": 
-        lambda: v2.RandomSolarize(
+        lambda x: v2.RandomSolarize(
             threshold=0.5,             
-            p=0.2 
+            p=min(0.2*x, 1.0)
         ),  
 
     "gaussian_blur": 
-        lambda: v2.RandomApply(
+        lambda _: v2.RandomApply(
             [
             v2.GaussianBlur(
             kernel_size=5,
@@ -47,28 +47,30 @@ TRANSFORMS = {
         ),  
 
     "grayscale": 
-        lambda: v2.RandomGrayscale(p=0.2), 
+        lambda x: v2.RandomGrayscale(
+            p=min(0.2*x, 1.0)
+            ), 
   
     "to_dtype_cnn": 
-        lambda: v2.ToDtype(
+        lambda _: v2.ToDtype(
             dtype=torch.float32, 
             scale=True
         ),
     
     "to_dtype_r3m": 
-        lambda: v2.ToDtype(
+        lambda _: v2.ToDtype(
             dtype=torch.float32, 
             scale=False, 
         ),
 
     "resize_cnn": 
-        lambda: v2.Resize(
+        lambda _: v2.Resize(
             # size=(112, 112)
             size=(84, 84)
         ),
         
     "resize_crop_cnn":
-        lambda: v2.RandomResizedCrop(
+        lambda _: v2.RandomResizedCrop(
             size=(112, 112), 
             scale=(0.7, 1.0), 
             ratio=(0.9, 1.1), 
@@ -76,16 +78,16 @@ TRANSFORMS = {
          ),
     
     "resize_r3m": 
-        lambda: v2.Resize(
+        lambda _: v2.Resize(
             size=(224, 224)
         ),
 
     "normalize":
-        lambda: v2.Normalize(
+        lambda _: v2.Normalize(
             mean=[0.485, 0.456, 0.406], # ImageNet means
             std=[0.229, 0.224, 0.225]   # ImageNet standard deviations
         )
 }
 
-def get_transforms(transforms: List[str]) -> nn.Sequential:  
-    return nn.Sequential(*[TRANSFORMS[k]() for k in transforms])
+def get_transforms(transforms: List[str], x: int) -> nn.Sequential:  
+    return nn.Sequential(*[TRANSFORMS[k](x) for k in transforms])
