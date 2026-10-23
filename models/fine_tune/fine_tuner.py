@@ -1,6 +1,6 @@
 import wandb
 from omegaconf import DictConfig
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
 from torch.optim import AdamW
@@ -12,13 +12,14 @@ import lightning.pytorch as pl
 
 from models.utils.vicreg import VICReg
 from models.utils.aux_models import Expander
-from models.utils.cnns import Resnet18HalfWidth, plot_feature_maps
+from models.utils.cnns import Resnet18HalfWidth, plot_feature_maps, plot_kernels
         
 
 class FineTunerVisual(pl.LightningModule): 
     def __init__(
         self, 
         viewpoint: str, 
+        what_to_plot: str, 
         optimizer_kwargs: DictConfig, 
         scheduler_kwargs: DictConfig, 
         vision_encoder_kwargs: DictConfig, 
@@ -29,7 +30,8 @@ class FineTunerVisual(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters() 
         
-        self.viewpoint = viewpoint                
+        self.viewpoint = viewpoint   
+        self.what_to_plot = what_to_plot             
         self.optimizer_kwargs = optimizer_kwargs
         self.scheduler_kwargs = scheduler_kwargs
         self.vision_encoder_kwargs = vision_encoder_kwargs 
@@ -40,6 +42,8 @@ class FineTunerVisual(pl.LightningModule):
         self.visionExpander = Expander(**self.expander_kwargs)
         
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
+        
+        self.plot: Callable = plot_feature_maps if self.what_to_plot == "feature_maps" else plot_kernels
                 
     def setup(self, stage: Optional[str]=None) -> None:
         if self.logger is not None: 
@@ -47,9 +51,9 @@ class FineTunerVisual(pl.LightningModule):
 
     def _configure_scheduler(
         self, 
-        optimizer: Any,   # torch.optim.Optimizer 
+        optimizer: Any, # torch.optim.Optimizer 
         total_steps: int,
-        ) -> Any:         # torch.optim.lr_scheduler.LRScheduler
+        ) -> Any: # torch.optim.lr_scheduler.LRScheduler
         
         warmup_percentage = self.scheduler_kwargs.get("warmup_percentage", 0.1)
         warmup_steps = max(int(warmup_percentage * total_steps), 1)
@@ -140,31 +144,45 @@ class FineTunerVisual(pl.LightningModule):
         return self((batch["rgb_one"]), (batch["rgb_one_pos"]))
         
     def forward(self, rgb_one: TensorType["*"], rgb_two: TensorType["*"]) -> Tuple[TensorType["n", "d_model"], TensorType["n", "d_model"]]:  
-            anc_y_one, anc_y_two, _, anc_y_four, anc_y_out = self.visionEncoder(rgb_one) # [n, d_model]: robot0_eye_in_hand_image 
-            pos_y_one, pos_y_two, _, pos_y_four, pos_y_out = self.visionEncoder(rgb_two) # [n, d_model]: agentview_image 
+        if self.what_to_plot is not None: 
+            anc_y_out, anc_y_one, anc_y_two, anc_y_three, anc_y_four = self.visionEncoder(rgb_one) # [n, d_model]: robot0_eye_in_hand_image 
+            pos_y_out, pos_y_one, pos_y_two, pos_y_three, pos_y_four = self.visionEncoder(rgb_two) # [n, d_model]: agentview_image 
             
             if all([self.training, self.logger is not None, isinstance(self.logger, pl.loggers.WandbLogger), self.global_step % 50 == 0]): 
-                anc_y_one_fm = plot_feature_maps(anc_y_one, title="Anchor feature map (layer one)")
-                anc_y_two_fm = plot_feature_maps(anc_y_two, title="Anchor feature map (layer two)")
-                anc_y_four_fm = plot_feature_maps(anc_y_four, title="Anchor feature map (layer three)")
-                pos_y_one_fm = plot_feature_maps(pos_y_one, title="Positive feature map (layer one)")
-                pos_y_two_fm = plot_feature_maps(pos_y_two, title="Positive feature map (layer two)")
-                pos_y_four_fm = plot_feature_maps(pos_y_four, title="Positive feature map (layer three)")
+                anc_y_one_fm = self.plot(anc_y_one, title="Anchor feature map (layer one)" if self.what_to_plot=="feature_maps" else "Kernels layer one")
+                anc_y_two_fm = self.plot(anc_y_two, title="Anchor feature map (layer two)" if self.what_to_plot=="feature_maps" else "Kernels layer two")
+                anc_y_four_fm = self.plot(anc_y_four, title="Anchor feature map (layer three)" if self.what_to_plot=="feature_maps" else "Kernels layer two")
                 
+                if self.what_to_plot == "feature_maps": 
+                    pos_y_one_fm = self.plot_feature_maps(pos_y_one, title="Positive feature map (layer one)")
+                    pos_y_two_fm = self.plot_feature_maps(pos_y_two, title="Positive feature map (layer two)")
+                    pos_y_four_fm = self.plot_feature_maps(pos_y_four, title="Positive feature map (layer three)")
+                    
                 if isinstance(self.logger, pl.loggers.WandbLogger):
                     self.logger.experiment.log(
                         {   
-                            "rgb_one": wandb.Image(rgb_one[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0),
+                            f"rgb_{self.viewpoint}": wandb.Image(rgb_one[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0),
+                            f"rgb_{self.viewpoint}_pos": wandb.Image(rgb_two[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0),
                             "anc_y_one_fm": wandb.Image(anc_y_one_fm), 
                             "anc_y_two_fm": wandb.Image(anc_y_two_fm), 
-                            "anc_y_four_fm": wandb.Image(anc_y_four_fm), 
-                            "pos_y_three_fm": wandb.Image(pos_y_one_fm), 
-                            "pos_y_two_fm": wandb.Image(pos_y_two_fm), 
-                            "pos_y_four_fm": wandb.Image(pos_y_four_fm), 
+                            "anc_y_four_fm": wandb.Image(anc_y_four_fm)
                         }
                     )
-                
-            return anc_y_out, pos_y_out
+                    if self.what_to_plot == "feature_maps": 
+                        self.logger.experiment.log(
+                            {
+                                    "pos_y_one_fm": wandb.Image(pos_y_one_fm), 
+                            "pos_y_two_fm": wandb.Image(pos_y_two_fm), 
+                            "pos_y_four_fm": wandb.Image(pos_y_four_fm)
+                            }
+                        )
+                        
+        else: 
+            print("Hello    !!!!!!!!!!!")
+            anc_y_out = self.visionEncoder(rgb_one) # [n, d_model]: robot0_eye_in_hand_image 
+            pos_y_out = self.visionEncoder(rgb_two) # [n, d_model]: agentview_image 
+            
+        return anc_y_out, pos_y_out
         
     def _effective_rank(self, x: torch.Tensor) -> float:
         x_centered = x - x.mean(dim=0)
