@@ -7,23 +7,25 @@ d_model: 64
 datamodule:
   transforms_list:
     - to_image
+    - to_dtype_cnn
     - rotate 
     - color_jitter
+    - grayscale
     - solarize
     - gaussian_blur 
-    - grayscale
-    - to_dtype_cnn
+    - erasing
 
   robots: null
   tasks: null
   data_distribution: both
-  batch_size: 256
+  batch_size: 512
   
 model_vision: 
   _target_: models.fine_tune.fine_tuner.FineTunerVisual
   _recursive_: false
-
+  
   viewpoint: one 
+  what_to_plot: null # feature_maps, null
 
   optimizer_kwargs: 
     encoder: 
@@ -47,15 +49,15 @@ model_vision:
       eta_min: 1e-5
   
   vision_encoder_kwargs: 
-    with_vis: true
+    what_to_plot: ${model_vision.what_to_plot}
     feature_dim: 64
 
   expander_kwargs: 
     feature_list: 
       - ${d_model}
-      - ${eval:"${datamodule.batch_size}*8"} # 2048
-      - ${eval:"${datamodule.batch_size}*8"} # 2048
-      - ${eval:"${datamodule.batch_size}*8"} # 2048
+      - ${eval:"${datamodule.batch_size}*2"}
+      - ${eval:"${datamodule.batch_size}*2"}  
+      - ${eval:"${datamodule.batch_size}*2"} 
 
   vic_reg_kwargs: 
     log_every_n_steps: 50 
@@ -67,7 +69,7 @@ model_vision:
     eps: 1e-4 
 
 logger: 
-  name: resnet_both_tasks_d0
+  name: exp_4
   project: fine_tune_eye_in_hand
 
 trainer: 

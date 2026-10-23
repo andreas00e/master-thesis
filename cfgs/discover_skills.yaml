@@ -2,7 +2,7 @@ defaults:
   - base 
   - _self_ 
 
-d_model: 512
+d_model: 128
 d_prototypes: 64
 
 datamodule: 
@@ -10,7 +10,9 @@ datamodule:
     - to_image
     - rotate 
     - color_jitter
-    - resize_crop_cnn
+    - solarize
+    - gaussian_blur 
+    - grayscale
     - to_dtype_cnn
   contrastive_transforms: true 
 
@@ -44,6 +46,10 @@ model:
   with_uncertainty_weighting: false
   uncertainty_weighting_kwargs: 
     num_losses: 3
+  
+  vision_encoder_kwargs: 
+    with_vis: false
+    feature_dim: ${d_model}
 
   sequential_kwargs: 
     encoder_layer_kwargs: 
@@ -108,7 +114,7 @@ logger:
   _target_: lightning.pytorch.loggers.WandbLogger
   name: queue_new
   version: ${now:%Y_%m_%d_%H_%M}
-  project: skill_discovery
+  project: skill_discovery_new
 
 trainer: 
   _target_: lightning.pytorch.Trainer
