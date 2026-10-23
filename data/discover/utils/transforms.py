@@ -7,6 +7,12 @@ from torchvision.transforms import v2
 TRANSFORMS = {  
     "to_image": 
         lambda: v2.ToImage(),
+    
+    "erasing": 
+        lambda: v2.RandomErasing(
+            p=0.2, 
+            scale=(0.05, 0.15)            
+            ), 
         
     "rotate": 
         lambda: v2.RandomRotation(
