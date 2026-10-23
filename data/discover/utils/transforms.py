@@ -89,5 +89,5 @@ TRANSFORMS = {
         )
 }
 
-def get_transforms(transforms: List[str], x: int) -> nn.Sequential:  
+def get_transforms(transforms: List[str], x: int=1) -> nn.Sequential:  
     return nn.Sequential(*[TRANSFORMS[k](x) for k in transforms])
