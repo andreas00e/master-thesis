@@ -18,7 +18,8 @@ from torchtyping import TensorType
 from models.discover.utils.queue import FIFOQueue
 from models.discover.utils.sinkhorn import Sinkhorn
 from models.discover.utils.visualize import Visualize
-from models.utils.aux_models import TransformerEncoder, CNN
+from models.utils.cnns import Resnet18HalfWidth
+from models.utils.aux_models import TransformerEncoder
 from models.utils.loss import UncertaintyWeighting, TimeContrastiveLoss
 from models.utils.utils import SinusoidalEmbedding
 
@@ -36,6 +37,7 @@ class SkillEncoder(pl.LightningModule):
         gripper_dropout_p: float, 
         with_uncertainty_weighting: bool, 
         uncertainty_weighting_kwargs: DictConfig,
+        vision_encoder_kwargs: DictConfig, 
         sequential_kwargs: DictConfig, 
         prototype_kwargs: DictConfig,  
         optimizer_kwargs: DictConfig, 
@@ -59,6 +61,7 @@ class SkillEncoder(pl.LightningModule):
         self.gripper_dropout_p = gripper_dropout_p 
         self.with_uncertainty_weighting = with_uncertainty_weighting
         self.uncertainty_weighting_kwargs = uncertainty_weighting_kwargs
+        self.vision_encoder_kwargs = vision_encoder_kwargs
         self.sequential_kwargs = sequential_kwargs
         self.prototype_kwargs = prototype_kwargs
         self.optimizer_kwargs = optimizer_kwargs
@@ -69,8 +72,8 @@ class SkillEncoder(pl.LightningModule):
         self._log_every_n_steps = _log_every_n_steps
         
 
-        self.visionEncoderOne = CNN(self.d_model)
-        self.visionEncoderTwo = CNN(self.d_model)
+        self.visionEncoderOne = Resnet18HalfWidth(**self.vision_encoder_kwargs)
+        self.visionEncoderTwo = Resnet18HalfWidth(**self.vision_encoder_kwargs)
 
         self.gripperEncoder = nn.Sequential(
             nn.Linear(self.d_model, self.d_model // 2), 
