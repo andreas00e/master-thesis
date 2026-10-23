@@ -7,12 +7,15 @@ import lightning.pytorch as pl
 from scripts.py_scripts.setup_environment import setup_environment
 setup_environment()
 
+from models.fine_tune.fine_tuner import FineTunerVisual
+
 
 @hydra.main(config_path="../../cfgs/", config_name="fine_tune", version_base=None)
 def main(cfg):    
     pl.seed_everything(cfg.seed, workers=True)
     
     datamodule = instantiate(cfg.datamodule)
+    # model = FineTunerVisual.load_from_checkpoint("outputs/checkpoints/fine_tune_eye_in_hand/resnet_both_tasks_d0/last.ckpt")
     model = instantiate(cfg.model_vision)
     logger = instantiate(cfg.logger)
     
