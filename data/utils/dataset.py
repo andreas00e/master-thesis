@@ -37,7 +37,8 @@ class MimicGenRobotDataset(Dataset):
         positive_window_size: Optional[int]=None, 
         negative_window_size: Optional[int]=None, 
         crop_factor: float=1.0, 
-        noise_level: Optional[float]=None
+        noise_level: Optional[float]=None,
+        epoch: int=1, 
         )-> None: 
         super().__init__()
         
@@ -52,13 +53,22 @@ class MimicGenRobotDataset(Dataset):
         self.negative_window_size = negative_window_size
         self.crop_factor = crop_factor
         self.noise_level = noise_level
-
+        
         self._file_cache: Dict[str, h5py.File] = {}  
         self._pid: Optional[int] = None
+        
+        self.epoch = epoch
 
-        self.transforms = get_transforms(self.transforms_list)  
+    @property
+    def epoch(self) -> int:
+        return self._epoch
+
+    @epoch.setter
+    def epoch(self, value: int) -> None:
+        self._epoch = value
+        self.transforms = get_transforms(self.transforms_list, self._epoch)  
         if self.contrastive_transforms: 
-            self.positive_transforms = get_transforms(self.transforms_list)
+            self.positive_transforms = get_transforms(self.transforms_list, self._epoch)
 
     def _get_hdf5_handle(self, file_path: Union[str, os.PathLike]) -> h5py.File:
         current_pid = os.getpid() 

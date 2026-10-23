@@ -154,6 +154,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
             pass
         
     def _make_dataset(self, demo_map: Dict[str, List[str]], stage: str) -> Dataset: 
+        current_epoch = self.trainer.current_epoch if self.trainer is not None else 0
         dataset = [
             MimicGenRobotDataset(
                 demo_map=demo_map[f"{task}{robot}"],
@@ -166,7 +167,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 positive_window_size=None if stage=="test" else self.positive_window_size, 
                 negative_window_size=None if stage=="test" else self.negative_window_size, 
                 crop_factor=self.crop_factor,
-                noise_level=self.noise_level
+                noise_level=self.noise_level, 
+                epoch=current_epoch
             )  
             for task in self.tasks 
             for robot in self.robots
@@ -207,6 +209,10 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 )
     
     def train_dataloader(self) -> DataLoader:
+        current_epoch = self.trainer.current_epoch if self.trainer is not None else 0
+        if isinstance(self.train_dataset, ConcatDataset):
+                    for subset in self.train_dataset.datasets:
+                        subset.epoch = current_epoch
         return self._make_dataloader(self.train_dataset, shuffle=self.shuffle, drop_last=True, collate_fn=collate_fn)
     
     def val_dataloader(self) -> DataLoader:
