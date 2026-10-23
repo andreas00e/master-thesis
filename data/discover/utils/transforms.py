@@ -90,4 +90,6 @@ TRANSFORMS = {
 }
 
 def get_transforms(transforms: List[str], x: int=1) -> nn.Sequential:  
+    x = x / (x + 1)
+    
     return nn.Sequential(*[TRANSFORMS[k](x) for k in transforms])
