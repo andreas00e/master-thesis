@@ -1,4 +1,5 @@
 import io 
+import random 
 from PIL import Image
 from typing import Tuple, Union
 from matplotlib import pyplot as plt
@@ -22,6 +23,8 @@ def plot_feature_maps(
     fig, axes = plt.subplots(4, 4, figsize=(8, 8))
     fig.suptitle(title, fontsize=14)
     
+    print(f"Shape of feature mpas: {feature_map.shape}")
+    
     for i, ax in enumerate(axes.flatten()):
         if i < num_channels:
             ax.imshow(feature_map[i], cmap="viridis")
@@ -41,6 +44,33 @@ def plot_feature_maps(
     pil_img = Image.open(buf)
     return pil_img
 
+@torch.no_grad()
+def plot_kernels(
+    kernel: TensorType["out_channels", "in_channels", "kernel_height", "kernel_width"],
+    num_plots: int = 16, 
+    title: str = "Kernel Maps"
+    ) -> Image.Image:
+    
+    kernel = kernel[0].detach().cpu().numpy() # [in_channels, kernel_height, kernel_width]
+    num_channels = min(num_plots, kernel.shape[0])
+    
+    kernels = sorted(random.sample(range(kernel.shape[0]), num_channels))
+    
+    fig, axes = plt.subplots(4, 4, figsize=(8, 8))
+    fig.suptitle(title, fontsize=14)
+    
+    for i, ax in zip(kernels, axes.flatten()): 
+        ax.imshow(kernel[i], cmap="viridis")
+        ax.axis("off")
+        ax.set_title(f"Ch {i+1}", fontsize=8)
+            
+    plt.tight_layout()
+    
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    buf.seek(0)
+    plt.close(fig)
+    
 class ThreeLayerCNN(nn.Module):
     def __init__(
         self, 
@@ -93,16 +123,21 @@ class ThreeLayerCNN(nn.Module):
             return out4
         
 class Resnet18HalfWidth(nn.Module): 
-    def __init__(self, feature_dim: int, with_vis: bool) -> None:
+    def __init__(
+        self, 
+        feature_dim: int, 
+        what_to_plot: str, 
+        ) -> None:
         super().__init__()
         
         self.feature_dim = feature_dim
-        self.with_vis = with_vis
+        self.what_to_plot = what_to_plot
         self.inplanes = 32
         
         self.conv1 = nn.Conv2d(
             in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1, bias=False
         )
+        
         self.bn1 = nn.BatchNorm2d(32)
         self.relu = nn.ReLU(inplace=True)
                 
@@ -133,7 +168,7 @@ class Resnet18HalfWidth(nn.Module):
     def forward(
         self, 
         x: TensorType["batch", "window", "chunk", "height", "width", "channel"]
-        ) -> TensorType["batch*window*chunk", "feature_dim"]: 
+        ) -> Union[Tuple[TensorType["batch*window*chunk", "feature_dim"], ...] , TensorType["batch*window*chunk", "feature_dim"]]:
         x = x.reshape(-1, *x.shape[-3:])
         x = self.relu(self.bn1(self.conv1(x)))
         
@@ -145,8 +180,16 @@ class Resnet18HalfWidth(nn.Module):
         out = self.spatialSoftmax(out4)
         out = self.fc(out)
         
-        if self.with_vis: 
-            return out1, out2, out3, out4, out 
+        if self.what_to_plot == "feature_maps": 
+            return out, out1, out2, out3, out4
+        
+        elif self.what_to_plot == "kernels": 
+            return out, \
+                self.layer1[1].conv2.weight, \
+                self.layer2[1].conv2.weight, \
+                self.layer3[1].conv2.weight, \
+                self.layer4[1].conv2.weight 
+                
         else: 
             return out 
         
