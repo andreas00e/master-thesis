@@ -18,7 +18,7 @@ from torchtyping import TensorType
 from models.discover.utils.queue import FIFOQueue
 from models.discover.utils.sinkhorn import Sinkhorn
 from models.discover.utils.visualize import Visualize
-from models.utils.cnns import Resnet18HalfWidth
+from models.utils.cnns import BuildAResnet18
 from models.utils.aux_models import TransformerEncoder
 from models.utils.loss import UncertaintyWeighting, TimeContrastiveLoss
 from models.utils.utils import SinusoidalEmbedding
@@ -72,8 +72,8 @@ class SkillEncoder(pl.LightningModule):
         self._log_every_n_steps = _log_every_n_steps
         
 
-        self.visionEncoderOne = Resnet18HalfWidth(**self.vision_encoder_kwargs)
-        self.visionEncoderTwo = Resnet18HalfWidth(**self.vision_encoder_kwargs)
+        self.visionEncoderOne = BuildAResnet18(**self.vision_encoder_kwargs)
+        self.visionEncoderTwo = BuildAResnet18(**self.vision_encoder_kwargs)
 
         self.gripperEncoder = nn.Sequential(
             nn.Linear(self.d_model, self.d_model // 2), 
@@ -357,10 +357,10 @@ class SkillEncoder(pl.LightningModule):
         batch_size, chunk, window = rgb_one.shape[:3]
         n = batch_size*chunk
         
-        emb_one = self.lnVisionOne(self.visionEncoderOne(rgb_one)) # [batch_size*chunk*window, d_model] 
+        emb_one = self.lnVisionOne(self.visionEncoderOne(rgb_one)["x"]) # [batch_size*chunk*window, d_model] 
         print(f"emb_one mean : {emb_one.mean().detach()}")
         print(f"emb_one std: {emb_one.std(-1).mean().detach()}")
-        emb_two = self.lnVisionTwo(self.visionEncoderTwo(rgb_two)) # [batch_size*chunk*window, d_model]
+        emb_two = self.lnVisionTwo(self.visionEncoderTwo(rgb_two)["x"]) # [batch_size*chunk*window, d_model]
         print(f"emb_two mean: {emb_two.mean().detach()}")
         print(f"emb_two std: {emb_two.std(-1).mean().detach()}")
         emb_gripper = self.lnGripper(self.gripperEncoder(self.sinusoidal_embedding(g_qpos.reshape(-1, 1)))) # [batch_size*chunk*window, d_model]

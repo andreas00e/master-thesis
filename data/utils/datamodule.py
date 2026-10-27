@@ -209,7 +209,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 )
     
     def train_dataloader(self) -> DataLoader:
-        current_epoch = self.trainer.current_epoch if self.trainer is not None else 0
+        # current_epoch = self.trainer.current_epoch if self.trainer is not None else 1
+        current_epoch = 1
         if isinstance(self.train_dataset, ConcatDataset):
                     for subset in self.train_dataset.datasets:
                         subset.epoch = current_epoch

@@ -48,8 +48,10 @@ model:
     num_losses: 3
   
   vision_encoder_kwargs: 
-    with_vis: false
-    feature_dim: ${d_model}
+    width: 0.25
+    out_dim: ${d_model}
+    num_layers: 2 
+    what_to_plot: null
 
   sequential_kwargs: 
     encoder_layer_kwargs: 

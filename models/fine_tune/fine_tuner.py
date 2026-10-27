@@ -12,7 +12,7 @@ import lightning.pytorch as pl
 
 from models.utils.vicreg import VICReg
 from models.utils.aux_models import Expander
-from models.utils.cnns import Resnet18HalfWidth, plot_feature_maps, plot_kernels
+from models.utils.cnns import BuildAResnet18, plot_feature_maps, plot_kernels
         
 
 class FineTunerVisual(pl.LightningModule): 
@@ -38,7 +38,7 @@ class FineTunerVisual(pl.LightningModule):
         self.expander_kwargs = expander_kwargs
         self.vic_reg_kwargs = vic_reg_kwargs
         
-        self.visionEncoder = Resnet18HalfWidth(**self.vision_encoder_kwargs)  
+        self.visionEncoder = BuildAResnet18(**self.vision_encoder_kwargs)  
         self.visionExpander = Expander(**self.expander_kwargs)
         
         self.vicReg = VICReg(logger=None, **self.vic_reg_kwargs)
@@ -144,45 +144,24 @@ class FineTunerVisual(pl.LightningModule):
         return self((batch["rgb_one"]), (batch["rgb_one_pos"]))
         
     def forward(self, rgb_one: TensorType["*"], rgb_two: TensorType["*"]) -> Tuple[TensorType["n", "d_model"], TensorType["n", "d_model"]]:  
-        if self.what_to_plot is not None: 
-            anc_y_out, anc_y_one, anc_y_two, anc_y_three, anc_y_four = self.visionEncoder(rgb_one) # [n, d_model]: robot0_eye_in_hand_image 
-            pos_y_out, pos_y_one, pos_y_two, pos_y_three, pos_y_four = self.visionEncoder(rgb_two) # [n, d_model]: agentview_image 
+        anc_out = self.visionEncoder(rgb_one) # Dict[str, TensorType["*"]]: robot0_eye_in_hand_image 
+        pos_out = self.visionEncoder(rgb_two) # Dict[str, TensorType["*"]]: agentview_image 
+        
+        if self.training and self.logger is not None and isinstance(self.logger, pl.loggers.WandbLogger) and self.global_step % 50 == 0: 
+            self.logger.experiment.log({
+                f"rgb_{self.viewpoint}": wandb.Image(rgb_one[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0),
+                f"rgb_{self.viewpoint}_pos": wandb.Image(rgb_two[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0)  
+            })
             
-            if all([self.training, self.logger is not None, isinstance(self.logger, pl.loggers.WandbLogger), self.global_step % 50 == 0]): 
-                anc_y_one_fm = self.plot(anc_y_one, title="Anchor feature map (layer one)" if self.what_to_plot=="feature_maps" else "Kernels layer one")
-                anc_y_two_fm = self.plot(anc_y_two, title="Anchor feature map (layer two)" if self.what_to_plot=="feature_maps" else "Kernels layer two")
-                anc_y_four_fm = self.plot(anc_y_four, title="Anchor feature map (layer three)" if self.what_to_plot=="feature_maps" else "Kernels layer two")
-                
-                if self.what_to_plot == "feature_maps": 
-                    pos_y_one_fm = self.plot_feature_maps(pos_y_one, title="Positive feature map (layer one)")
-                    pos_y_two_fm = self.plot_feature_maps(pos_y_two, title="Positive feature map (layer two)")
-                    pos_y_four_fm = self.plot_feature_maps(pos_y_four, title="Positive feature map (layer three)")
-                    
-                if isinstance(self.logger, pl.loggers.WandbLogger):
+            if self.what_to_plot is not None: 
                     self.logger.experiment.log(
-                        {   
-                            f"rgb_{self.viewpoint}": wandb.Image(rgb_one[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0),
-                            f"rgb_{self.viewpoint}_pos": wandb.Image(rgb_two[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0),
-                            "anc_y_one_fm": wandb.Image(anc_y_one_fm), 
-                            "anc_y_two_fm": wandb.Image(anc_y_two_fm), 
-                            "anc_y_four_fm": wandb.Image(anc_y_four_fm)
-                        }
+                        {f"anc_y_{key}": wandb.Image(self.plot(value, title=key)) for key, value in anc_out.items() if key != "x"}, 
                     )
-                    if self.what_to_plot == "feature_maps": 
-                        self.logger.experiment.log(
-                            {
-                                    "pos_y_one_fm": wandb.Image(pos_y_one_fm), 
-                            "pos_y_two_fm": wandb.Image(pos_y_two_fm), 
-                            "pos_y_four_fm": wandb.Image(pos_y_four_fm)
-                            }
-                        )
-                        
-        else: 
-            print("Hello    !!!!!!!!!!!")
-            anc_y_out = self.visionEncoder(rgb_one) # [n, d_model]: robot0_eye_in_hand_image 
-            pos_y_out = self.visionEncoder(rgb_two) # [n, d_model]: agentview_image 
+                    self.logger.experiment.log(
+                        {f"pos_y_{key}": wandb.Image(self.plot(value, title=key)) for key, value in pos_out.items() if key != "x"}
+                    )
             
-        return anc_y_out, pos_y_out
+        return anc_out["x"], pos_out["x"]
         
     def _effective_rank(self, x: torch.Tensor) -> float:
         x_centered = x - x.mean(dim=0)

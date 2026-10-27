@@ -174,7 +174,6 @@ class Expander(nn.Module):
         sub_modules = [nn.BatchNorm1d(self.feature_list[0])]
         sub_modules.extend(list(chain.from_iterable(zip(linear_layers, batch_norms, activations)))[:-2])
         
-        print(sub_modules) 
         self.model = nn.Sequential(*sub_modules)
         
         self.apply(self._init_weights)

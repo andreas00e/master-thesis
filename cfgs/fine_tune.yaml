@@ -2,7 +2,7 @@ defaults:
   - base 
   - _self_ 
 
-d_model: 64
+d_model: 128
 
 datamodule:
   transforms_list:
@@ -25,20 +25,19 @@ model_vision:
   _recursive_: false
   
   viewpoint: one 
-  what_to_plot: null # feature_maps, null
+  what_to_plot: kernels # kernels, feature_maps, null
 
   optimizer_kwargs: 
     encoder: 
-      lr: 5e-3
+      lr: 1e-3
       weight_decay: 1e-3
 
     expander: 
-      lr: 5e-3
+      lr: 1e-3
       weight_decay: 1e-3
 
   scheduler_kwargs: 
     warmup_percentage: 5e-2
-
     linear:  
       start_factor: 1e-4
       end_factor: 1.0 
@@ -49,41 +48,44 @@ model_vision:
       eta_min: 1e-5
   
   vision_encoder_kwargs: 
+    width: 0.25
+    out_dim: ${d_model}
+    num_layers: 3 
     what_to_plot: ${model_vision.what_to_plot}
-    feature_dim: 64
 
   expander_kwargs: 
     feature_list: 
       - ${d_model}
-      - ${eval:"${datamodule.batch_size}*2"}
-      - ${eval:"${datamodule.batch_size}*2"}  
-      - ${eval:"${datamodule.batch_size}*2"} 
+      - ${eval:"${d_model}*8"}
+      - ${eval:"${d_model}*8"}
+      - ${eval:"${d_model}*8"}
 
   vic_reg_kwargs: 
     log_every_n_steps: 50 
 
-    lambda_: 25.0 # invariance
-    mu: 25.0 # variance
+    lambda_: 10.0 # invariance
+    mu: 30.0 # variance
     nu: 1.0 # covariance
     gamma: 1 # wanted variance
     eps: 1e-4 
 
 logger: 
-  name: exp_4
+  name: l_10_m_30_layers_3
   project: fine_tune_eye_in_hand
 
 trainer: 
   _target_: lightning.pytorch.Trainer
   # overfit_batches: 4
   log_every_n_steps: 1 
+  reload_dataloaders_every_n_epochs: 2000
   accelerator: gpu   
   devices: 
     - 0
-  max_epochs: 1000
+  max_epochs: 200
   num_sanity_val_steps: 2
   enable_progress_bar: true
   profiler: simple 
-  precision: 16-mixed
+  # precision: 16-mixed
   default_root_dir: outputs/logs/${logger.project}
 
 callbacks: 
