@@ -7,7 +7,7 @@ from pathlib import Path
 import robosuite as suite
 from omegaconf import OmegaConf 
 
-from data.utils.transforms import get_transforms
+from data.finetune_discover.transforms import get_transforms
 from data.transfer.datamodule import get_joint_dsc
 
 # from models.transfer.sad import SkillConditionedActionDecoder
