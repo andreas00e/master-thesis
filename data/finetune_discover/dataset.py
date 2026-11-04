@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import torch
 from torch.utils.data import Dataset
 
-from data.discover.utils.transforms import get_transforms
+from data.finetune_discover.utils.transforms import get_transforms
 
 
 ROBOT_DICT = {
@@ -39,6 +39,7 @@ class MimicGenRobotDataset(Dataset):
         crop_factor: float=1.0, 
         noise_level: Optional[float]=None,
         epoch: int=1, 
+        modalities: Optional[List[str]] = None,
         )-> None: 
         super().__init__()
         
@@ -53,6 +54,28 @@ class MimicGenRobotDataset(Dataset):
         self.negative_window_size = negative_window_size
         self.crop_factor = crop_factor
         self.noise_level = noise_level
+
+        self.modalities = modalities if modalities is not None else ["rgb_one", "rgb_two", "g_qpos"]
+        
+        self.gripper_mins, self.gripper_maxs = {}, {}
+        for robot in ROBOT_DICT.keys(): 
+            min_col, max_col = f"{robot}_min", f"{robot}_max"
+            if min_col in dataframe_gripper.columns and max_col in dataframe_gripper.columns: 
+                self.gripper_mins[robot] = dataframe_gripper[min_col].values
+                self.gripper_maxs[robot] = dataframe_gripper[max_col].values
+        
+        self._parsed_metadata = []
+        for file_path, demo, idx in demo_map: 
+            stem = Path(file_path).stem
+            task = stem.split("_")[0]
+            robot = stem.split("_")[-1]
+            self._parsed_metadata.append({
+                "file_path": file_path,
+                "demo": demo,
+                "task_id": TASK_DICT[task],
+                "robot_id": ROBOT_DICT[robot],
+                "robot_name": robot
+            })
         
         self._file_cache: Dict[str, h5py.File] = {}  
         self._pid: Optional[int] = None
@@ -99,11 +122,11 @@ class MimicGenRobotDataset(Dataset):
         return len(self.demo_map)
 
     def __getitem__(self, idxs: int) -> Dict[str, torch.Tensor]: 
-        item = {}
-        file_path, demo, _ =  self.demo_map[idxs] # one hdf5 file 
-        
-        task = Path(file_path).stem.split("_")[0]
-        robot = Path(file_path).stem.split("_")[-1]
+        meta = self._parsed_metadata[idxs]
+        file_path, demo = meta["file_path"], meta["demo"]
+        robot_name = meta["robot_name"]
+        task_id = meta["task_id"]
+        robot_id = meta["robot_id"]
         
         hf = self._get_hdf5_handle(file_path)
         demo_obs = hf["data"][demo]["obs"]
@@ -143,58 +166,69 @@ class MimicGenRobotDataset(Dataset):
         flat = idxs.flatten()
         uniq, inv = np.unique(flat, return_inverse=True)
         
+        item = {}
+        
         # 1. Perspective 1: robot_0_eye_in_hand_image
-        rgb_one = demo_obs["robot0_eye_in_hand_image"][uniq] # [n_steps, height=84, width=84, channels=3]
-        if self.crop_factor is not None: 
-            crop_h = int(rgb_one.shape[1]*self.crop_factor)
-            rgb_one = rgb_one[:, :crop_h, ...]
-        rgb_one = torch.from_numpy(rgb_one).permute(0, 3, 1, 2) # [uniq, channels=3, height=224, width=224] 
+        if "rgb_one" in self.modalities: 
+            rgb_one = demo_obs["robot0_eye_in_hand_image"][uniq] # [n_steps, height=84, width=84, channels=3]
+            if self.crop_factor is not None: 
+                crop_h = int(rgb_one.shape[1]*self.crop_factor)
+                rgb_one = rgb_one[:, :crop_h, ...]
+            rgb_one = torch.from_numpy(rgb_one).permute(0, 3, 1, 2) # [uniq, channels=3, height=224, width=224] 
         
         # 2. Perspective 2: agentview_image 
-        rgb_two = demo_obs["agentview_image"][uniq] # [n_steps, height=84, width=84, channels=3]       
-        rgb_two = torch.from_numpy(rgb_two).permute(0, 3, 1, 2) # [uniq, channels=3, height=224, width=224]       
+        if "rgb_two" in self.modalities: 
+            rgb_two = demo_obs["agentview_image"][uniq] # [n_steps, height=84, width=84, channels=3]       
+            rgb_two = torch.from_numpy(rgb_two).permute(0, 3, 1, 2) # [uniq, channels=3, height=224, width=224]       
         
         # 3. Normalized gripper joint states 
-        g_qpos = demo_obs["robot0_gripper_qpos"][uniq] # [uniq, d]: d in {2, 6}
-        min_col, max_col = f"{robot}_min", f"{robot}_max"
+        if "g_qpos" in self.modalities: 
+            g_qpos = demo_obs["robot0_gripper_qpos"][uniq] # [uniq, d]: d in {2, 6}
         
-        if min_col in self.dataframe_gripper.columns and max_col in self.dataframe_gripper.columns: 
-            g_min = self.dataframe_gripper[min_col].values[:g_qpos.shape[-1]] # [1, d]
-            g_max = self.dataframe_gripper[max_col].values[:g_qpos.shape[-1]] # [1, d]
-            g_qpos = np.clip((g_qpos - g_min) / ((g_max - g_min) + 1e-8), 0.0, 1.0) # [uniq, d] 
+            if robot_name in self.gripper_mins:             
+                g_min = self.gripper_mins[robot_name][:g_qpos.shape[-1]] # [1, d]
+                g_max = self.gripper_maxs[robot_name][:g_qpos.shape[-1]] # [1, d]
+                g_qpos = np.clip((g_qpos - g_min) / ((g_max - g_min) + 1e-8), 0.0, 1.0) # [uniq, d] 
             
-        g_qpos = np.mean(g_qpos, axis=-1) # [uniq]
-        g_qpos = g_qpos[inv].reshape(*idxs.shape, 1) # [chunk, window, 1]
-        g_qpos = torch.from_numpy(g_qpos).to(torch.float32) 
-                
-        if self.contrastive_transforms and hasattr(self, "positive_transforms"):      
-            rgb_one_pos = self.positive_transforms(rgb_one) # positive sample
-            rgb_one_pos = rgb_one_pos[inv].view(*idxs.shape, *rgb_one_pos.shape[1:])
+            g_qpos = np.mean(g_qpos, axis=-1) # [uniq]
+            g_qpos = g_qpos[inv].reshape(*idxs.shape, 1) # [chunk, window, 1]
+            g_qpos = torch.from_numpy(g_qpos).to(torch.float32) 
+            
+            item["g_qpos"] = g_qpos
 
-            rgb_two_pos = self.positive_transforms(rgb_two) # positive sample
-            rgb_two_pos = rgb_two_pos[inv].view(*idxs.shape, *rgb_two_pos.shape[1:]) 
-            
-            edge_damping = g_qpos * (1.0 - g_qpos) 
-            noise = self.noise_level * torch.randn_like(g_qpos) * edge_damping
-            g_qpos_pos = torch.clamp(g_qpos + noise, 0.0, 1.0)
-            
-            item["rgb_one_pos"] = rgb_one_pos
-            item["rgb_two_pos"] = rgb_two_pos
-            item["g_qpos_pos"] = g_qpos_pos
+        # Contrastive Transforms
+        if self.contrastive_transforms and hasattr(self, "positive_transforms"): 
+            if "rgb_one" in self.modalities:      
+                rgb_one_pos = self.positive_transforms(rgb_one) # positive sample
+                rgb_one_pos = rgb_one_pos[inv].view(*idxs.shape, *rgb_one_pos.shape[1:])
+                item["rgb_one_pos"] = rgb_one_pos
 
+            if "rgb_two" in self.modalities: 
+                rgb_two_pos = self.positive_transforms(rgb_two) # positive sample
+                rgb_two_pos = rgb_two_pos[inv].view(*idxs.shape, *rgb_two_pos.shape[1:]) 
+                item["rgb_two_pos"] = rgb_two_pos
+
+            if "g_qpos" in self.modalities: 
+                edge_damping = g_qpos * (1.0 - g_qpos) 
+                noise = self.noise_level * torch.randn_like(g_qpos) * edge_damping
+                g_qpos_pos = torch.clamp(g_qpos + noise, 0.0, 1.0)
+            
+                item["g_qpos_pos"] = g_qpos_pos
+        
+        # Standard Transforms
         if hasattr(self, "transforms"): 
-            rgb_one = self.transforms(rgb_one)
-            rgb_one = rgb_one[inv].view(*idxs.shape, *rgb_one.shape[1:])
-            
-            rgb_two = self.transforms(rgb_two)
-            rgb_two = rgb_two[inv].view(*idxs.shape, *rgb_two.shape[1:])
-            
-        item["rgb_one"] = rgb_one
-        item["rgb_two"] = rgb_two
-        item["g_qpos"] = g_qpos
-        
-        item["task"] = torch.full(size=(idxs.shape[0], ), fill_value=TASK_DICT[task], dtype=torch.long) # [chunk]
-        item["robot"] = torch.full(size=(idxs.shape[0], ), fill_value=ROBOT_DICT[robot], dtype=torch.long) # [chunk]
+            if "rgb_one" in self.modalities: 
+                rgb_one = self.transforms(rgb_one)
+                rgb_one = rgb_one[inv].view(*idxs.shape, *rgb_one.shape[1:])
+                item["rgb_one"] = rgb_one
+                
+            if "rgb_two" in self.modalities:
+                rgb_two = self.transforms(rgb_two)
+                rgb_two = rgb_two[inv].view(*idxs.shape, *rgb_two.shape[1:]) 
+                item["rgb_two"] = rgb_two
+                        
+        item["task"] = torch.full(size=(idxs.shape[0], ), fill_value=task_id, dtype=torch.long) # [chunk]
+        item["robot"] = torch.full(size=(idxs.shape[0], ), fill_value=robot_id, dtype=torch.long) # [chunk]
         item["idxs"] = idxs # [chunk, window]
 
         return item

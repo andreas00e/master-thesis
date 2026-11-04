@@ -10,10 +10,10 @@ from torch.utils.data import DataLoader, ConcatDataset
 
 import lightning.pytorch as pl 
 
-from data.utils.collate import collate_transfer
-from data.utils.load_files import get_files, get_metadata, get_demo_dict
+from data.finetune_discover.utils.collate import collate_transfer
+from data.finetune_discover.utils.load_files import get_files, get_metadata, get_demo_dict
 from data.transfer.dataset import TransferDataset
-from data.discover.utils.sampler import SameRobotBatchSampler
+from data.finetune_discover.utils.sampler import SameRobotBatchSampler
 
 
 class TransferDataModule(pl.LightningDataModule): 

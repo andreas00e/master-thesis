@@ -9,7 +9,7 @@ import torch
 from torchtyping import TensorType
 from torch.utils.data import Dataset
 
-from data.discover.utils.transforms import get_transforms
+from data.finetune_discover.utils.transforms import get_transforms
 
 
 ROBOT_DICT = {
