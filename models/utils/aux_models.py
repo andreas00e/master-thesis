@@ -2,11 +2,9 @@ from r3m import load_r3m
 from itertools import chain
 from omegaconf import  DictConfig
 from typing import List, Optional, Tuple, Union
-from  peft import LoraConfig, get_peft_model
 
 import torch 
 import torch.nn as nn 
-from torchvision.models import resnet18
 from torchtyping import TensorType
 
 from models.utils.utils import PositionalEncoding

@@ -4,9 +4,9 @@ defaults:
 d_model: 64
 seed: 42
 
-cwd: /dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger
+cwd: /home/bing_TUM/ehrensberger/master-thesis
 data_dir: ${cwd}/imports/mimicgen/datasets/robot
-meta_dir: ${cwd}/master-thesis/data/metadata
+meta_dir: ${cwd}/thesis/data/metadata
 
 datamodule: 
   _target_: data.utils.datamodule.MimicGenRobotDataModule

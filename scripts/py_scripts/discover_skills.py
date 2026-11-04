@@ -4,7 +4,7 @@ from hydra.utils import instantiate
 
 import lightning.pytorch as pl
 
-from scripts.py_scripts.setup_environment import setup_environment
+from setup_environment import setup_environment
 setup_environment()
 
 @hydra.main(config_path="../../cfgs", config_name="discover_skills", version_base=None)

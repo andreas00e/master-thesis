@@ -71,9 +71,10 @@ class SkillEncoder(pl.LightningModule):
         self.tsne_kwargs = tsne_kwargs
         self._log_every_n_steps = _log_every_n_steps
         
-
-        self.visionEncoderOne = BuildAResnet18(**self.vision_encoder_kwargs)
-        self.visionEncoderTwo = BuildAResnet18(**self.vision_encoder_kwargs)
+        self.visionEncoder = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+        self.visionEncoder.eval() 
+        for param in self.visionEncoder.parameters(): 
+            param.requires_grad_(False)
 
         self.gripperEncoder = nn.Sequential(
             nn.Linear(self.d_model, self.d_model // 2), 
@@ -87,7 +88,7 @@ class SkillEncoder(pl.LightningModule):
         self.C = nn.Linear(**self.prototype_kwargs.model) # [k, d_model]: config: bias=False 
         nn.init.xavier_uniform_(self.C.weight)
             
-        self.downEmb = nn.Linear(self.d_model*3, self.d_model)    
+        # self.downEmb = nn.Linear(self.d_model*3, self.d_model)    
 
         if self.with_uncertainty_weighting:
             self.uncertainty_weighting = UncertaintyWeighting(**self.uncertainty_weighting_kwargs)
@@ -100,8 +101,8 @@ class SkillEncoder(pl.LightningModule):
         
         self.lnVisionOne = nn.LayerNorm(self.d_model)
         self.lnVisionTwo = nn.LayerNorm(self.d_model)
-        self.lnGripper = nn.LayerNorm(self.d_model)  
-        self.lnDown = nn.LayerNorm(self.d_model)
+        # self.lnGripper = nn.LayerNorm(self.d_model)  
+        # self.lnDown = nn.LayerNorm(self.d_model)
         
         self.queue = FIFOQueue(**self.queue_kwargs)
         self.sinkhorn = Sinkhorn(**self.sinkhorn_kwargs)
@@ -113,7 +114,7 @@ class SkillEncoder(pl.LightningModule):
         self._task_val = []
         self._robot_val = []
         
-        for m in [self.gripperEncoder, self.downEmb, self.lnVisionOne, self.lnVisionTwo, self.lnGripper, self.lnDown]:
+        for m in [self.gripperEncoder, self.lnVisionOne, self.lnVisionTwo]:
              m.apply(self._init_weights)
 
     def _init_weights(self, module): 
@@ -357,24 +358,17 @@ class SkillEncoder(pl.LightningModule):
         batch_size, chunk, window = rgb_one.shape[:3]
         n = batch_size*chunk
         
-        emb_one = self.lnVisionOne(self.visionEncoderOne(rgb_one)["x"]) # [batch_size*chunk*window, d_model] 
-        print(f"emb_one mean : {emb_one.mean().detach()}")
-        print(f"emb_one std: {emb_one.std(-1).mean().detach()}")
-        emb_two = self.lnVisionTwo(self.visionEncoderTwo(rgb_two)["x"]) # [batch_size*chunk*window, d_model]
-        print(f"emb_two mean: {emb_two.mean().detach()}")
-        print(f"emb_two std: {emb_two.std(-1).mean().detach()}")
-        emb_gripper = self.lnGripper(self.gripperEncoder(self.sinusoidal_embedding(g_qpos.reshape(-1, 1)))) # [batch_size*chunk*window, d_model]
-        print(f"emb_gripper mean: {emb_gripper.mean().detach()}")
-        print(f"emb_gripper std: {emb_gripper.std(-1).mean().detach()}")
-        print("####################################")
+        emb_one = self.visionEncoder(rgb_one)["x"] # [batch_size*chunk*window, 384] 
+        emb_two = self.visionEncoder(rgb_two)["x"] # [batch_size*chunk*window, 384]
+        # emb_gripper = self.lnGripper(self.gripperEncoder(self.sinusoidal_embedding(g_qpos.reshape(-1, 1)))) # [batch_size*chunk*window, d_model]
         
-        if all([self.training, gripper_dropout_p is not None, gripper_dropout_p > 0.0]):
-            keep_p = 1.0 - gripper_dropout_p
-            keep = torch.bernoulli(torch.full((n, 1, 1), keep_p, device=emb_gripper.device, dtype=emb_gripper.dtype)) # [n, 1, 1]
-            emb_gripper = (emb_gripper.view(n, window, -1) * keep / keep_p).view(n * window, -1) # [n*window, d_model]
+        # if all([self.training, gripper_dropout_p is not None, gripper_dropout_p > 0.0]):
+        #     keep_p = 1.0 - gripper_dropout_p
+        #     keep = torch.bernoulli(torch.full((n, 1, 1), keep_p, device=emb_gripper.device, dtype=emb_gripper.dtype)) # [n, 1, 1]
+        #     emb_gripper = (emb_gripper.view(n, window, -1) * keep / keep_p).view(n * window, -1) # [n*window, d_model]
         
-        emb = torch.cat([emb_one, emb_two, emb_gripper], dim=-1) # [batch_size*chunk*window, d_model*3]
-        emb = self.lnDown(self.downEmb(emb)) # [batch_size*chunk*window, d_model]        
+        # emb = torch.cat([emb_one, emb_two], dim=-1) # [batch_size*chunk*window, d_model*3]
+        emb = torch.cat([emb_one, emb_two], dim=-1) # [batch_size*chunk*window, d_model*2]
         emb = self.sequential(emb.view(n, window, -1), idxs=idxs) # [n, d_model]
         
         z = F.normalize(emb, dim=-1) # [n, d_model]

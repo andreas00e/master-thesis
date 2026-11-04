@@ -3,16 +3,16 @@ defaults:
   - _self_ 
 
 d_model: 128
-d_prototypes: 64
+d_prototypes: 8
 
 datamodule: 
   transforms_list:
     - to_image
-    - rotate 
-    - color_jitter
-    - solarize
+    # - rotate 
+    # - color_jitter
+    # - solarize
     - gaussian_blur 
-    - grayscale
+    # - grayscale
     - to_dtype_cnn
   contrastive_transforms: true 
 
@@ -36,8 +36,8 @@ model:
   d_model: ${d_model}
   num_plot: 2000
   abs_pe: false
-  queue_start_epochs: 10
-  freeze_c_epochs: 15
+  queue_start_epochs: 10000
+  freeze_c_epochs: 0
 
   time_contrastive: true
   temp_time_contrastive: 0.1
@@ -55,14 +55,14 @@ model:
 
   sequential_kwargs: 
     encoder_layer_kwargs: 
-      d_model: ${d_model}
+      d_model: 768
       nhead: 2 
-      dim_feedforward: ${d_model}
+      dim_feedforward: ${eval:"${d_model}*2"}
       batch_first: true
       norm_first: true
 
     transformer_encoder_kwargs:
-      num_layers: 4
+      num_layers: 2
       enable_nested_tensor: false 
       mask_check: false
 
@@ -81,14 +81,14 @@ model:
     _target_: torch.optim.AdamW
     _recursive_: false
 
-    lr: 1e-4
+    lr: 1e-3
     weight_decay: 1e-6
 
   lr_scheduler_kwargs: 
     warmup_percentage: 0.1
 
     linear:  
-      start_factor: 1e-4
+      start_factor: 1e-3
       end_factor: 1.0 
       total_iters: 100 # adapted dynamically  
 
@@ -120,7 +120,7 @@ logger:
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  # overfit_batches: 15
+  overfit_batches: 8
   log_every_n_steps: 1
   accelerator: gpu   
   devices: 
