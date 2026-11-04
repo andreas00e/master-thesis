@@ -21,13 +21,13 @@ datamodule:
     - panda
   tasks: 
     - square 
-    - threading
 
-  data_portion: 1.0
-  consistent_batch: true 
-  positive_window_size: 4
-  negative_window_size: 12  
+  data_portion: 1
+  window_size: 9 # 8+1
+  consistent_batch: true
   batch_size: 32
+  positive_window_size: 4
+  negative_window_size: 36  
                     
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
@@ -35,34 +35,29 @@ model:
 
   d_model: ${d_model}
   num_plot: 2000
-  abs_pe: false
+  ema_alpha: 0.95
+  
+  modalities: 
+    # - rgb_one
+    - rgb_two 
+    # - g_qpos
+
   queue_start_epochs: 10000
   freeze_c_epochs: 0
 
   time_contrastive: true
   temp_time_contrastive: 0.1
-  gripper_dropout_p: 0.05
-
-  with_uncertainty_weighting: false
-  uncertainty_weighting_kwargs: 
-    num_losses: 3
-  
-  vision_encoder_kwargs: 
-    width: 0.25
-    out_dim: ${d_model}
-    num_layers: 2 
-    what_to_plot: null
 
   sequential_kwargs: 
     encoder_layer_kwargs: 
-      d_model: 768
-      nhead: 2 
-      dim_feedforward: ${eval:"${d_model}*2"}
+      d_model:  ${d_model}
+      nhead: 1 
+      dim_feedforward: ${d_model}
       batch_first: true
       norm_first: true
 
     transformer_encoder_kwargs:
-      num_layers: 2
+      num_layers: 1
       enable_nested_tensor: false 
       mask_check: false
 

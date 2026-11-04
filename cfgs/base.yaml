@@ -4,9 +4,11 @@ defaults:
 d_model: 64
 seed: 42
 
-cwd: /home/bing_TUM/ehrensberger/master-thesis
+# cwd: /home/bing_TUM/ehrensberger/master-thesis
+cwd: /home/ehre/Documents
+# data_dir: ${cwd}/imports/mimicgen/datasets/robot
 data_dir: ${cwd}/imports/mimicgen/datasets/robot
-meta_dir: ${cwd}/thesis/data/metadata
+meta_dir: ${cwd}/master-thesis/data/metadata
 
 datamodule: 
   _target_: data.utils.datamodule.MimicGenRobotDataModule
@@ -19,7 +21,7 @@ datamodule:
 
   robots: null # [iiwa, panda, sawyer, ur5e]
   tasks: null # [square, threading]
-  data_distribution: both # d0, d1, both
+  data_distribution: d0 # d0, d1, both
   data_portion: 1.0
   window_size: 1 # > 0
   chunk_size: 1 # > 0
