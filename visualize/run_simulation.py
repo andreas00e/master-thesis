@@ -29,6 +29,15 @@ def main(cfg):
 
     obs = env.reset()
     
+    print(env.robots[0])
+    exit()
+    
+    joint_min, joint_max = env.robots[0].js_joint_min, env.robots[0].js_joint_max
+    print("Joint Mins (rad):", joint_min)
+    print("Joint Maxs (rad):", joint_max)
+    
+    exit()
+    
     for _ in range(1000):
         env.render()  
         
