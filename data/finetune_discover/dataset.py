@@ -109,16 +109,21 @@ class MimicGenRobotDataset(Dataset):
         n_steps = demo_obs["robot0_eye_in_hand_image"].shape[0]
         
         # Time-Contrastive Sampling    
-        if self.positive_window_size is not None and self.negative_window_size is not None: # time-contrastive sampling 
+        if self.positive_window_size is not None and self.negative_window_size is not None:
             max_offset = max(1, n_steps-self.window_size+1) 
             
             start_ = torch.randint(0, max_offset, (1,), generator=generator).item()
             idxs = torch.arange(start_, start_+self.window_size)
-                        
-            start_pos = torch.randint(start_-self.positive_window_size, start_+1, (1,), generator=generator).item()
+            
+            start_pos = torch.randint(max(0, start_-self.positive_window_size), start_+1, (1,), generator=generator).item()
             pos_idxs = torch.arange(start_pos, start_pos+self.window_size)
 
-            start_neg = torch.randint(start_-self.negative_window_size-self.window_size, start_-self.negative_window_size+1, (1,), generator=generator).item()
+            if start_ - self.negative_window_size >= 0: 
+                start_neg = torch.randint(max(0, start_-self.negative_window_size-self.window_size), max(0, start_-self.negative_window_size+1), (1,), generator=generator).item()
+            else: 
+                low = min(start_+self.negative_window_size, max_offset-1)
+                high = min(start_+self.negative_window_size+self.window_size, max_offset-1) + 1
+                start_neg = torch.randint(low, high, (1,), generator=generator).item()
             neg_idxs = torch.arange(start_neg, start_neg+self.window_size)
             
             idxs = torch.vstack((idxs, pos_idxs, neg_idxs)) # [3, self.window_size]
@@ -191,16 +196,15 @@ class MimicGenRobotDataset(Dataset):
                 item["g_qpos_pos"] = g_qpos_pos
         
         # Standard Transforms
-        if hasattr(self, "transforms"): 
-            if "rgb_one" in self.modalities: 
-                rgb_one = self.transforms(rgb_one)
-                rgb_one = rgb_one[inv].view(*idxs.shape, *rgb_one.shape[1:])
-                item["rgb_one"] = rgb_one
-                
-            if "rgb_two" in self.modalities:
-                rgb_two = self.transforms(rgb_two)
-                rgb_two = rgb_two[inv].view(*idxs.shape, *rgb_two.shape[1:]) 
-                item["rgb_two"] = rgb_two
+        if "rgb_one" in self.modalities: 
+            rgb_one = self.transforms(rgb_one)
+            rgb_one = rgb_one[inv].view(*idxs.shape, *rgb_one.shape[1:])
+            item["rgb_one"] = rgb_one
+            
+        if "rgb_two" in self.modalities:
+            rgb_two = self.transforms(rgb_two)
+            rgb_two = rgb_two[inv].view(*idxs.shape, *rgb_two.shape[1:]) 
+            item["rgb_two"] = rgb_two
                         
         item["task"] = torch.full(size=(idxs.shape[0], ), fill_value=TASK_DICT[self.task], dtype=torch.long) # [chunk]
         item["robot"] = torch.full(size=(idxs.shape[0], ), fill_value=ROBOT_DICT[self.robot], dtype=torch.long) # [chunk]
