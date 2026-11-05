@@ -2,15 +2,16 @@ import os
 import random 
 import pandas as pd
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from torch.utils.data import DataLoader, Dataset, ConcatDataset
 
 import lightning.pytorch as pl 
 
+from data.finetune_discover.dataset import MimicGenRobotDataset
 from data.finetune_discover.utils.collate import collate_fn
 from data.finetune_discover.utils.load_files import get_files, get_metadata, get_demo_dict
-from data.finetune_discover.dataset import MimicGenRobotDataset
+from data.finetune_discover.utils.robot_task_dict import ROBOT_DICT
 from data.finetune_discover.utils.sampler import SameRobotBatchSampler
 
 
@@ -19,12 +20,13 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self, 
         data_dir: str, 
         meta_dir: str,
-        transforms_list: List[str], 
+        transforms_list: List[str]=["to_image", "to_dtype_cnn"], 
         contrastive_transforms: bool=False, 
         robots: Optional[Union[str, List[str]]]=None, 
         tasks: Optional[Union[str, List[str]]]=None, 
         data_distribution: str="d0", 
         data_portion: float=1.0,
+        modalities: Optional[List[str]]=None, 
         window_size: int=8, 
         chunk_size: int=1, 
         crop_factor: float=1.0,       
@@ -51,8 +53,10 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.transforms_list = transforms_list
         self.contrastive_transforms = contrastive_transforms
         
+        # Data kwargs
         self.data_distribution = data_distribution
         self.data_portion = data_portion
+        self.modalities = modalities if modalities is not None else ["rgb_one", "rgb_two", "g_qpos"]
         self.window_size = window_size
         self.chunk_size = chunk_size
         self.crop_factor = crop_factor
@@ -77,6 +81,14 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.metadata = get_metadata(self.meta_dir, self.files)
         self.dataframe_gripper = pd.read_csv(self.meta_dir / "gripper_state_robot.csv")
         self.demo_map, self.window_size = get_demo_dict(self.metadata, self.files, self.window_size)
+        
+        self.gripper_mins, self.gripper_maxs = {}, {}
+        if "g_qpos" in self.modalities: 
+            for robot in ROBOT_DICT.keys(): 
+                min_col, max_col = f"{robot}_min", f"{robot}_max"
+                if min_col in self.dataframe_gripper.columns and max_col in self.dataframe_gripper.columns: 
+                    self.gripper_mins[robot] = self.dataframe_gripper[min_col].values
+                    self.gripper_maxs[robot] = self.dataframe_gripper[max_col].values
             
         self.train_dataset = None
         self.val_dataset = None
@@ -85,7 +97,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
     def setup(self, stage: Optional[str]=None) -> None:
         rng = random.Random(self.seed)
            
-        demo_map = {"fit": {}, "validate": {}, "test": {}}  
+        demo_map = {"fit": {}, "validate": {}, "test": {}} 
         for robot in self.robots: 
             for task in self.tasks: 
                 d0_key = f"{task}_d0_{robot}"
@@ -102,10 +114,10 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                     raise ValueError(f"data_distribution must d0, d1 or both, got {self.data_distribution}.")
         
                 rng.shuffle(entries)
-                n_entries = len(entries)
                 if self.data_portion < 1: 
-                    entries = entries[:int(self.data_portion * n_entries)]
+                    entries = entries[:int(self.data_portion*len(entries))]
                 
+                n_entries = len(entries)
                 fit_end = int(self.dataset_lengths[0]*n_entries)
                 val_end = fit_end + int(self.dataset_lengths[1]*n_entries)
                 
@@ -113,15 +125,14 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 demo_map["validate"][map_key] = entries[fit_end:val_end]
                 demo_map["test"][map_key] = entries[val_end:]
         
-        if stage in ("fit", "validate") or stage is None and self.train_dataset is None and self.val_dataset is None: 
-            datasets_fit = self._make_dataset(demo_map["fit"], "fit")
-            datasets_validate = self._make_dataset(demo_map["validate"], "validate")
-            self.train_dataset = ConcatDataset(datasets_fit)
-            self.val_dataset = ConcatDataset(datasets_validate)
-
-        if stage == "test": 
-            datasets_test = self._make_dataset(demo_map["test"], "test")
-            self.test_dataset = ConcatDataset(datasets_test)
+        if stage in ("fit", None) and self.train_dataset is None:
+            self.train_dataset = ConcatDataset(self._make_dataset(demo_map["fit"], "fit"))
+            
+        if stage in ("fit", "validate", None) and self.val_dataset is None:
+            self.val_dataset = ConcatDataset(self._make_dataset(demo_map["validate"], "validate"))
+            
+        if stage in ("test", None) and self.test_dataset is None:
+            self.test_dataset = ConcatDataset(self._make_dataset(demo_map["test"], "test"))
             
     def teardown(self, stage: Optional[str]=None) -> None:
         stages_to_clean = []
@@ -153,21 +164,27 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         except Exception:
             pass
         
-    def _make_dataset(self, demo_map: Dict[str, List[str]], stage: str) -> Dataset: 
-        current_epoch = self.trainer.current_epoch if self.trainer is not None else 0
+    def _make_dataset(self, demo_map: Dict[str, List[Tuple[str, ...]]], stage: str) -> List[Dataset]: 
+        current_epoch = self.trainer.current_epoch if self.trainer is not None else 1
         dataset = [
             MimicGenRobotDataset(
                 demo_map=demo_map[f"{task}{robot}"],
-                dataframe_gripper=self.dataframe_gripper, 
+                task=task, 
+                robot=robot, 
+                gripper_mins=self.gripper_mins[robot], 
+                gripper_maxs=self.gripper_maxs[robot],
+                modalities=self.modalities,
                 transforms_list=self.transforms_list, 
-                contrastive_transforms=self.contrastive_transforms, 
-                window_size=self.window_size,
-                chunk_size=self.chunk_size, 
+                contrastive_transforms=None if stage=="test" else self.contrastive_transforms, 
+                window_size=None if stage=="test" else self.window_size,
+                chunk_size=None if stage=="test" else self.chunk_size, 
                 temporal_smoothing=None if stage=="test" else self.temporal_smoothing, 
                 positive_window_size=None if stage=="test" else self.positive_window_size, 
                 negative_window_size=None if stage=="test" else self.negative_window_size, 
                 crop_factor=self.crop_factor,
-                noise_level=self.noise_level, 
+                noise_level=None if stage=="test" else self.noise_level, 
+                stage=stage,
+                seed=self.seed,
                 epoch=current_epoch
             )  
             for task in self.tasks 
@@ -209,8 +226,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 )
     
     def train_dataloader(self) -> DataLoader:
-        # current_epoch = self.trainer.current_epoch if self.trainer is not None else 1
-        current_epoch = 1
+        current_epoch = self.trainer.current_epoch if self.trainer is not None else 1
         if isinstance(self.train_dataset, ConcatDataset):
                     for subset in self.train_dataset.datasets:
                         subset.epoch = current_epoch
