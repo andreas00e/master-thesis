@@ -11,7 +11,7 @@ data_dir: ${cwd}/imports/mimicgen/datasets/robot
 meta_dir: ${cwd}/master-thesis/data/metadata
 
 datamodule: 
-  _target_: data.utils.datamodule.MimicGenRobotDataModule
+  _target_: data.finetune_discover.datamodule.MimicGenRobotDataModule
 
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
