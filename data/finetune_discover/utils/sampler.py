@@ -1,6 +1,6 @@
 import math
-import random
 import itertools
+from random import Random
 from more_itertools import chunked
 from typing import Dict, Iterator, List
 
@@ -25,7 +25,7 @@ class SameRobotBatchSampler(Sampler):
         self.drop_last = drop_last
         self.seed = seed
         self.epoch = 0 
-                
+                    
         self.dataset_indices: Dict[int, List] = {robot_index: [] for robot_index in range(self.n_robots)} # stores idxs of dataset items of one robot in global concat dataset
         
         start_idx = 0
@@ -38,15 +38,15 @@ class SameRobotBatchSampler(Sampler):
         self.epoch = epoch
 
     def __iter__(self) -> Iterator[List[int]]:
-        rng = random.Random(self.seed + self.epoch)
-        robot_batches = {i: [] for i in range(self.n_robots)}
+        rng = Random(self.seed + self.epoch)
+        robot_batches = {r: [] for r in range(self.n_robots)}
         
-        for r, indices in enumerate(self.dataset_indices.values()): # idxs of dataset items of one robot (multiple tasks and distributions) in global concat dataset
+        for r, idxs in self.dataset_indices.items(): # idxs of dataset items of one robot (multiple tasks and distributions) in global concat dataset
             if self.shuffle:
-                indices = indices.copy()
-                rng.shuffle(indices)
+                idxs = idxs.copy()
+                rng.shuffle(idxs)
                 
-            robot_batches[r] = list(chunked(indices, self.batch_size))
+            robot_batches[r] = list(chunked(idxs, self.batch_size))
                
             if self.drop_last and robot_batches[r] and len(robot_batches[r][-1]) < self.batch_size:
                 del robot_batches[r][-1]
