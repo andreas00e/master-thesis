@@ -2,7 +2,7 @@ import io
 import math
 import random 
 from PIL import Image
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 from matplotlib import pyplot as plt
 
 import torch 
@@ -206,3 +206,84 @@ class DinoV2(nn.Module):
         x = x.view(batch*chunk, window, -1)  # ["batch*chunk, window", "d_model"]
         
         return x 
+    
+class CNN(nn.Module):
+    def __init__(self, d_model: int) -> None:
+        super().__init__()
+        
+        self.d_model = d_model
+        
+        self.model = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=8, stride=4, padding=0),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(6400, self.d_model), 
+        )
+        
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module): 
+        if isinstance(module, nn.Linear): 
+            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
+            if module.bias is not None: 
+                nn.init.zeros_(module.bias)       
+
+    def forward(
+        self, 
+        x: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"]
+        ) -> TensorType["batch*(chunk/num_steps)*window", "d_model"]:
+
+        x = x.view(-1, *x.shape[-3:]) # [batch*(chunk/num_steps)*window, channels, height, width]
+        x = self.model(x) # [batch*(chunk/num_steps)*window, feature_dim]
+            
+        return x
+    
+class CNNStackChannels(nn.Module):
+    def __init__(
+        self, 
+        d_model: int, 
+        in_channels: int=24, 
+        input_size: Tuple[int, int]=(84, 84) # (112, 112)
+        ) -> None:
+        super().__init__()
+
+        self.d_model = d_model
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.ReLU(),
+            nn.Flatten()
+        )
+
+        with torch.no_grad():
+            dummy = torch.zeros(1, in_channels, *input_size)
+            n_flat = self.conv(dummy).shape[-1]
+
+        self.down = nn.Linear(n_flat, self.d_model)
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module: nn.Module) -> None:
+        if isinstance(module, (nn.Linear, nn.Conv2d)):
+            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+    def forward(
+        self,
+        x: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"],
+        ) -> TensorType["batch*(chunk/num_steps)*window", "d_model"]:
+        x = x.reshape(-1, *x.shape[-3:])
+        # x = x.reshape(-1, x.shape[2]*x.shape[3], *x.shape[-2:])
+        x = self.conv(x)
+        x = self.down(x)
+        
+        return x

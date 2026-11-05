@@ -8,87 +8,66 @@ from torchtyping import TensorType
 
 from models.utils.utils import PositionalEncoding
 
-
-class CNN(nn.Module):
-    def __init__(self, d_model: int) -> None:
+class TransformerEncoder(nn.Module): 
+    def __init__(
+        self, 
+        encoder_layer_kwargs: DictConfig, 
+        transformer_encoder_kwargs: DictConfig, 
+        pe_kwargs: DictConfig,
+        ) -> None:
         super().__init__()
         
-        self.d_model = d_model
+        self.encoder_layer_kwargs = encoder_layer_kwargs
+        self.transformer_encoder_kwargs = transformer_encoder_kwargs
+        self.pe_kwargs = pe_kwargs
+        self.d_model = int(encoder_layer_kwargs.d_model)
         
-        self.model = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=8, stride=4, padding=0),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(6400, self.d_model), 
-        )
+        encoder_layer = nn.TransformerEncoderLayer(**self.encoder_layer_kwargs)
+        self.transformerEncoder = nn.TransformerEncoder(encoder_layer, norm=nn.LayerNorm(self.d_model), **self.transformer_encoder_kwargs)
+        
+        self.head = nn.Sequential(
+            nn.Linear(self.d_model, self.d_model*2),
+            nn.ReLU(), 
+            nn.Linear(self.d_model*2, self.d_model)
+            )      
+        
+        # self.cls_token = nn.Parameter(data=torch.empty(size=(1, 1, self.d_model), dtype=torch.float32)) # [1, 1, d_model]
+        
+        self.pe = PositionalEncoding(**self.pe_kwargs)
         
         self.apply(self._init_weights)
+        # nn.init.kaiming_uniform_(self.cls_token)
 
     def _init_weights(self, module): 
         if isinstance(module, nn.Linear): 
             nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
             if module.bias is not None: 
                 nn.init.zeros_(module.bias)       
-
+            
     def forward(
         self, 
-        x: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"]
-        ) -> TensorType["batch*(chunk/num_steps)*window", "d_model"]:
-
-        x = x.view(-1, *x.shape[-3:]) # [batch*(chunk/num_steps)*window, channels, height, width]
-        x = self.model(x) # [batch*(chunk/num_steps)*window, feature_dim]
+        x: TensorType["batch*(chunk/num_steps), window", "d_model"], 
+        idxs: Optional[TensorType["batch", "(chunk/num_steps)", "window"]]=None, 
+        src_key_padding_mask: Optional[TensorType["batch", "num_steps", "d_model"]]=None
+        ) -> torch.Tensor: 
         
-        return x
+        # cls_token = self.cls_token.expand(x.shape[0], -1, -1) # [batch*(chunk/num_steps), 1, d_model]
+                    
+        # x = torch.cat((cls_token, x), dim=1) # [batch*(chunk/num_steps), 1+window, d_model]
+        x = self.pe(x, idxs) # [batch*(chunk/num_steps), 1+window, d_model]
+        
+        if src_key_padding_mask is not None: 
+            x = self.transformerEncoder(x, src_key_padding_mask=src_key_padding_mask) # [batch_size, num_steps, d_model]
+            x = x.reshape(-1, x.shape[-1]) # [batch_size*num_steps, d_model]
+            x = self.head(x) # [batch_size*num_steps, d_model]
+                     
+        else:
+            x = self.transformerEncoder(x) # [batch*(chunk/num_steps), 1+window, d_model]
+            # x = x[:, 0, :] # [batch*(chunk/num_steps), d_model]: CLS token
+            x = x.mean(1) # [batch*(chunk/num_steps), d_model]: mean pooling 
+            x = self.head(x) # [batch*(chunk/num_steps), d_model]
     
-class CNNStackChannels(nn.Module):
-    def __init__(
-        self, 
-        d_model: int, 
-        in_channels: int=24, 
-        input_size: Tuple[int, int]=(84, 84) # (112, 112)
-        ) -> None:
-        super().__init__()
-
-        self.d_model = d_model
-
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Flatten()
-        )
-
-        with torch.no_grad():
-            dummy = torch.zeros(1, in_channels, *input_size)
-            n_flat = self.conv(dummy).shape[-1]
-
-        self.down = nn.Linear(n_flat, self.d_model)
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, module: nn.Module) -> None:
-        if isinstance(module, (nn.Linear, nn.Conv2d)):
-            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
-            if module.bias is not None:
-                nn.init.zeros_(module.bias)
-
-    def forward(
-        self,
-        x: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"],
-        ) -> TensorType["batch*(chunk/num_steps)*window", "d_model"]:
-        x = x.reshape(-1, *x.shape[-3:])
-        # x = x.reshape(-1, x.shape[2]*x.shape[3], *x.shape[-2:])
-        x = self.conv(x)
-        x = self.down(x)
-        
-        return x
+        return x              
 
 class VisionEncoder(nn.Module): 
     def __init__(
@@ -191,64 +170,3 @@ class Expander(nn.Module):
         x = self.model(x)
         
         return x  
-    
-class TransformerEncoder(nn.Module): 
-    def __init__(
-        self, 
-        encoder_layer_kwargs: DictConfig, 
-        transformer_encoder_kwargs: DictConfig, 
-        pe_kwargs: DictConfig,
-        ) -> None:
-        super().__init__()
-        
-        self.encoder_layer_kwargs = encoder_layer_kwargs
-        self.transformer_encoder_kwargs = transformer_encoder_kwargs
-        self.pe_kwargs = pe_kwargs
-        self.d_model = int(encoder_layer_kwargs.d_model)
-        
-        encoder_layer = nn.TransformerEncoderLayer(**self.encoder_layer_kwargs)
-        self.transformerEncoder = nn.TransformerEncoder(encoder_layer, norm=nn.LayerNorm(self.d_model), **self.transformer_encoder_kwargs)
-        
-        self.head = nn.Sequential(
-            nn.Linear(self.d_model, self.d_model*2),
-            nn.ReLU(), 
-            nn.Linear(self.d_model*2, self.d_model)
-            )      
-        
-        self.cls_token = nn.Parameter(data=torch.empty(size=(1, 1, self.d_model), dtype=torch.float32)) # [1, 1, d_model]
-        
-        self.pe = PositionalEncoding(**self.pe_kwargs)
-        
-        self.apply(self._init_weights)
-        nn.init.kaiming_uniform_(self.cls_token)
-
-    def _init_weights(self, module): 
-        if isinstance(module, nn.Linear): 
-            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
-            if module.bias is not None: 
-                nn.init.zeros_(module.bias)       
-            
-    def forward(
-        self, 
-        x: TensorType["batch*(chunk/num_steps), window", "d_model"], 
-        idxs: Optional[TensorType["batch", "(chunk/num_steps)", "window"]]=None, 
-        src_key_padding_mask: Optional[TensorType["batch", "num_steps", "d_model"]]=None
-        ) -> torch.Tensor: 
-        
-        cls_token = self.cls_token.expand(x.shape[0], -1, -1) # [batch*(chunk/num_steps), 1, d_model]
-                    
-        x = torch.cat((cls_token, x), dim=1) # [batch*(chunk/num_steps), 1+window, d_model]
-        x = self.pe(x, idxs) # [batch*(chunk/num_steps), 1+window, d_model]
-        
-        if src_key_padding_mask is not None: 
-            x = self.transformerEncoder(x, src_key_padding_mask=src_key_padding_mask) # [batch_size, num_steps, d_model]
-            x = x.reshape(-1, x.shape[-1]) # [batch_size*num_steps, d_model]
-            x = self.head(x) # [batch_size*num_steps, d_model]
-                     
-        else:
-            x = self.transformerEncoder(x) # [batch*(chunk/num_steps), 1+window, d_model]
-            x = x[:, 0, :] # [batch*(chunk/num_steps), d_model]: CLS token
-            # x = x.mean(1) # [batch*(chunk/num_steps), d_model]: mean pooling 
-            x = self.head(x) # [batch*(chunk/num_steps), d_model]
-    
-        return x              

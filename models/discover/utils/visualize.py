@@ -67,8 +67,8 @@ class Visualize():
             data=df, 
             x="x",
             y="y", 
-            hue="robot", 
-            style="task", 
+            hue="label", 
+            style="robot", 
             size="idxs", 
             sizes=(10, 100)
             )
