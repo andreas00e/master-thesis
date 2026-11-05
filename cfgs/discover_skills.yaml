@@ -11,7 +11,7 @@ datamodule:
     # - rotate 
     # - color_jitter
     # - solarize
-    - gaussian_blur 
+    # - gaussian_blur 
     # - grayscale
     - to_dtype_cnn
   contrastive_transforms: true 
@@ -115,7 +115,7 @@ logger:
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  overfit_batches: 8
+  overfit_batches: 4
   log_every_n_steps: 1
   accelerator: gpu   
   devices: 
