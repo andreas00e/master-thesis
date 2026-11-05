@@ -176,7 +176,7 @@ class BuildAResnet18(nn.Module):
             layer = getattr(self, f"layer{i}")
             x = layer(x)
             
-            if self.what_to_plot == "kernels": 
+            if self.what_to_plot == "ker111111111nels": 
                 out[f"kernel{i}"] = layer[0].conv2.weight
             elif self.what_to_plot == "feature_maps": 
                 out[f"feature_map{i}"] = x
@@ -185,3 +185,24 @@ class BuildAResnet18(nn.Module):
         out["x"] = self.fc(x)
         
         return out
+
+
+class DinoV2(nn.Module): 
+    def __init__(
+        self, 
+        model_name: str="vits14", 
+        ) -> None:
+        super().__init__()
+        
+        self.model_name = model_name
+        self.model = torch.hub.load("facebookresearch/dinov2", f"dinov2_{self.model_name}")
+        
+    def forward(
+        self, x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
+        ) -> TensorType["batch*chunk", "window", "d_model"]:
+        batch, chunk, window = x.shape[:3]
+        x = x.view(batch*chunk*window, *x.shape[3:]) # ["batch*chunk*window", "channels", "height", "width"]]
+        x = self.model(x) # ["batch*chunk*window", "d_model"]
+        x = x.view(batch*chunk, window, -1)  # ["batch*chunk, window", "d_model"]
+        
+        return x 
