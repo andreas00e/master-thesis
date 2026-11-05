@@ -18,9 +18,9 @@ from torchtyping import TensorType
 from models.discover.utils.queue import FIFOQueue
 from models.discover.utils.sinkhorn import Sinkhorn
 from models.discover.utils.visualize import Visualize
-from models.utils.cnns import BuildAResnet18
+from models.utils.cnns import DinoV2
 from models.utils.aux_models import TransformerEncoder
-from models.utils.loss import UncertaintyWeighting, TimeContrastiveLoss
+from models.utils.loss import TimeContrastiveLoss
 from models.utils.utils import SinusoidalEmbedding
 
 
@@ -29,15 +29,12 @@ class SkillEncoder(pl.LightningModule):
         self, 
         d_model: int, 
         num_plot: int, 
-        abs_pe: bool, 
+        ema_alpha: float, 
+        modalities: list[str], 
         queue_start_epochs: int, 
         freeze_c_epochs: int, 
         time_contrastive: bool, 
         temp_time_contrastive: float, 
-        gripper_dropout_p: float, 
-        with_uncertainty_weighting: bool, 
-        uncertainty_weighting_kwargs: DictConfig,
-        vision_encoder_kwargs: DictConfig, 
         sequential_kwargs: DictConfig, 
         prototype_kwargs: DictConfig,  
         optimizer_kwargs: DictConfig, 
@@ -53,15 +50,13 @@ class SkillEncoder(pl.LightningModule):
         
         self.d_model = d_model
         self.num_plot = num_plot
-        self.abs_pe = abs_pe
+        self.ema_alpha = ema_alpha
+        self.modalities = modalities
+        self.num_modalities = len(self.modalities)
         self.queue_start_epochs = queue_start_epochs
         self.freeze_c_epochs = freeze_c_epochs
         self.time_contrastive = time_contrastive
         self.temp_time_contrastive = temp_time_contrastive
-        self.gripper_dropout_p = gripper_dropout_p 
-        self.with_uncertainty_weighting = with_uncertainty_weighting
-        self.uncertainty_weighting_kwargs = uncertainty_weighting_kwargs
-        self.vision_encoder_kwargs = vision_encoder_kwargs
         self.sequential_kwargs = sequential_kwargs
         self.prototype_kwargs = prototype_kwargs
         self.optimizer_kwargs = optimizer_kwargs
@@ -71,27 +66,29 @@ class SkillEncoder(pl.LightningModule):
         self.tsne_kwargs = tsne_kwargs
         self._log_every_n_steps = _log_every_n_steps
         
-        self.visionEncoder = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+        self.visionEncoder = DinoV2()
         self.visionEncoder.eval() 
         for param in self.visionEncoder.parameters(): 
             param.requires_grad_(False)
+         
+        if "g_qpos" in  self.modalities: 
+            self.sinusoidal_embedding = SinusoidalEmbedding(self.d_model)
 
-        self.gripperEncoder = nn.Sequential(
-            nn.Linear(self.d_model, self.d_model // 2), 
-            nn.ReLU(), 
-            nn.Linear(self.d_model // 2, self.d_model),
+            self.gripperEncoder = nn.Sequential(
+                nn.Linear(self.d_model, self.d_model), 
+                nn.ReLU(), 
+                nn.Linear(self.d_model, self.d_model)
+            ) 
+
+        self.downEmb = nn.Sequential(
+            nn.Linear(384*self.num_modalities, 384*self.num_modalities), 
+            nn.ReLU(),
+            nn.Linear(384*self.num_modalities, self.d_model)    
         )
-            
-        self.sinusoidal_embedding = SinusoidalEmbedding(d_new=self.d_model)
+        
         self.sequential = TransformerEncoder(**self.sequential_kwargs)
         
         self.C = nn.Linear(**self.prototype_kwargs.model) # [k, d_model]: config: bias=False 
-        nn.init.xavier_uniform_(self.C.weight)
-            
-        # self.downEmb = nn.Linear(self.d_model*3, self.d_model)    
-
-        if self.with_uncertainty_weighting:
-            self.uncertainty_weighting = UncertaintyWeighting(**self.uncertainty_weighting_kwargs)
         
         if self.time_contrastive: 
             self.timeContrastiveLoss = TimeContrastiveLoss(self.temp_time_contrastive)
@@ -101,8 +98,6 @@ class SkillEncoder(pl.LightningModule):
         
         self.lnVisionOne = nn.LayerNorm(self.d_model)
         self.lnVisionTwo = nn.LayerNorm(self.d_model)
-        # self.lnGripper = nn.LayerNorm(self.d_model)  
-        # self.lnDown = nn.LayerNorm(self.d_model)
         
         self.queue = FIFOQueue(**self.queue_kwargs)
         self.sinkhorn = Sinkhorn(**self.sinkhorn_kwargs)
@@ -114,8 +109,9 @@ class SkillEncoder(pl.LightningModule):
         self._task_val = []
         self._robot_val = []
         
-        for m in [self.gripperEncoder, self.lnVisionOne, self.lnVisionTwo]:
+        for m in [self.lnVisionOne, self.lnVisionTwo]:
              m.apply(self._init_weights)
+        nn.init.xavier_uniform_(self.C.weight)
 
     def _init_weights(self, module): 
         if isinstance(module, nn.Linear): 
@@ -200,10 +196,10 @@ class SkillEncoder(pl.LightningModule):
                     
             os.remove(fname)
     
-    def predict_step(self, batch: Dict[str, Any], batch_idx: int, dataloader_idx:int=0) -> TensorType["batch_size", "k"]:
+    def predict_step(self, batch: Dict[str, Any], batch_idx: int, dataloader_idx:int=0) -> TensorType["batch", "k"]:
         with torch.no_grad(): 
             z = self(batch["rgb_one"], batch["rgb_two"], batch["g_qpos"]) 
-            c = self.C(z) # [batch_size, k]: prototypes
+            c = self.C(z) # [batch, k]: prototypes
 
             return c
         
@@ -219,12 +215,12 @@ class SkillEncoder(pl.LightningModule):
         batch_size, chunk = batch["rgb_one"].shape[:2]
         n = batch_size * chunk
         
-        idxs = None
-        if self.abs_pe: 
-            idxs = batch["idxs"]
+        anc = {k: v for k, v in batch.items() if k in self.modalities}
+        pos = {k.removesuffix("_pos"): v for k, v in batch.items() if k.endswith("_pos") and k.removesuffix("_pos") in self.modalities}
+        
+        z_anc = self(**anc) # [n, d_model]: anchor
+        z_pos = self(**pos) # [n, d_model]: positive
 
-        z_anc = self(batch["rgb_one"], batch["rgb_two"], batch["g_qpos"], idxs=idxs) # [n, d_model]: anchor
-        z_pos = self(batch["rgb_one_pos"], batch["rgb_two_pos"], batch["g_qpos_pos"], self.gripper_dropout_p, idxs=idxs) # [n, d_model]: positive
         z_anc_full, z_pos_full = z_anc, z_pos
         
         with torch.no_grad():        
@@ -237,12 +233,13 @@ class SkillEncoder(pl.LightningModule):
                 if self.queue is not None and stage == "train":     
                     self.queue.enqueue(torch.stack([z_anc.detach(), z_pos.detach()], dim=0))
                 
-        c_one = self.C(z_anc_full) # [n or n + capacity, k] 
-        c_two = self.C(z_pos_full) # [n or n + capacity, k]
+        c_one = self.C(z_anc_full) # [n || n + capacity, k] 
+        c_two = self.C(z_pos_full) # [n || n + capacity, k]
         c = {"one": c_one, "two": c_two}
 
         with torch.no_grad():
-            q = {k: self.sinkhorn(v)[:n] for k, v in c.items()} # [n or n + capacity, k] (each): targets
+            # Perform sinkhorn on all targets; take only the current ones to perform any downstream tasks
+            q = {k: self.sinkhorn(v)[:n] for k, v in c.items()} # [n || n + capacity, k] (each): targets
             
         p = {k: F.softmax(v[:n] / self.prototype_kwargs.tau, dim=-1) for k, v in c.items()} # [n, k]: predictions 
         log_p = {k: F.log_softmax(v[:n] / self.prototype_kwargs.tau, dim=-1) for k, v in c.items()} # [n, k]: predictions 
@@ -250,55 +247,66 @@ class SkillEncoder(pl.LightningModule):
         if self.logger is not None and isinstance(self.logger, pl.loggers.WandbLogger): 
                 with torch.no_grad(): 
                     _n, k = q["one"].shape
+                    
                     protoype_assignments = q["one"].argmax(dim=-1) # [n]
                     prototype_counts = torch.bincount(protoype_assignments, minlength=k).float() 
                     prototype_fraction = prototype_counts / _n # [k]
-                    
-                    if stage == "train":
-                        self.prototype_usage_ema.mul_(0.99).add_(0.01 * prototype_fraction)                    
-                    num_dead_prototypes = (self.prototype_usage_ema < 0.1 / k).float().sum() # []
-                    
+
+                    prediction_assignments = p["one"].argmax(dim=-1) # [n]
+                    prediction_counts = torch.bincount(prediction_assignments, minlength=k).float() 
+                    prediction_fraction = prediction_counts / _n # [k]
+                
                     top_prototype_fraction = prototype_fraction.max()
+                    top_prediction_fraction = prediction_fraction.max() 
                     
                     prototype_mean = q["one"].float().mean(dim=0) # [k]
                     prototype_entropy = -(prototype_mean * (prototype_mean+1e-8).log()).sum() # []
-                    prototype_perplexity = prototype_entropy.exp() / k # []
+                    prototype_perplexity_fraction = prototype_entropy.exp() / k # []
                     
                     prediction_mean = p["one"].float().mean(dim=0) # [k]
                     prediction_entropy = -(prediction_mean * (prediction_mean+1e-8).log()).sum() # []
-                    prediction_perplexity = prediction_entropy.exp() / k # []
+                    prediction_perplexity_fraction = prediction_entropy.exp() / k # []
+                    
+                    if stage == "train":
+                        self.prototype_usage_ema.mul_(self.ema_alpha).add_((1-self.ema_alpha) * prototype_fraction)  # [k]   
+                    # Sum of prototypes whose estimated moving average is smaller than a thenth of the uniform case             
+                    num_dead_prototypes = (self.prototype_usage_ema < 0.1 / k).float().sum() # []
                     
                     sim = z_anc @ z_anc.T # [n, n]
-                    off_diag = (sim.sum() - sim.diagonal().sum()) / (n * (n - 1))
+                    off_diag_similarity = (sim.sum() - sim.diagonal().sum()) / (n * (n - 1))
                     z_std = z_anc_full.std(dim=0).mean()
                                     
-                    per_sample_entropy = (-(p["one"] * log_p["one"])).sum(dim=-1).mean() / math.log(k) # normalized per sample entropy                      
+                    per_prediction_sample_entropy = (-(p["one"] * log_p["one"])).sum(dim=-1).mean() / math.log(k) # normalized per sample entropy                      
                             
                     self.log_dict({
-                        f"{stage}/num_dead_prototypes": num_dead_prototypes, 
                         f"{stage}/top_prototype_fraction": top_prototype_fraction, 
-                        f"{stage}/prototype_perplexity": prototype_perplexity, 
-                        f"{stage}/prediction_perplexity": prediction_perplexity, 
-                        f"{stage}/per_sample_entropy": per_sample_entropy, 
-                        f"{stage}/off_diag": off_diag, 
+                        f"{stage}/top_prediction_fraction": top_prediction_fraction, 
+                        f"{stage}/prototype_perplexity_fraction": prototype_perplexity_fraction, 
+                        f"{stage}/prediction_perplexity_fraction": prediction_perplexity_fraction, 
+                        f"{stage}/num_dead_prototypes": num_dead_prototypes, 
+                        f"{stage}/per_prediction_sample_entropy": per_prediction_sample_entropy, 
+                        f"{stage}/off_diag_similarity": off_diag_similarity, 
                         f"{stage}/z_std": z_std,             
                        
                     },
                     logger=True, 
                     prog_bar=False,
-                    on_step=(stage == "train"),
+                    on_step=(stage=="train"),
                     on_epoch=True,
                     sync_dist=True
                     )
                     
-                    if stage == "train" and self.global_step % self._log_every_n_steps == 0:
+                    if stage=="train" and self.global_step % self._log_every_n_steps==0:
                         prototype_histogram = wandb.Histogram(np_histogram=(prototype_fraction.cpu().numpy(), np.arange(k+1)))
+                        prediction_histogram = wandb.Histogram(np_histogram=(prediction_fraction.cpu().numpy(), np.arange(k+1)))
+
                         self.logger.experiment.log({
-                            "train/prototype_histogram": prototype_histogram
+                            "train/prototype_histogram": prototype_histogram,
+                            "train/prediction_histogram": prediction_histogram
                         })
 
         if self.time_contrastive: 
-            t_one = z_anc_full[:n].view(batch_size, chunk, -1) # [batch_size, chunk, k]
+            t_one = z_anc_full[:n].view(batch_size, chunk, -1) # [batch, chunk, k]
             tcn_loss = self.timeContrastiveLoss(t_one) # []
             losses.extend([tcn_loss])
             
@@ -326,11 +334,8 @@ class SkillEncoder(pl.LightningModule):
                 self._idxs_val.append(batch["idxs"][:, :, 0].reshape(n).cpu()) # [n]: first index of sequence window
                 self._task_val.append(batch["task"].reshape(n).cpu()) # [n]
                 self._robot_val.append(batch["robot"].reshape(n).cpu()) # [n]: consistent robot over batch 
-        
-        if self.with_uncertainty_weighting: 
-            loss = self.uncertainty_weighting(losses) # []
-        else: 
-            loss = torch.stack(losses).mean()
+
+        loss = torch.stack(losses).mean()
             
         self.log_dict(
             {
@@ -348,28 +353,23 @@ class SkillEncoder(pl.LightningModule):
     
     def forward(
         self, 
-        rgb_one: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"], 
-        rgb_two: TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"], 
-        g_qpos: TensorType["batch", "chunk/num_steps", "window", "1"], 
-        gripper_dropout_p: float=0.0, 
+        rgb_one: Optional[TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"]]=None, 
+        rgb_two: Optional[TensorType["batch", "chunk/num_steps", "window", "channels", "height", "width"]]=None, 
         idxs: Optional[TensorType["batch", "chunk/num_steps", "window"]]=None
-        ) -> torch.Tensor:
-        
-        batch_size, chunk, window = rgb_one.shape[:3]
-        n = batch_size*chunk
-        
-        emb_one = self.visionEncoder(rgb_one)["x"] # [batch_size*chunk*window, 384] 
-        emb_two = self.visionEncoder(rgb_two)["x"] # [batch_size*chunk*window, 384]
-        # emb_gripper = self.lnGripper(self.gripperEncoder(self.sinusoidal_embedding(g_qpos.reshape(-1, 1)))) # [batch_size*chunk*window, d_model]
-        
-        # if all([self.training, gripper_dropout_p is not None, gripper_dropout_p > 0.0]):
-        #     keep_p = 1.0 - gripper_dropout_p
-        #     keep = torch.bernoulli(torch.full((n, 1, 1), keep_p, device=emb_gripper.device, dtype=emb_gripper.dtype)) # [n, 1, 1]
-        #     emb_gripper = (emb_gripper.view(n, window, -1) * keep / keep_p).view(n * window, -1) # [n*window, d_model]
-        
-        # emb = torch.cat([emb_one, emb_two], dim=-1) # [batch_size*chunk*window, d_model*3]
-        emb = torch.cat([emb_one, emb_two], dim=-1) # [batch_size*chunk*window, d_model*2]
-        emb = self.sequential(emb.view(n, window, -1), idxs=idxs) # [n, d_model]
+        ) -> TensorType["batch*chunk", "d_model"]:
+        embs = []
+
+        if "rgb_one" in self.modalities: 
+            emb_one = self.visionEncoder(rgb_one)
+            embs.append(emb_one) # [batch*chunk, window, 384] 
+        if "rgb_two" in self.modalities: 
+            emb_two = self.visionEncoder(rgb_two) # [batch*chunk, (window+1), 384]    
+            emb_two = emb_two[:, 1:, ...] - emb_two[:, :-1, ...] # [batch*chunk, window, 384]
+            embs.append(emb_two)
+
+        emb = torch.cat(embs, dim=-1)# [batch*chunk, window, d_model*2]
+        emb = self.downEmb(emb) # [batch*chunk, window, d_model]
+        emb = self.sequential(emb, idxs=idxs) # [batch*chunk, d_model]
         
         z = F.normalize(emb, dim=-1) # [n, d_model]
             
