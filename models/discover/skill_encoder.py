@@ -258,12 +258,12 @@ class SkillEncoder(pl.LightningModule):
                 with torch.no_grad(): 
                     _n, k = q["one"].shape
                     
-                    protoype_assignments = q["one"].argmax(dim=-1) # [n]
-                    prototype_counts, prototype_bin_edges = np.histogram(protoype_assignments.cpu().numpy(), bins=np.arange(k + 1))
+                    prototype_assignments = q["one"].argmax(dim=-1) # [n]
+                    prototype_counts = torch.bincount(prototype_assignments, minlength=k)
                     prototype_fraction = prototype_counts / _n # [k]
 
                     prediction_assignments = p["one"].argmax(dim=-1) # [n]
-                    prediction_counts, prediction_bin_edges = np.histogram(prediction_assignments.cpu().numpy(), bins=np.arange(k + 1))
+                    prediction_counts = torch.bincount(prediction_assignments, minlength=k)
                     prediction_fraction = prediction_counts / _n # [k]
                 
                     top_prototype_fraction = prototype_fraction.max()
@@ -278,7 +278,7 @@ class SkillEncoder(pl.LightningModule):
                     prediction_perplexity_fraction = prediction_entropy.exp()/k # []
                     
                     if stage == "train":
-                        self.prototype_usage_ema.mul_(self.ema_alpha).add_((1-self.ema_alpha) * torch.tensor(prototype_fraction, device=self.device)) # [k]   
+                        self.prototype_usage_ema.mul_(self.ema_alpha).add_((1-self.ema_alpha) * prototype_fraction.to(self.device))  # [k]   
                     # Sum of prototypes whose estimated moving average is smaller than a thenth of the uniform case             
                     num_dead_prototypes = (self.prototype_usage_ema < 0.1/k).float().sum() # []
                     
@@ -305,18 +305,30 @@ class SkillEncoder(pl.LightningModule):
                     sync_dist=True
                     )
                     
-                    if stage=="train" and self.global_step % self._log_every_n_steps==0:
-                        prototype_histogram = wandb.Histogram(np_histogram=(prototype_counts, prototype_bin_edges))
-                        prediction_histogram = wandb.Histogram(np_histogram=(prediction_counts, prediction_bin_edges))
+                    if stage == "train" and self.global_step % self._log_every_n_steps == 0:
+                        proto_data = [[int(a)] for a in prototype_assignments.cpu().numpy()]
+                        prototype_values = wandb.Table(data=proto_data, columns=["prototype_id"])
+                        prototype_histogram = wandb.plot.histogram(
+                            prototype_values, 
+                            value="prototype_id", 
+                            title=f"Prototype Assignment Histogram (Step {self.global_step})"
+                        )
+                        
+                        pred_data = [[int(a)] for a in prediction_assignments.cpu().numpy()]
+                        prediction_values = wandb.Table(data=pred_data, columns=["prediction_id"])
+                        prediction_histogram = wandb.plot.histogram(
+                            prediction_values, 
+                            value="prediction_id", 
+                            title=f"Prediction Assignment Histogram (Step {self.global_step})"
+                        )
 
                         self.logger.experiment.log({
                             "train/prototype_histogram": prototype_histogram,
-                            "train/prediction_histogram": prediction_histogram, 
-                            "trainer/global_step": self.global_step
+                            "train/prediction_histogram": prediction_histogram,
                         })
 
         if self.time_contrastive: 
-            t_one = z_anc.view(batch_size, chunk, -1) # [batch, chunk, k]
+            t_one = z_anc.view(batch_size, chunk, -1) # [batch, chunk, d_model]
             tcn_loss = self.timeContrastiveLoss(t_one) # []
             # losses.extend([tcn_loss])
             
