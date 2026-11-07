@@ -62,17 +62,22 @@ class Visualize():
         df["task"] = map_task(task.astype(int))
         df["robot"] =  map_robot(robot.astype(int))
          
-        plt.figure(figsize=(8, 6))
-        scatterplot = sns.scatterplot(
+        plt.figure(figsize=(10, 6))
+        palette = sns.color_palette("rocket", as_cmap=True)
+
+        ax = sns.scatterplot(
             data=df, 
             x="x",
             y="y", 
             hue="label", 
-            style="robot", 
             size="idxs", 
+            style="robot", 
+            palette=palette,
             sizes=(10, 100)
             )
         
-        fig = scatterplot.get_figure() 
-        fig.savefig(fname)
+        sns.move_legend(ax, "upper left", bbox_to_anchor=(1.02, 1), n_col=2)
+        
+        fig = ax.get_figure() 
+        fig.savefig(fname, bbox_inches="tight")
         plt.close()
