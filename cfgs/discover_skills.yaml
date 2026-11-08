@@ -8,12 +8,10 @@ d_prototypes: 8
 datamodule: 
   transforms_list:
     - to_image
-    # - rotate 
-    # - color_jitter
-    # - solarize
-    # - gaussian_blur 
-    # - grayscale
+    - grayscale
     - to_dtype_cnn
+    - resize_crop_cnn
+    # - normalize
   contrastive_transforms: true 
 
   robots: 
@@ -36,6 +34,7 @@ model:
   d_model: ${d_model}
   num_plot: 2000
   ema_alpha: 0.95
+  eps: 1e-6
   
   modalities: 
     # - rgb_one
@@ -51,8 +50,9 @@ model:
   sequential_kwargs: 
     encoder_layer_kwargs: 
       d_model:  ${d_model}
-      nhead: 1 
+      nhead: 2 
       dim_feedforward: ${d_model}
+      dropout: 0
       batch_first: true
       norm_first: true
 
@@ -83,8 +83,8 @@ model:
     warmup_percentage: 0.1
 
     linear:  
-      start_factor: 1e-3
-      end_factor: 1.0 
+      start_factor: 1 #1e-3
+      end_factor: 1
       total_iters: 100 # adapted dynamically  
 
     cosine_annealing: 
@@ -109,7 +109,7 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: queue_new
+  name: wo_time_wo_gripper_w_aug_wo_do_nhead_2_four_b_eight_pt
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery_new
 
