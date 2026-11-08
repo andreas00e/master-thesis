@@ -10,23 +10,23 @@ TRANSFORMS = {
     
     "erasing": 
         lambda x: v2.RandomErasing(
-            p=min(0.2*x, 1.0),
+            p=min(0.1*x, 1.0),
             scale=(0.05, 0.15)            
             ), 
         
     "rotate": 
         lambda x: v2.RandomRotation(
-            degrees=(max(-30, -10*x), min(10*x, 30))
+            degrees=(max(-30, -5*x), min(5*x, 30))
         ), 
     
     "color_jitter": 
         lambda x: v2.RandomApply(
             [
             v2.ColorJitter(
-            brightness=0.4,
-            contrast=0.4, 
-            saturation=0.1,  
-            hue=0.1)
+            brightness=0.8,
+            contrast=0.8, 
+            saturation=0.8,  
+            hue=0.2)
             ], 
             p=min(0.8*x, 1)
         ),  
@@ -38,12 +38,13 @@ TRANSFORMS = {
         ),  
 
     "gaussian_blur": 
-        lambda _: v2.RandomApply(
+        lambda x: v2.RandomApply(
             [
             v2.GaussianBlur(
             kernel_size=5,
             sigma=(0.1, 2.0))
-            ]
+            ],
+            p=min(0.5*x, 1)
         ),  
 
     "grayscale": 
@@ -71,8 +72,8 @@ TRANSFORMS = {
         
     "resize_crop_cnn":
         lambda _: v2.RandomResizedCrop(
-            size=(112, 112), 
-            scale=(0.7, 1.0), 
+            size=(84, 84), 
+            scale=(0.6, 1.0), 
             ratio=(0.9, 1.1), 
             antialias=True, 
          ),
@@ -90,6 +91,6 @@ TRANSFORMS = {
 }
 
 def get_transforms(transforms: List[str], x: int=1) -> nn.Sequential:  
-    x = x / (x + 1)
-    
+    # x = x / (x + 1)
+    print(f"Transformations scaling factor: {x}")
     return nn.Sequential(*[TRANSFORMS[k](x) for k in transforms])
