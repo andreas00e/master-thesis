@@ -30,6 +30,7 @@ class SkillEncoder(pl.LightningModule):
         d_model: int, 
         num_plot: int, 
         ema_alpha: float, 
+        eps: float,
         modalities: list[str], 
         queue_start_epochs: int, 
         freeze_c_epochs: int, 
@@ -51,6 +52,7 @@ class SkillEncoder(pl.LightningModule):
         self.d_model = d_model
         self.num_plot = num_plot
         self.ema_alpha = ema_alpha
+        self.eps = eps
         self.modalities = modalities
         self.num_modalities = len(self.modalities)
         self.queue_start_epochs = queue_start_epochs
@@ -73,11 +75,19 @@ class SkillEncoder(pl.LightningModule):
         
         trainable_modules = []
         if "rgb_one" in self.modalities: 
-            self.visionOneEncoder = nn.Linear(384, self.d_model)
+            self.visionOneEncoder = nn.Sequential(
+                nn.Linear(384, self.d_model),
+                nn.ReLU(), 
+                nn.Linear(self.d_model, self.d_model)
+            )
             self.visionOneLN = nn.LayerNorm(self.d_model)
             trainable_modules.extend([self.visionOneEncoder, self.visionOneLN])
         if "rgb_two" in self.modalities: 
-            self.visionTwoEncoder = nn.Linear(384, self.d_model)
+            self.visionTwoEncoder = nn.Sequential(
+                nn.Linear(384, self.d_model),
+                nn.ReLU(), 
+                nn.Linear(self.d_model, self.d_model)
+            )
             self.visionTwoLN = nn.LayerNorm(self.d_model)
             trainable_modules.extend([self.visionTwoEncoder, self.visionTwoLN])
         if "g_qpos" in self.modalities: 
@@ -89,8 +99,7 @@ class SkillEncoder(pl.LightningModule):
                 nn.LayerNorm(self.d_model)
             ) 
             trainable_modules.append(self.gripperEncoder)
-        
-        _features = self.d_model*self.num_modalities
+        _features = self.d_model * self.num_modalities + (1 if "rgb_two" in self.modalities else 0)       
         self.downEmb = nn.Sequential(
             nn.Linear(_features, _features), 
             nn.ReLU(),
@@ -106,7 +115,11 @@ class SkillEncoder(pl.LightningModule):
         
         k = self.prototype_kwargs.model.out_features
         self.register_buffer("prototype_usage_ema", torch.full((k,), 1.0 / k)) # [k]  
-                
+        self.register_buffer("mag_mean", torch.zeros(1))
+        self.register_buffer("mag_var", torch.ones(1))
+        self.register_buffer("mag_init", torch.zeros(1, dtype=torch.bool))
+        self.mag_momentum = 0.99
+
         self.queue = FIFOQueue(**self.queue_kwargs)
         self.sinkhorn = Sinkhorn(**self.sinkhorn_kwargs)
         self.tsne = Visualize(self.tsne_kwargs)
@@ -311,7 +324,7 @@ class SkillEncoder(pl.LightningModule):
                         prototype_histogram = wandb.plot.histogram(
                             prototype_values, 
                             value="prototype_id", 
-                            title=f"Prototype Assignment Histogram (Step {self.global_step})"
+                            title="Prototype Assignment Histogram"
                         )
                         
                         pred_data = [[int(a)] for a in prediction_assignments.cpu().numpy()]
@@ -319,7 +332,7 @@ class SkillEncoder(pl.LightningModule):
                         prediction_histogram = wandb.plot.histogram(
                             prediction_values, 
                             value="prediction_id", 
-                            title=f"Prediction Assignment Histogram (Step {self.global_step})"
+                            title="Prediction Assignment Histogram"
                         )
 
                         self.logger.experiment.log({
@@ -385,12 +398,26 @@ class SkillEncoder(pl.LightningModule):
             emb_one = self.visionOneLN(self.visionOneEncoder(self.visionEncoder(rgb_one)))
             embs.append(emb_one) # [batch*chunk, window, 384] 
         if "rgb_two" in self.modalities: 
-            emb_two = self.visionTwoEncoder(self.visionEncoder(rgb_two)) # [batch*chunk, (window+1), 384]    
-            emb_two = emb_two[:, 1:, ...]-emb_two[:, :-1, ...] # [batch*chunk, window, 384]
-            emb_two = self.visionTwoLN(emb_two)
+            emb_two = self.visionTwoEncoder(self.visionEncoder(rgb_two)) # [batch*chunk, window+1, 384] 
+            emb_two_delta = emb_two[:, 1:] - emb_two[:, :-1] # [batch*chunk, window, 384] 
+            log_mag = torch.log(emb_two_delta.norm(dim=-1) + self.eps) # [batch*chunk, window]
+            
+            if self.training:
+                with torch.no_grad():
+                    batch_mean, batch_var = log_mag.mean(), log_mag.var()
+                    if not self.mag_init.item():
+                        self.mag_mean.copy_(batch_mean)
+                        self.mag_var.copy_(batch_var)
+                        self.mag_init.fill_(True)
+                    else:
+                        self.mag_mean.mul_(self.mag_momentum).add_((1 - self.mag_momentum) * batch_mean)
+                        self.mag_var.mul_(self.mag_momentum).add_((1 - self.mag_momentum) * batch_var)
+                        
+            log_mag = ((log_mag - self.mag_mean) / (self.mag_var + self.eps).sqrt()).unsqueeze(-1).detach() # [batch*chunk, window, 1]
+            emb_two = torch.cat([self.visionTwoLN(emb_two_delta), log_mag], dim=-1)
             embs.append(emb_two) 
-        
-        emb = torch.cat(embs, dim=-1)# [batch*chunk, window, d_model*2]
+            
+        emb = torch.cat(embs, dim=-1)# [batch*chunk, window, d_model*2+1]
         emb = self.downEmb(emb) # [batch*chunk, window, d_model]
         emb = self.sequential(emb, idxs=idxs) # [batch*chunk, d_model]
         

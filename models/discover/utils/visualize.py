@@ -63,8 +63,8 @@ class Visualize():
         df["robot"] =  map_robot(robot.astype(int))
          
         plt.figure(figsize=(10, 6))
-        palette = sns.color_palette("rocket", as_cmap=True)
-
+        palette = sns.color_palette("rocket", n_colors=len(np.unique(label)))
+        
         ax = sns.scatterplot(
             data=df, 
             x="x",
@@ -76,7 +76,7 @@ class Visualize():
             sizes=(10, 100)
             )
         
-        sns.move_legend(ax, "upper left", bbox_to_anchor=(1.02, 1), n_col=2)
+        sns.move_legend(ax, "upper left", bbox_to_anchor=(1.02, 1), ncol=2)
         
         fig = ax.get_figure() 
         fig.savefig(fname, bbox_inches="tight")
