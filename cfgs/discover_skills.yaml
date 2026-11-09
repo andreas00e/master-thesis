@@ -8,9 +8,12 @@ d_prototypes: 8
 datamodule: 
   transforms_list:
     - to_image
+    - color_jitter 
+    - solarize
+    - gaussian_blur
     - grayscale
     - to_dtype_cnn
-    - resize_crop_cnn
+    # - resize_crop_cnn
     # - normalize
   contrastive_transforms: true 
 
@@ -92,7 +95,7 @@ model:
       eta_min: 1e-6
 
   sinkhorn_kwargs: 
-    epsilon: 0.01
+    epsilon: 0.05
     num_iterations: 3 
 
   queue_kwargs:
@@ -109,7 +112,7 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: wo_time_wo_gripper_w_aug_wo_do_nhead_2_four_b_eight_pt
+  name: wo_time_wo_gripper_w_aug_wo_do_nhead_2_four_b_eight_pt_mag_1
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery_new
 
