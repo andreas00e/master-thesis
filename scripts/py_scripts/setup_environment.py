@@ -1,4 +1,5 @@
 import os 
+import torch
 import warnings
 from omegaconf import OmegaConf
 
@@ -7,6 +8,8 @@ def setup_environment():
         OmegaConf.register_new_resolver("eval", eval)
     except ValueError: 
         pass 
+    
+    torch.set_float32_matmul_precision("medium")
 
     #Suppress Open MPI warnings
     os.environ["OMPI_MCA_btl"] = "^openib" 

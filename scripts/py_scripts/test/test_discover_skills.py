@@ -1,7 +1,5 @@
 import hydra
 import multiprocessing
-from r3m import load_r3m
-from peft import PeftModel
 from hydra.utils import instantiate
 
 import lightning.pytorch as pl
@@ -18,15 +16,14 @@ def main(cfg):
     datamodule = instantiate(cfg.datamodule)
     
     model = SkillEncoder.load_from_checkpoint(
-        "/dss/dssfs04/lwp-dss-0002/pn36ce/pn36ce-dss-0000/ehrensberger/master-thesis/outputs/checkpoints/skill_discovery/best-checkpoint-epoch=10-val_loss=0.00.ckpt"
+        "/home/ehre/Documents/master-thesis/outputs/checkpoints/skill_discovery_new/wo_time_wo_gripper_w_aug_wo_do_nhead_2_four_b_eight_pt_mag_1/best-checkpoint.ckpt", 
+        weights_only=False
         )
     
     model.eval() 
     trainer = instantiate(cfg.trainer)
     
-    out = trainer.test(model=model, datamodule=datamodule)
-    print(f"output type: {type(out)}")
-    print("Success")
+    trainer.test(model=model, datamodule=datamodule)
     
 if __name__ == "__main__": 
     try:
