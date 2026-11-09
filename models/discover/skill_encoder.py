@@ -2,7 +2,6 @@ import os
 import math
 import wandb
 import tempfile
-import numpy as np
 from hydra.utils import instantiate
 from typing import Any, Dict, Optional
 from omegaconf import DictConfig, OmegaConf
@@ -83,11 +82,7 @@ class SkillEncoder(pl.LightningModule):
             self.visionOneLN = nn.LayerNorm(self.d_model)
             trainable_modules.extend([self.visionOneEncoder, self.visionOneLN])
         if "rgb_two" in self.modalities: 
-            self.visionTwoEncoder = nn.Sequential(
-                nn.Linear(384, self.d_model),
-                nn.ReLU(), 
-                nn.Linear(self.d_model, self.d_model)
-            )
+            self.visionTwoEncoder = nn.Linear(384, self.d_model)
             self.visionTwoLN = nn.LayerNorm(self.d_model)
             trainable_modules.extend([self.visionTwoEncoder, self.visionTwoLN])
         if "g_qpos" in self.modalities: 
@@ -220,6 +215,7 @@ class SkillEncoder(pl.LightningModule):
                     
             os.remove(fname)
     
+    @torch.no_grad()
     def predict_step(self, batch: Dict[str, Any], batch_idx: int, dataloader_idx:int=0) -> TensorType["batch", "k"]:
         with torch.no_grad(): 
             z = self(batch["rgb_one"], batch["rgb_two"], batch["g_qpos"]) 
@@ -227,12 +223,29 @@ class SkillEncoder(pl.LightningModule):
 
             return c
         
-    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
         return self._shared_step(batch, stage="train")
-        
-    def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:  
+    
+    @torch.no_grad()    
+    def validation_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:  
         return self._shared_step(batch, stage="val")
+    
+    @torch.no_grad()
+    def test_step(self, batch: Dict[str, Any], batch_idx: int) -> None:     
+        x = {k: v.unsqueeze(2) for k, v in batch.items() if k in self.modalities}
+        # batch_size, window, chunk = x[self.modalities[0]].shape[:3]
         
+        z = self(**x) # [batch_size*n_steps, d_model]
+        c = self.C(z) # [batch_size*n_steps, k]
+        
+        c_top, _ = torch.topk(c, k=2) # [batch_size*n_steps, k]
+        
+        top_1_c = c_top[:, 0].detach().mean().item()
+        top_2_c = c_top[:, 1].detach().mean().item()
+            
+        self.log("test/top_1_c", top_1_c, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/top_2_c", top_2_c, on_step=False, on_epoch=True, prog_bar=True)
+                    
     def _shared_step(self, batch: Dict[str, Any], stage: str) -> torch.Tensor: 
         losses = []
         
@@ -404,7 +417,8 @@ class SkillEncoder(pl.LightningModule):
             
             if self.training:
                 with torch.no_grad():
-                    batch_mean, batch_var = log_mag.mean(), log_mag.var()
+                    batch_mean, batch_var = log_mag.mean(), log_mag.var() # [], []
+
                     if not self.mag_init.item():
                         self.mag_mean.copy_(batch_mean)
                         self.mag_var.copy_(batch_var)
@@ -413,8 +427,9 @@ class SkillEncoder(pl.LightningModule):
                         self.mag_mean.mul_(self.mag_momentum).add_((1 - self.mag_momentum) * batch_mean)
                         self.mag_var.mul_(self.mag_momentum).add_((1 - self.mag_momentum) * batch_var)
                         
-            log_mag = ((log_mag - self.mag_mean) / (self.mag_var + self.eps).sqrt()).unsqueeze(-1).detach() # [batch*chunk, window, 1]
-            emb_two = torch.cat([self.visionTwoLN(emb_two_delta), log_mag], dim=-1)
+            log_mag = ((log_mag - self.mag_mean) / (self.mag_var + self.eps).sqrt()).unsqueeze(-1) # [batch*chunk, window, 1]                        
+            emb_two = torch.cat([self.visionTwoLN(emb_two_delta), log_mag], dim=-1) # [batch*chunk, window, self.d_model+1]
+            
             embs.append(emb_two) 
             
         emb = torch.cat(embs, dim=-1)# [batch*chunk, window, d_model*2+1]
