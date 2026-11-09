@@ -73,7 +73,7 @@ TRANSFORMS = {
     "resize_crop_cnn":
         lambda _: v2.RandomResizedCrop(
             size=(84, 84), 
-            scale=(0.6, 1.0), 
+            scale=(0.7, 1.0), 
             ratio=(0.9, 1.1), 
             antialias=True, 
          ),
@@ -91,6 +91,4 @@ TRANSFORMS = {
 }
 
 def get_transforms(transforms: List[str], x: int=1) -> nn.Sequential:  
-    # x = x / (x + 1)
-    print(f"Transformations scaling factor: {x}")
     return nn.Sequential(*[TRANSFORMS[k](x) for k in transforms])

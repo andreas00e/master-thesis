@@ -2,6 +2,7 @@ import os
 import random 
 import pandas as pd
 from pathlib import Path
+from termcolor import colored
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from torch.utils.data import DataLoader, Dataset, ConcatDataset
@@ -9,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset, ConcatDataset
 import lightning.pytorch as pl 
 
 from data.finetune_discover.dataset import MimicGenRobotDataset
-from data.finetune_discover.utils.collate import collate_fn
+from data.finetune_discover.utils.collate import collate_fn, collate_discover_test
 from data.finetune_discover.utils.load_files import get_files, get_metadata, get_demo_dict
 from data.finetune_discover.utils.robot_task_dict import ROBOT_DICT
 from data.finetune_discover.utils.sampler import SameRobotBatchSampler
@@ -226,7 +227,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 )
     
     def train_dataloader(self) -> DataLoader:
-        current_epoch = self.trainer.current_epoch if self.trainer is not None else 1
+        # current_epoch = self.trainer.current_epoch if self.trainer is not None else 1
+        current_epoch = 1 
         if isinstance(self.train_dataset, ConcatDataset):
                     for subset in self.train_dataset.datasets:
                         subset.epoch = current_epoch
@@ -236,4 +238,4 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         return self._make_dataloader(self.val_dataset, shuffle=False, drop_last=False, collate_fn=collate_fn)
 
     def test_dataloader(self) -> DataLoader:
-        return self._make_dataloader(self.test_dataset, shuffle=False, drop_last=False, collate_fn=collate_fn)
+        return self._make_dataloader(self.test_dataset, shuffle=False, drop_last=False, collate_fn=collate_discover_test)
