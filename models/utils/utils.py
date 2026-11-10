@@ -18,7 +18,8 @@ class PositionalEncoding(nn.Module):
         
         self.d_model = d_model 
         self.max_len = max_len 
-        
+        self.register_buffer("pe_scale", torch.tensor(0.01))
+             
         pe = torch.zeros(self.max_len, self.d_model, dtype=torch.float32) # [max_length, d_model]
         position = torch.arange(0, self.max_len, dtype=torch.float).unsqueeze(1) # [max_len, 1]
         div_term = torch.exp(torch.arange(0, self.d_model, 2).float() * (-math.log(10000.0) / self.d_model)) # [d_model / 2]
@@ -40,7 +41,7 @@ class PositionalEncoding(nn.Module):
                 
             elif seq_idxs.ndim == 2: 
                 pe = self.pe[seq_idxs]
-                return x + pe 
+                return x + self.pe_scale * pe 
             
             else: 
                 raise ValueError(f"Sequence index tensor should have 2 or 3 dimensions, got {seq_idxs.ndim}")
@@ -51,8 +52,8 @@ class PositionalEncoding(nn.Module):
             
         pe_idxs = torch.clamp(pe_idxs, max=self.max_len-1)
         pe = self.pe[pe_idxs] # [batch*chunk, 1+window, d_model]
-                  
-        return x + pe # [batch*chunk, 1+window, d_model]
+        
+        return x + self.pe_scale * pe # [batch*chunk, 1+window, d_model]
 
 
 class SinusoidalEmbedding(nn.Module): 

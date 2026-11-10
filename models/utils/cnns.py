@@ -205,9 +205,9 @@ class DinoV2(nn.Module):
         self, x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
         ) -> TensorType["batch*chunk", "window", "d_model"]:
         batch, chunk, window = x.shape[:3]
-        x = x.view(batch*chunk*window, *x.shape[3:]) # ["batch*chunk*window", "channels", "height", "width"]]
+        x = x.reshape(batch*chunk*window, *x.shape[3:]) # ["batch*chunk*window", "channels", "height", "width"]]
         x = self.model(x) # ["batch*chunk*window", "d_model"]
-        x = x.view(batch*chunk, window, -1)  # ["batch*chunk, window", "d_model"]
+        x = x.reshape(batch*chunk, window, -1)  # ["batch*chunk, window", "d_model"]
         
         return x 
     
