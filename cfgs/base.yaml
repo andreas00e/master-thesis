@@ -4,9 +4,8 @@ defaults:
 d_model: 64
 seed: 42
 
-# cwd: /home/bing_TUM/ehrensberger/master-thesis
+# cwd: /content/drive/MyDrive
 cwd: /home/ehre/Documents
-# data_dir: ${cwd}/imports/mimicgen/datasets/robot
 data_dir: ${cwd}/imports/mimicgen/datasets/robot
 meta_dir: ${cwd}/master-thesis/data/metadata
 
@@ -27,7 +26,7 @@ datamodule:
   chunk_size: 1 # > 0
   consistent_batch: false
 
-  batch_size: 32
+  batch_size: 1
   shuffle: true
   num_workers: 0
   pin_memory: true
