@@ -10,6 +10,7 @@ def setup_environment():
         pass 
     
     torch.set_float32_matmul_precision("medium")
+    torch.cuda.empty_cache()
 
     #Suppress Open MPI warnings
     os.environ["OMPI_MCA_btl"] = "^openib" 
@@ -19,6 +20,8 @@ def setup_environment():
     # Distributed Training
     os.environ["NCCL_P2P_DISABLE"]="1"
     os.environ["NCCL_IB_DISABLE"]="1"
+    # Print Full Hydra Errors
+    os.environ["HYDRA_FULL_ERROR"]="1"
 
     warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
     warnings.filterwarnings("ignore", category=UserWarning, module="r3m")
