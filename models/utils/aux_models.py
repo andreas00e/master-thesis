@@ -58,9 +58,9 @@ class TransformerEncoder(nn.Module):
         
         if src_key_padding_mask is not None: 
             x = self.transformerEncoder(x, src_key_padding_mask=src_key_padding_mask) # [batch_size, num_steps, d_model]
-            x = x.reshape(-1, x.shape[-1]) # [batch_size*num_steps, d_model]
-            x = self.head(x) # [batch_size*num_steps, d_model]
-                     
+            x = x.mean(1) # [batch_size, d_model]
+            x = self.head(x) # [batch_size, d_model]
+                  
         else:
             x = self.transformerEncoder(x) # [batch*(chunk/num_steps), 1+window, d_model]
             # x = x[:, 0, :] # [batch*(chunk/num_steps), d_model]: CLS token

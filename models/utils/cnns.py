@@ -33,7 +33,7 @@ def plot_feature_maps(
             ax.axis("off")
             
     if im is not None:
-        cbar = fig.colorbar(im, ax=axes.ravel(), orientation='vertical', shrink=0.8)
+        cbar = fig.colorbar(im, ax=axes.ravel(), orientation="vertical", shrink=0.8)
         cbar.set_label("intensity", fontsize=10)
     
     buf = io.BytesIO()
@@ -190,20 +190,22 @@ class BuildAResnet18(nn.Module):
 class DinoV2(nn.Module): 
     def __init__(
         self, 
+        repo_or_dir: str, 
         model_name: str="vits14", 
         ) -> None:
         super().__init__()
         
         self.model_name = model_name
         self.model = torch.hub.load(
-            "/home/ehre//Documents/imports/dinov2",
-            f"dinov2_{self.model_name}",
-             source="local"
-        )
+            repo_or_dir=repo_or_dir, 
+            model=f"dinov2_{self.model_name}",
+            source="local"
+            )
         
     def forward(
         self, x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
         ) -> TensorType["batch*chunk", "window", "d_model"]:
+                
         batch, chunk, window = x.shape[:3]
         x = x.reshape(batch*chunk*window, *x.shape[3:]) # ["batch*chunk*window", "channels", "height", "width"]]
         x = self.model(x) # ["batch*chunk*window", "d_model"]
