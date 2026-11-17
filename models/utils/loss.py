@@ -85,7 +85,7 @@ class TimeContrastiveLoss(nn.Module):
         return tcn_loss
     
 class TimeSmoothingLoss(nn.Module): 
-    def __init__() -> None: 
+    def __init__(self) -> None: 
         super().__init__() 
     
     def forward(self, x: TensorType["batch", "3", "d_model"]):
