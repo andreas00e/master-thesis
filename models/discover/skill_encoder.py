@@ -22,7 +22,7 @@ from models.discover.utils.sinkhorn import Sinkhorn
 from models.discover.utils.visualize import Visualize
 from models.utils.cnns import DinoV2
 from models.utils.aux_models import TransformerEncoder
-from models.utils.loss import TimeContrastiveLoss
+from models.utils.loss import TimeContrastiveLoss, TimeSmoothingLoss
 from models.utils.utils import SinusoidalEmbedding
 
 
@@ -37,7 +37,7 @@ class SkillEncoder(pl.LightningModule):
         modalities: list[str], 
         queue_start_epochs: int, 
         freeze_c_epochs: int, 
-        time_contrastive: bool, 
+        time_loss: Optional[str], 
         temp_time_contrastive: float, 
         visionEncoder_kwargs: DictConfig, 
         sequential_kwargs: DictConfig, 
@@ -61,7 +61,7 @@ class SkillEncoder(pl.LightningModule):
         self.modalities = modalities
         self.queue_start_epochs = queue_start_epochs
         self.freeze_c_epochs = freeze_c_epochs
-        self.time_contrastive = time_contrastive
+        self.time_loss = time_loss
         self.temp_time_contrastive = temp_time_contrastive
         self.visionEncoder_kwargs = visionEncoder_kwargs
         self.sequential_kwargs = sequential_kwargs
@@ -72,7 +72,7 @@ class SkillEncoder(pl.LightningModule):
         self.queue_kwargs = queue_kwargs
         self.tsne_kwargs = tsne_kwargs
         self._log_every_n_steps = _log_every_n_steps
-        
+                
         self.visionEncoder = DinoV2(**self.visionEncoder_kwargs)
         self.visionEncoder.eval() 
         for param in self.visionEncoder.parameters(): 
@@ -114,8 +114,10 @@ class SkillEncoder(pl.LightningModule):
         self.sequential = TransformerEncoder(**self.sequential_kwargs)
         self.C = nn.Linear(**self.prototype_kwargs.model) # [k, d_model]: config: bias=False 
         
-        if self.time_contrastive: 
-            self.timeContrastiveLoss = TimeContrastiveLoss(self.temp_time_contrastive)
+        if self.time_loss == "contrastive": 
+            self.timeLoss = TimeContrastiveLoss(self.temp_time_contrastive)
+        elif self.time_loss == "smoothing": 
+            self.timeLoss = TimeSmoothingLoss()
         
         k = self.prototype_kwargs.model.out_features
         self.register_buffer("prototype_usage_ema", torch.full((k,), 1.0 / k)) # [k]  
@@ -395,14 +397,14 @@ class SkillEncoder(pl.LightningModule):
                         "train/prediction_hard_usage": self._proto_bar(prediction_fraction, "prototype_id", "fraction", "Prototype Usage (hard, predictions)"),
                         "train/prediction_soft_usage": self._proto_bar(prediction_fraction_soft, "prototype_id", "fraction", "Prototype Usage (soft, predictions)"),
                     })
-
-        if self.time_contrastive: 
+        
+        if self.time_loss: 
             t_one = z_anc_global.reshape(batch_size, chunk, -1) # [batch, chunk, d_model]
-            tcn_loss = self.timeContrastiveLoss(t_one) # []
-            losses.extend([tcn_loss])
+            time_loss = self.timeLoss(t_one) # []
+            losses.extend([time_loss])
             
             self.log_dict({
-                f"{stage}/time_contrastive_loss": tcn_loss.detach()
+                f"{stage}/time_{self.time_loss}_loss": time_loss.detach()
                 },
                 logger=True, 
                 prog_bar=True,
