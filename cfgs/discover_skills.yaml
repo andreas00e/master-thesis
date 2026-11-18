@@ -6,7 +6,16 @@ d_model: 128
 d_prototypes: 8
 
 datamodule: 
-  transforms_list:
+  transforms_one_list:
+    - to_image
+    # - color_jitter 
+    # - solarize
+    # - gaussian_blur
+    # - grayscale
+    - to_dtype_cnn
+    # - resize_crop_cnn
+    # - normalize
+  transforms_two_list:
     - to_image
     # - color_jitter 
     # - solarize
@@ -18,6 +27,8 @@ datamodule:
   contrastive_transforms: true 
 
   robots: 
+    - iiwa 
+    - panda
   tasks: 
     - square 
 
@@ -25,8 +36,9 @@ datamodule:
   window_size: 17 # 8+1
   consistent_batch: true
   batch_size: 32
-  positive_window_size: 4
-  negative_window_size: 36  
+  temporal_smoothing: true
+  # positive_window_size: 4
+  # negative_window_size: 36  
                     
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
@@ -41,13 +53,14 @@ model:
   ema_alpha: 0.95
   eps: 1e-6
   mag_eps: 1e-3
+  mag_momentum_: 0.65
   
   modalities: 
     - rgb_one
     - rgb_two 
     - g_qpos
 
-  queue_start_epochs: 15000
+  queue_start_epochs: 15
   freeze_c_epochs: 0
 
   time_loss: smoothing # contrastive, false
@@ -119,13 +132,13 @@ model:
   
 logger: 
   _target_: lightning.pytorch.loggers.WandbLogger
-  name: b_${trainer.overfit_batches}_pt_${d_prototypes}_${model.time_loss}
+  name: b_${trainer.overfit_batches}_pt_${d_prototypes}_${model.time_loss}_${datamodule.robots}
   version: ${now:%Y_%m_%d_%H_%M}
   project: skill_discovery_new
 
 trainer: 
   _target_: lightning.pytorch.Trainer
-  overfit_batches: 16
+  overfit_batches: 2
   log_every_n_steps: 1
   accelerator: gpu   
   devices: 

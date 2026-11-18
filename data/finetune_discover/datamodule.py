@@ -2,7 +2,6 @@ import os
 import random 
 import pandas as pd
 from pathlib import Path
-from termcolor import colored
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from torch.utils.data import DataLoader, Dataset, ConcatDataset
@@ -21,7 +20,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self, 
         data_dir: str, 
         meta_dir: str,
-        transforms_list: List[str]=["to_image", "to_dtype_cnn"], 
+        transforms_one_list: List[str]=["to_image", "to_dtype_cnn"], 
+        transforms_two_list: List[str]=["to_image", "to_dtype_cnn"], 
         contrastive_transforms: bool=False, 
         robots: Optional[Union[str, List[str]]]=None, 
         tasks: Optional[Union[str, List[str]]]=None, 
@@ -51,7 +51,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.meta_dir = Path(meta_dir)
                 
         # Image transformations/augmenations
-        self.transforms_list = transforms_list
+        self.transforms_one_list = transforms_one_list
+        self.transforms_two_list = transforms_two_list
         self.contrastive_transforms = contrastive_transforms
         
         # Data kwargs
@@ -172,10 +173,11 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 demo_map=demo_map[f"{task}{robot}"],
                 task=task, 
                 robot=robot, 
-                gripper_mins=self.gripper_mins[robot], 
-                gripper_maxs=self.gripper_maxs[robot],
+                gripper_mins=self.gripper_mins.get(robot), 
+                gripper_maxs=self.gripper_maxs.get(robot),
                 modalities=self.modalities,
-                transforms_list=self.transforms_list, 
+                transforms_one_list=self.transforms_one_list, 
+                transforms_two_list=self.transforms_two_list,
                 contrastive_transforms=None if stage=="test" else self.contrastive_transforms, 
                 window_size=None if stage=="test" else self.window_size,
                 chunk_size=None if stage=="test" else self.chunk_size, 

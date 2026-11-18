@@ -20,7 +20,8 @@ class MimicGenRobotDataset(Dataset):
         gripper_mins: Optional[np.ndarray], 
         gripper_maxs: Optional[np.ndarray], 
         modalities: List[str],
-        transforms_list: List[str],  
+        transforms_one_list: Optional[List[str]]=None,  
+        transforms_two_list: Optional[List[str]]=None,  
         contrastive_transforms: Optional[bool]=None, 
         window_size: Optional[int]=None,
         chunk_size: Optional[int]=None,
@@ -38,8 +39,9 @@ class MimicGenRobotDataset(Dataset):
         self.demo_map = demo_map
         self.task=task
         self.robot=robot
-        self.transforms_list = transforms_list        
         self.modalities = modalities
+        self.transforms_one_list = transforms_one_list 
+        self.transforms_two_list = transforms_two_list       
         self.contrastive_transforms = contrastive_transforms 
         self.window_size = window_size
         self.chunk_size = chunk_size
@@ -65,10 +67,17 @@ class MimicGenRobotDataset(Dataset):
     @epoch.setter
     def epoch(self, value: int) -> None:
         self._epoch = value
-        # Turn of augmentations for both "validate" and "test"
-        self.transforms = get_transforms(self.transforms_list, self._epoch) if self.stage == "fit" else get_transforms(["to_image", "to_dtype_cnn"])
+                
+        if "rgb_one" in self.modalities: 
+            self.transforms_one = get_transforms(self.transforms_one_list, self._epoch) if self.stage in ["fit", "validate"] else get_transforms(["to_image", "to_dtype_cnn"])
+        if "rgb_two" in self.modalities: 
+            self.transforms_two = get_transforms(self.transforms_two_list, self._epoch) if self.stage in ["fit", "validate"] else get_transforms(["to_image", "to_dtype_cnn"])
+        
         if self.contrastive_transforms: 
-            self.positive_transforms = get_transforms(self.transforms_list, self._epoch) if self.stage == "fit" else self.transforms
+            if "rgb_one" in self.modalities:
+                self.positive_transforms_one = get_transforms(self.transforms_one_list, self._epoch)  if self.stage in ["fit", "validate"] else get_transforms(["to_image", "to_dtype_cnn"])
+            if "rgb_two" in self.modalities:
+                self.positive_transforms_two = get_transforms(self.transforms_two_list, self._epoch)  if self.stage in ["fit", "validate"] else get_transforms(["to_image", "to_dtype_cnn"])
 
     def _get_hdf5_handle(self, file_path: Union[str, os.PathLike]) -> h5py.File:
         current_pid = os.getpid() 
@@ -112,18 +121,18 @@ class MimicGenRobotDataset(Dataset):
         if self.positive_window_size is not None and self.negative_window_size is not None:
             max_offset = max(1, n_steps-self.window_size+1) 
             
-            start_ = torch.randint(0, max_offset, (1,), generator=generator).item()
+            start_ = torch.randint(0, max_offset, (1, ), generator=generator).item()
             idxs = torch.arange(start_, start_+self.window_size)
             
-            start_pos = torch.randint(max(0, start_-self.positive_window_size), start_+1, (1,), generator=generator).item()
+            start_pos = torch.randint(max(0, start_-self.positive_window_size), start_+1, (1, ), generator=generator).item()
             pos_idxs = torch.arange(start_pos, start_pos+self.window_size)
 
             if start_ - self.negative_window_size >= 0: 
-                start_neg = torch.randint(max(0, start_-self.negative_window_size-self.window_size), max(0, start_-self.negative_window_size+1), (1,), generator=generator).item()
+                start_neg = torch.randint(max(0, start_-self.negative_window_size-self.window_size), max(0, start_-self.negative_window_size+1), (1, ), generator=generator).item()
             else: 
                 low = min(start_+self.negative_window_size, max_offset-1)
                 high = min(start_+self.negative_window_size+self.window_size, max_offset-1) + 1
-                start_neg = torch.randint(low, high, (1,), generator=generator).item()
+                start_neg = torch.randint(low, high, (1, ), generator=generator).item()
             neg_idxs = torch.arange(start_neg, start_neg+self.window_size)
             
             idxs = torch.vstack((idxs, pos_idxs, neg_idxs)) # [3, self.window_size]
@@ -131,14 +140,14 @@ class MimicGenRobotDataset(Dataset):
         
         elif self.window_size is not None and self.chunk_size is not None: 
             if self.temporal_smoothing:
-                max_offset = max(1, n_steps - self.window_size + 1)
-                start = torch.randint(0, max_offset, (1,), generator=generator).item()  
-                
-                idx_range = torch.arange(start=start - self.window_size, end=start + self.window_size*2)
-                idx_range = torch.clamp(idx_range, min=0, max=n_steps - 1)
-                idxs = torch.stack(torch.chunk(idx_range, 3), dim=0) # [3, window] 
+                pad = self.window_size // 4
+                max_offset = max(1, n_steps - self.window_size - 2 * pad + 1)
+                start = torch.randint(0, max_offset, (1,), generator=generator).item() + pad
+
+                idx_range = torch.arange(start - pad, start + self.window_size + pad)  
+                idxs = idx_range.unfold(0, self.window_size, pad) # [3, window]
             else: 
-                max_offset = max(1, n_steps - self.window_size + 1)
+                max_offset = max(1, n_steps-self.window_size+1)
                 offsets = torch.randint(0, max_offset, size=(self.chunk_size, ), generator=generator) # indexing, not slicing
                 idxs = offsets[:, None] + torch.arange(self.window_size) # [chunk, window]
         else: 
@@ -177,14 +186,14 @@ class MimicGenRobotDataset(Dataset):
             item["g_qpos"] = g_qpos
 
         # Contrastive Transforms
-        if self.contrastive_transforms and getattr(self, "positive_transforms", None) is not None: 
-            if "rgb_one" in self.modalities:      
-                rgb_one_pos = self.positive_transforms(rgb_one) # positive sample
+        if self.contrastive_transforms: 
+            if "rgb_one" in self.modalities and self.positive_transforms_one is not None:      
+                rgb_one_pos = self.positive_transforms_one(rgb_one) # positive sample
                 rgb_one_pos = rgb_one_pos[inv].view(*idxs.shape, *rgb_one_pos.shape[1:])
                 item["rgb_one_pos"] = rgb_one_pos
 
-            if "rgb_two" in self.modalities: 
-                rgb_two_pos = self.positive_transforms(rgb_two) # positive sample
+            if "rgb_two" in self.modalities and self.positive_transforms_two is not None: 
+                rgb_two_pos = self.positive_transforms_two(rgb_two) # positive sample
                 rgb_two_pos = rgb_two_pos[inv].view(*idxs.shape, *rgb_two_pos.shape[1:]) 
                 item["rgb_two_pos"] = rgb_two_pos
 
@@ -197,12 +206,12 @@ class MimicGenRobotDataset(Dataset):
         
         # Standard Transforms
         if "rgb_one" in self.modalities: 
-            rgb_one = self.transforms(rgb_one)
+            rgb_one = self.transforms_one(rgb_one)
             rgb_one = rgb_one[inv].view(*idxs.shape, *rgb_one.shape[1:])
             item["rgb_one"] = rgb_one
             
         if "rgb_two" in self.modalities:
-            rgb_two = self.transforms(rgb_two)
+            rgb_two = self.transforms_two(rgb_two)
             rgb_two = rgb_two[inv].view(*idxs.shape, *rgb_two.shape[1:]) 
             item["rgb_two"] = rgb_two
                         

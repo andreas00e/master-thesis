@@ -15,7 +15,8 @@ datamodule:
   data_dir: ${data_dir}
   meta_dir: ${meta_dir}
 
-  transforms_list: null 
+  transforms_one_list: null 
+  transforms_two_list: null 
   contrastive_transforms: true
 
   robots: null # [iiwa, panda, sawyer, ur5e]
