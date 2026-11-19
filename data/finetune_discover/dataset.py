@@ -181,7 +181,7 @@ class MimicGenRobotDataset(Dataset):
             
             g_qpos = np.mean(g_qpos, axis=-1) # [uniq]
             g_qpos = g_qpos[inv].reshape(*idxs.shape, 1) # [chunk, window, 1]
-            g_qpos = torch.from_numpy(g_qpos).to(torch.float32) 
+            g_qpos = torch.from_numpy(g_qpos).to(torch.float32)[:, :-1]
             
             item["g_qpos"] = g_qpos
 
