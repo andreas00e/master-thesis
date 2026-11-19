@@ -31,9 +31,11 @@ class SkillEncoder(pl.LightningModule):
         self, 
         d_model: int, 
         num_plot: int, 
+        num_local_chunk: int, 
         ema_alpha: float, 
         eps: float,
         mag_eps: float,
+        mag_momentum_: float, 
         modalities: list[str], 
         queue_start_epochs: int, 
         freeze_c_epochs: int, 
@@ -55,9 +57,11 @@ class SkillEncoder(pl.LightningModule):
         
         self.d_model = d_model
         self.num_plot = num_plot
+        self.num_local_chunk = num_local_chunk
         self.ema_alpha = ema_alpha
         self.eps = eps
         self.mag_eps = mag_eps
+        self.mag_momentum_ = mag_momentum_
         self.modalities = modalities
         self.queue_start_epochs = queue_start_epochs
         self.freeze_c_epochs = freeze_c_epochs
@@ -107,7 +111,8 @@ class SkillEncoder(pl.LightningModule):
         self.downEmb = nn.Sequential(
             nn.Linear(_features, _features), 
             nn.ReLU(),
-            nn.Linear(_features, self.d_model)
+            nn.Linear(_features, self.d_model), 
+            nn.LayerNorm(self.d_model)
         )
         trainable_modules.append(self.downEmb)
         
@@ -124,7 +129,7 @@ class SkillEncoder(pl.LightningModule):
         self.register_buffer("mag_mean", torch.zeros(1))
         self.register_buffer("mag_var", torch.ones(1))
         self.register_buffer("mag_init", torch.zeros(1, dtype=torch.bool))
-        self.register_buffer("mag_momentum", torch.tensor(0.65))
+        self.register_buffer("mag_momentum", torch.tensor(self.mag_momentum_))
 
         self.queue = FIFOQueue(**self.queue_kwargs)
         self.sinkhorn = Sinkhorn(**self.sinkhorn_kwargs)
@@ -226,10 +231,6 @@ class SkillEncoder(pl.LightningModule):
                     
             os.remove(fname)
             
-    def on_test_batch_start(self, batch, batch_idx, dataloader_idx = 0):
-        if batch_idx > 0: 
-            exit()
-        
     def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
         return self._shared_step(batch, stage="train")
     
@@ -281,7 +282,7 @@ class SkillEncoder(pl.LightningModule):
     def predict_step(self, batch: Dict[str, Any], batch_idx: int, dataloader_idx:int=0) -> TensorType["batch", "k"]:
         with torch.no_grad(): 
             z = self(batch["rgb_one"], batch["rgb_two"], batch["g_qpos"]) 
-            c = self.C(z) # [batch, k]: prototypes
+            c = self.C(z["global"]) # [batch, k]: prototypes
 
             return c
         
@@ -307,8 +308,8 @@ class SkillEncoder(pl.LightningModule):
             c_anc_local = self.C(z_anc_local) # [n, local_crops=4, prototypes=k]
             c_pos_local = self.C(z_pos_local) # [n, local_crops=4, prototypes=k]
             
-            c.update({f"anc_local_{i}": c_anc_local[:, i] for i in range(c_anc_local.shape[1])}) # [n, k] (each)
-            c.update({f"pos_local_{i}": c_pos_local[:, i] for i in range(c_pos_local.shape[1])}) # [n, k] (each)
+            c.update({f"anc_local_{i}": c_anc_local[::chunk, i] for i in range(c_anc_local.shape[1])}) # [n, k] (each)
+            c.update({f"pos_local_{i}": c_pos_local[::chunk, i] for i in range(c_pos_local.shape[1])}) # [n, k] (each)
 
         else: 
             z_anc_global = self(**anc)["global"]
@@ -317,10 +318,10 @@ class SkillEncoder(pl.LightningModule):
         c_anc_global = self.C(z_anc_global) # [n, k]
         c_pos_global = self.C(z_pos_global) # [n, k]
 
-        c.update({"anc_global": c_anc_global, "pos_global": c_pos_global})
+        c.update({"anc_global": c_anc_global[::chunk], "pos_global": c_pos_global[::chunk]})
 
         with torch.no_grad():
-            scores = {"anc_global": c_anc_global.detach(), "pos_global": c_pos_global.detach()} # [n, k] (each)
+            scores = {"anc_global": c_anc_global[::chunk].detach(), "pos_global": c_pos_global[::chunk].detach()} # [n, k] (each)
 
             if self.current_epoch >= self.queue_start_epochs and self.queue is not None:
                 if self.queue.is_full and stage == "train": # only use queue once it is completely filled
@@ -329,7 +330,7 @@ class SkillEncoder(pl.LightningModule):
                     scores["pos_global"] = torch.cat([scores["pos_global"], self.C(queue_features[1])], dim=0) # [n + capacity, k]
 
                 if self.queue is not None and stage == "train":
-                    self.queue.enqueue(torch.stack([z_anc_global.detach(), z_pos_global.detach()], dim=0))
+                    self.queue.enqueue(torch.stack([z_anc_global[::chunk].detach(), z_pos_global[::chunk].detach()], dim=0))
 
             # Perform sinkhorn on all targets; take only the current ones to perform any downstream tasks
             q = {k: self.sinkhorn(v)[:n] for k, v in scores.items()} # [n, k] (each): targets
@@ -422,11 +423,11 @@ class SkillEncoder(pl.LightningModule):
     
         if stage == "val":             
             if sum(x.shape[0] for x in self._c_val) < self.num_plot: 
-                self._c_val.append(c_anc_global.detach().cpu()) # [n, k]
+                self._c_val.append(c["anc_global"].detach().cpu()) # [n, k]
                 self._target_val.append(q["anc_global"].detach().cpu()) # [n, k]
-                self._idxs_val.append(batch["idxs"][:, :, 0].reshape(n).cpu()) # [n]: first index of sequence window
-                self._task_val.append(batch["task"].reshape(n).cpu()) # [n]
-                self._robot_val.append(batch["robot"].reshape(n).cpu()) # [n]: consistent robot over batch 
+                self._idxs_val.append(batch["idxs"][:, 0, 0].cpu()) # [n]: first index of sequence window
+                self._task_val.append(batch["task"][:, 0].cpu()) # [n]
+                self._robot_val.append(batch["robot"][:, 0].cpu()) # [n]: consistent robot over batch 
 
         loss = torch.stack(losses).mean()
             
@@ -456,10 +457,10 @@ class SkillEncoder(pl.LightningModule):
         z = {}
         
         if "rgb_one" in self.modalities: 
-            if self.training and self.logger is not None and isinstance(self.logger, pl.loggers.WandbLogger) and self.global_step % 50 == 0: 
-                self.logger.experiment.log({
-                    "rgb_one": wandb.Image(rgb_one[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0)
-                })
+            # if self.training and self.logger is not None and isinstance(self.logger, pl.loggers.WandbLogger) and self.global_step % 50 == 0: 
+            #     self.logger.experiment.log({
+            #         "rgb_one": wandb.Image(rgb_one[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0)
+            #     })
             
             rgb_one = rgb_one[:, :, :-1, ...] # [batch, chunk, window, channel, height, width]: only 'window' samples
             emb_one = self.visionEncoder(rgb_one) # [batch*chunk*window, 384]
@@ -469,10 +470,10 @@ class SkillEncoder(pl.LightningModule):
             embs.append(emb_one) 
             
         if "rgb_two" in self.modalities: 
-            if self.training and self.logger is not None and isinstance(self.logger, pl.loggers.WandbLogger) and self.global_step % 50 == 0: 
-                self.logger.experiment.log({
-                    "rgb_two": wandb.Image(rgb_two[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0)
-                })
+            # if self.training and self.logger is not None and isinstance(self.logger, pl.loggers.WandbLogger) and self.global_step % 50 == 0: 
+            #     self.logger.experiment.log({
+            #         "rgb_two": wandb.Image(rgb_two[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0)
+            #     })
             
             emb_two = self.visionEncoder(rgb_two) # [batch*chunk, window+1, 384] 
             emb_two = self.visionTwoEncoder(emb_two) # [batch*chunk, window+1, self.d_model] 
@@ -495,31 +496,28 @@ class SkillEncoder(pl.LightningModule):
             emb_two = torch.cat([self.visionTwoLN(emb_two_delta) * self.d_model ** 0.5, self.mag_eps*log_mag], dim=-1) # [batch*chunk, window, self.d_model+1]
             embs.append(emb_two) 
             
-        if "g_qpos" in self.modalities: 
-            batch, chunk, window = g_qpos.shape[:3]
-            emb_g_qpos = self.sinusoidal_embedding(g_qpos.reshape(-1, 1)) # [batch*chunk*window, 1]
+        if "g_qpos" in self.modalities:
+            batch_size, chunk, window = g_qpos.shape[:3]
+            subwindow_length = window // 2
+
+            emb_g_qpos = self.sinusoidal_embedding(g_qpos.reshape(-1, 1)) # [batch*chunk*window, d_model]
             emb_g_qpos = self.gripperEncoder(emb_g_qpos) # [batch*chunk*window, d_model]
             emb_g_qpos = self.gripperLN(emb_g_qpos) * self.d_model ** 0.5 # [batch*chunk*window, d_model]
-            emb_g_qpos = emb_g_qpos.reshape(batch*chunk, window, -1) # [batch*chunk, window, d_model]
-            
-            chunk_local = 2
-            if self.training: 
-                window = emb_g_qpos.shape[1]
-                subwindow_length = int(window // 4)
-                max_start = window - subwindow_length
+            emb_g_qpos = emb_g_qpos.reshape(batch_size * chunk, window, -1)  # [batch*chunk, window, d_model]
 
-                starts = torch.randint(0, max_start + 1, (chunk_local,), device=emb_g_qpos.device) # [4, ]
-                offsets = torch.arange(subwindow_length, device=emb_g_qpos.device) # [subwindow_length]
-                indices = starts[:, None] + offsets # [4, subwindow_length]
-                
-                emb_local = emb_g_qpos.clone()
-                emb_local = emb_local[:, indices, :].contiguous() # [batch*chunk, 4, subwindow_length, d_model]
-                emb_local = emb_local.reshape(-1, subwindow_length, self.d_model) # [batch*chunk*4, subwindow_length, d_model]            
-                emb_local = self.sequential(emb_local) # [batch*chunk*4, d_model]
-                
-                z_local = F.normalize(emb_local, dim=-1) # [batch*chunk*4, d_model]
-                z_local = z_local.reshape(-1, chunk_local, self.d_model) # [batch*chunk, 4, d_model]
-                z["local"] = z_local
+            emb_g_qpos = emb_g_qpos.repeat_interleave(self.num_local_chunk, dim=0) # [batch*chunk*num_local_chunk, window, d_model]
+
+            padding = torch.tensor([0] * subwindow_length + [1] * (window - subwindow_length), dtype=torch.bool, device=emb_g_qpos.device) # [window]: 1 -> padding
+            padding = padding.unsqueeze(0).expand(emb_g_qpos.shape[0], -1) # [batch*chunk*num_local_chunk, window]
+
+            pad_idxs = torch.stack([torch.randperm(window, device=emb_g_qpos.device) for _ in range(emb_g_qpos.shape[0])]) # [batch*chunk*num_local_chunk, window]
+            padding_mask = torch.gather(padding, dim=1, index=pad_idxs) # [batch*chunk*num_local_chunk, window]
+
+            emb_local = self.sequential(emb_g_qpos, src_key_padding_mask=padding_mask) # [batch*chunk*num_local_chunk, d_model]
+
+            z_local = F.normalize(emb_local, dim=-1) # [batch*chunk*num_local_chunk, d_model]
+            z_local = z_local.reshape(batch_size * chunk, self.num_local_chunk, self.d_model) # [batch*chunk, num_local_chunk, d_model]
+            z["local"] = z_local
             
         emb = torch.cat(embs, dim=-1) # [batch*chunk, window, ...]
         emb = self.downEmb(emb) # [batch*chunk, window, d_model]
