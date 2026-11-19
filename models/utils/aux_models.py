@@ -46,20 +46,23 @@ class TransformerEncoder(nn.Module):
             
     def forward(
         self, 
-        x: TensorType["batch*(chunk/num_steps), window", "d_model"], 
-        idxs: Optional[TensorType["batch", "(chunk/num_steps)", "window"]]=None, 
-        src_key_padding_mask: Optional[TensorType["batch", "num_steps", "d_model"]]=None
+        x: TensorType["n", "window", "d_model"], 
+        idxs: Optional[TensorType["n", "(chunk/num_steps)", "window"]]=None, 
+        padding_mask: Optional[TensorType["n", "window"]]=None
         ) -> torch.Tensor: 
-        
-        # cls_token = self.cls_token.expand(x.shape[0], -1, -1) # [batch*(chunk/num_steps), 1, d_model]
-                    
+                
+        # cls_token = self.cls_token.expand(x.shape[0], -1, -1) # [batch*(chunk/num_steps), 1, d_model]          
         # x = torch.cat((cls_token, x), dim=1) # [batch*(chunk/num_steps), 1+window, d_model]
+        
         x = self.pe(x, idxs) # [batch*(chunk/num_steps), 1+window, d_model]
         
-        if src_key_padding_mask is not None: 
-            x = self.transformerEncoder(x, src_key_padding_mask=src_key_padding_mask) # [batch_size, num_steps, d_model]
-            x = x.mean(1) # [batch_size, d_model]
-            x = self.head(x) # [batch_size, d_model]
+        if padding_mask is not None: 
+            x = self.transformerEncoder(x, src_key_padding_mask=padding_mask) # [n, window, d_model]
+            valid_mask = (~padding_mask).unsqueeze(-1).float()  # [n, window, 1]
+            x = x * valid_mask # [n, window, d_model]
+            valid_counts = valid_mask.sum(1).unsqueeze(-1).clamp(1e-9) # [n, 1, 1]
+            x = (x / valid_counts).sum(1) # [n, d_model]
+            x = self.head(x) # [n, d_model]
                   
         else:
             x = self.transformerEncoder(x) # [batch*(chunk/num_steps), 1+window, d_model]
