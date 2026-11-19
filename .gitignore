@@ -8,6 +8,7 @@ outputs/
 wandb/
 
 models/utils/decoder.py
+colab.ipynb
 
 import.log
 requirements.txt
