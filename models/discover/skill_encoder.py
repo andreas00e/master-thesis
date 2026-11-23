@@ -119,10 +119,10 @@ class SkillEncoder(pl.LightningModule):
             self.gripperLN = nn.LayerNorm(self.d_model)
             trainable_modules.append(self.gripperEncoder)
             
-            self.FiLMGripper = nn.Linear(384, 2 * self.d_model)
+            self.FiLMGripper = nn.Linear(self.d_model, 2 * self.d_model)
             FiLM_modules.append(self.FiLMGripper)
         
-        _features = self.d_model * len([m for m in self.modalities if m != "gripper"])    
+        _features = self.d_model * len([m for m in self.modalities if m != "g_qpos"])    
         self.downEmb = nn.Sequential(
             nn.Linear(_features, _features), 
             nn.ReLU(),
@@ -133,16 +133,17 @@ class SkillEncoder(pl.LightningModule):
         
         self.sequential = TransformerEncoder(**self.sequential_kwargs)
         self.C = nn.Linear(**self.prototype_kwargs.model) # [k, d_model]
+        assert prototype_kwargs.model.bias is False, "The prototype linear layer must not have a bias!"
         
         if self.time_loss == "contrastive": 
-            self.timeLoss = TimeContrastiveLoss(self.temp_time_contrastive)
+            self.time_loss = TimeContrastiveLoss(self.temp_time_contrastive)
         elif self.time_loss == "smoothing": 
-            self.timeLoss = TimeSmoothingLoss()
+            self.time_loss = TimeSmoothingLoss()
         else: 
-            self.timeLoss = None
+            self.time_loss = None
         
         k = self.prototype_kwargs.model.out_features
-        self.register_buffer("prototype_usage_ema", torch.full((k, ), 1.0 / k)) # [k]  
+        self.register_buffer("prediction_usage_ema", torch.full((k, ), 1.0 / k)) # [k]  
         self.register_buffer("mag_mean", torch.zeros(1))
         self.register_buffer("mag_var", torch.ones(1))
         self.register_buffer("mag_init", torch.zeros(1, dtype=torch.bool))
@@ -219,6 +220,9 @@ class SkillEncoder(pl.LightningModule):
         super().train(mode)
         self.visionEncoder.eval()
         return self
+    
+    def on_train_start(self):
+        return super().on_train_start()
 
     def on_train_epoch_start(self):
         self._set_freeze(self.current_epoch < self.freeze_c_epochs)
@@ -265,15 +269,17 @@ class SkillEncoder(pl.LightningModule):
                     
             os.remove(fname)
             
+    def on_validation_batch_start(self, batch: Dict[str, Any], batch_idx: int) -> None:
+            self.C.weight.copy_(F.normalize(self.C.weight, dim=1))
+  
     def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
         return self._shared_step(batch, stage="train")
     
-    @torch.no_grad()    
     def validation_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:  
         return self._shared_step(batch, stage="val")
     
-    @torch.no_grad()
     def test_step(self, batch: Dict[str, Any], batch_idx: int) -> None:  
+        
         step_size = 1
         window_size = 16
         
@@ -312,8 +318,9 @@ class SkillEncoder(pl.LightningModule):
         plt.ylabel("y")
         plt.show() 
         
-    @torch.no_grad()
     def predict_step(self, batch: Dict[str, Any], batch_idx: int, dataloader_idx:int=0) -> TensorType["batch", "k"]:
+        self.C.weight.copy_(F.normalize(self.C.weight, dim=1))
+
         with torch.no_grad(): 
             z = self(batch["rgb_one"], batch["rgb_two"], batch["g_qpos"]) 
             c = self.C(z["global"]) # [batch, k]: prototypes
@@ -369,7 +376,7 @@ class SkillEncoder(pl.LightningModule):
         p = {k: F.softmax(v / self.prototype_kwargs.tau, dim=-1) for k, v in c.items()} # [n, k]: predictions
         log_p = {k: F.log_softmax(v / self.prototype_kwargs.tau, dim=-1) for k, v in c.items()} # [n, k]: predictions
               
-        if self.logger is not None and isinstance(self.logger, pl.loggers.WandbLogger): 
+        if self.logger is not None: 
                 with torch.no_grad(): 
                     _n, k = q["anc_global"].shape
                     
@@ -395,12 +402,12 @@ class SkillEncoder(pl.LightningModule):
                     prediction_perplexity_fraction = prediction_entropy.exp()/k # []
                     
                     if stage == "train":
-                        self.prototype_usage_ema.mul_(self.ema_alpha).add_((1-self.ema_alpha) * prototype_fraction.to(self.device))  # [k]   
+                        self.prediction_usage_ema.mul_(self.ema_alpha).add_((1 - self.ema_alpha) * prediction_fraction.to(self.device))  # [k]   
                     # Sum of prototypes whose estimated moving average is smaller than a thenth of the uniform case             
-                    num_dead_prototypes = (self.prototype_usage_ema < 0.1/k).float().sum() # []
+                    num_dead_predictions = (self.prediction_usage_ema < 0.1/k).float().sum() # []
                     
                     sim = z_anc["global"][::step] @ z_anc["global"][::step].T # [n, n]
-                    off_diag_similarity = (sim.sum() - sim.diagonal().sum()) / (batch_size * (batch_size - 1))
+                    off_diag_similarity = (sim.sum() - sim.diagonal().sum()) / (sim.shape[0] * (sim.shape[0] - 1))
                     z_std = z_anc["global"].std(dim=0).mean()                                    
                     per_prediction_sample_entropy = (-(p["anc_global"] * log_p["anc_global"])).sum(dim=-1).mean() / math.log(k) # normalized per sample entropy                      
                             
@@ -409,7 +416,7 @@ class SkillEncoder(pl.LightningModule):
                         f"{stage}/top_prediction_fraction": top_prediction_fraction, 
                         f"{stage}/prototype_perplexity_fraction": prototype_perplexity_fraction, 
                         f"{stage}/prediction_perplexity_fraction": prediction_perplexity_fraction, 
-                        f"{stage}/num_dead_prototypes": num_dead_prototypes, 
+                        f"{stage}/num_dead_predictions": num_dead_predictions, 
                         f"{stage}/per_prediction_sample_entropy": per_prediction_sample_entropy, 
                         f"{stage}/off_diag_similarity": off_diag_similarity, 
                         f"{stage}/z_std": z_std,             
@@ -422,7 +429,7 @@ class SkillEncoder(pl.LightningModule):
                     sync_dist=True
                     )
 
-                if stage == "train" and self.global_step % self._log_every_n_steps == 0:
+                if stage == "train" and isinstance(self.logger, pl.loggers.WandbLogger) and self.global_step % self._log_every_n_steps == 0:
                     self.logger.experiment.log({
                         "train/prototype_hard_usage": self._proto_bar(prototype_fraction, "prototype_id", "fraction", "Prototype Usage (hard, Sinkhorn targets)"),
                         "train/prototype_soft_usage": self._proto_bar(prototype_fraction_soft, "prototype_id", "fraction", "Prototype Usage (soft, Sinkhorn targets)"),
@@ -430,20 +437,21 @@ class SkillEncoder(pl.LightningModule):
                         "train/prediction_soft_usage": self._proto_bar(prediction_fraction_soft, "prototype_id", "fraction", "Prototype Usage (soft, predictions)"),
                     })
         
-        if self.time_loss: 
+        if self.time_loss is not None: 
             t_one = z_anc["global"].reshape(batch_size, chunk, -1) # [batch, chunk, d_model]
-            time_loss = self.timeLoss(t_one) # []
+            time_loss = self.time_loss(t_one) # []
             losses.extend([time_loss])
             
-            self.log_dict({
-                f"{stage}/time_{self.time_loss}_loss": time_loss.detach()
-                },
-                logger=True, 
-                prog_bar=True,
-                on_step=(stage == "train"),
-                on_epoch=True,
-                sync_dist=True
-            )
+            if self.logger is not None: 
+                self.log_dict({
+                    f"{stage}/time_{self.time_loss.__name__}_loss": time_loss.detach()
+                    },
+                    logger=True, 
+                    prog_bar=True,
+                    on_step=(stage == "train"),
+                    on_epoch=True,
+                    sync_dist=True
+                )
 
         swav_losses = {}
         for target in q.keys(): # only global "views" are targets (anc_global, pos_global)
@@ -461,26 +469,27 @@ class SkillEncoder(pl.LightningModule):
                 self._robot_val.append(batch["robot"][:, ::step].flatten().cpu()) # [n]: consistent robot over batch 
 
         loss = torch.stack(losses).mean()
-            
-        self.log_dict(
-            {
-                **{f"{stage}/loss_{k}": v.detach() for k, v in swav_losses.items()},
-                f"{stage}/loss": loss.detach(),
-            },
-            logger=True, 
-            prog_bar=True,
-            on_step=(stage == "train"), 
-            on_epoch=True,
-            sync_dist=True
-        )
         
+        if self.logger is not None: 
+            self.log_dict(
+                {
+                    **{f"{stage}/loss_{k}": v.detach() for k, v in swav_losses.items()},
+                    f"{stage}/loss": loss.detach(),
+                },
+                logger=True, 
+                prog_bar=True,
+                on_step=(stage == "train"), 
+                on_epoch=True,
+                sync_dist=True
+            )
+            
         return loss
     
     def forward(
         self, 
         rgb_one: Optional[TensorType["batch", "chunk", "window/num_steps", "channels", "height", "width"]]=None, 
         rgb_two: Optional[TensorType["batch", "chunk", "window/num_steps", "channels", "height", "width"]]=None, 
-        g_qpos: Optional[TensorType["batch", "chunk", "window/num_steps" "1"]]=None, 
+        g_qpos: Optional[TensorType["batch", "chunk", "window/num_steps", "1"]]=None, 
         idxs: Optional[TensorType["batch", "chunk", "window/num_steps"]]=None,
         padding_mask: Optional[TensorType["batch", "chunk", "window/num_steps"]]=None
         ) -> Dict[str, Union[TensorType["batch*chunk", "d_model"], TensorType["batch*chunk", "num_local_chunks", "d_model"]]]:
