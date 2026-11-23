@@ -4,8 +4,11 @@ defaults:
 
 d_model: 128
 d_prototypes: 8
+time_loss: contrastive # smoothing, contrastive, no_time_loss, null 
 
 datamodule: 
+  time_loss: ${time_loss}
+
   transforms_one_list:
     - to_image
     # - color_jitter 
@@ -27,13 +30,11 @@ datamodule:
   tasks: 
     - square 
 
-  data_portion: 1
-  window_size: 17 # 8+1
+  window_size: 8 # 8+1 in dataloading 
   consistent_batch: true
   batch_size: 32
-  temporal_smoothing: true
-  # positive_window_size: 4
-  # negative_window_size: 36  
+  positive_window_size: 4
+  negative_window_size: 36  
                     
 model: 
   _target_: models.discover.skill_encoder.SkillEncoder
@@ -59,7 +60,7 @@ model:
   queue_start_epochs: 15000
   freeze_c_epochs: 0
 
-  time_loss: contastive # smoothing, contrastive, false
+  time_loss: ${time_loss} # smoothing, contrastive, false
   temp_time_contrastive: 0.1
 
   visionEncoder_kwargs: 

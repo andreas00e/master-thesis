@@ -20,6 +20,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self, 
         data_dir: str, 
         meta_dir: str,
+        time_loss: Optional[str], 
         transforms_one_list: List[str]=["to_image", "to_dtype_cnn"], 
         transforms_two_list: List[str]=["to_image", "to_dtype_cnn"], 
         contrastive_transforms: bool=False, 
@@ -33,7 +34,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         crop_factor: float=1.0,       
         noise_level: float=1.0, 
         consistent_batch: bool=True, 
-        temporal_smoothing: bool=False, 
         positive_window_size: Optional[int]=None,
         negative_window_size: Optional[int]=None,  
         batch_size: int=16,
@@ -49,6 +49,8 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         # Data kwargs
         self.data_dir = Path(data_dir)
         self.meta_dir = Path(meta_dir)
+        
+        self.time_loss = time_loss
                 
         # Image transformations/augmenations
         self.transforms_one_list = transforms_one_list
@@ -65,7 +67,6 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.noise_level = noise_level
         
         self.consistent_batch = consistent_batch
-        self.temporal_smoothing = temporal_smoothing
         self.positive_window_size = positive_window_size 
         self.negative_window_size = negative_window_size 
 
@@ -176,12 +177,12 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 gripper_mins=self.gripper_mins.get(robot), 
                 gripper_maxs=self.gripper_maxs.get(robot),
                 modalities=self.modalities,
+                time_loss=None if stage=="test" else self.time_loss, 
                 transforms_one_list=self.transforms_one_list, 
                 transforms_two_list=self.transforms_two_list,
                 contrastive_transforms=None if stage=="test" else self.contrastive_transforms, 
                 window_size=None if stage=="test" else self.window_size,
                 chunk_size=None if stage=="test" else self.chunk_size, 
-                temporal_smoothing=None if stage=="test" else self.temporal_smoothing, 
                 positive_window_size=None if stage=="test" else self.positive_window_size, 
                 negative_window_size=None if stage=="test" else self.negative_window_size, 
                 crop_factor=self.crop_factor,

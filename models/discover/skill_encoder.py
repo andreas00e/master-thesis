@@ -4,6 +4,7 @@ import wandb
 import tempfile
 import numpy as np 
 import pandas as pd
+from functools import partial
 from hydra.utils import instantiate
 from matplotlib import pyplot as plt 
 from typing import Any, Dict, Optional, Union
@@ -12,7 +13,7 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 import torch.nn as nn 
 import torch.nn.functional as F
-from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 import lightning.pytorch as pl 
 from torchtyping import TensorType
@@ -20,8 +21,8 @@ from torchtyping import TensorType
 from models.discover.utils.queue import FIFOQueue
 from models.discover.utils.sinkhorn import Sinkhorn
 from models.discover.utils.visualize import Visualize
-from models.utils.cnns import DinoV2
 from models.utils.aux_models import TransformerEncoder
+from models.utils.cnns import DinoV2
 from models.utils.loss import TimeContrastiveLoss, TimeSmoothingLoss
 from models.utils.utils import SinusoidalEmbedding
 
@@ -31,7 +32,7 @@ class SkillEncoder(pl.LightningModule):
         self, 
         d_model: int, 
         num_plot: int, 
-        num_local_chunk: int, 
+        num_local_chunk: Optional[int], 
         ema_alpha: float, 
         eps: float,
         mag_eps: float,
@@ -39,7 +40,7 @@ class SkillEncoder(pl.LightningModule):
         modalities: list[str], 
         queue_start_epochs: int, 
         freeze_c_epochs: int, 
-        time_loss: Optional[str], 
+        time_loss: str, 
         temp_time_contrastive: float, 
         visionEncoder_kwargs: DictConfig, 
         sequential_kwargs: DictConfig, 
@@ -49,7 +50,7 @@ class SkillEncoder(pl.LightningModule):
         sinkhorn_kwargs: DictConfig, 
         queue_kwargs: DictConfig, 
         tsne_kwargs: DictConfig, 
-        _log_every_n_steps: Optional[int]=10, 
+        _log_every_n_steps: int=50, 
         ) -> None: 
         
         super().__init__()
@@ -81,21 +82,31 @@ class SkillEncoder(pl.LightningModule):
         self.visionEncoder.eval() 
         for param in self.visionEncoder.parameters(): 
             param.requires_grad_(False)
-        
-        trainable_modules = []
+                    
+        trainable_modules, FiLM_modules = [], []        
         if "rgb_one" in self.modalities: 
             self.visionOneEncoder = nn.Sequential(
                 nn.Linear(384, self.d_model),
                 nn.ReLU(), 
-                nn.Linear(self.d_model, self.d_model)
+                nn.Linear(self.d_model, self.d_model), 
+                nn.LayerNorm(self.d_model)
             )
-            self.visionOneLN = nn.LayerNorm(self.d_model)
-            trainable_modules.extend([self.visionOneEncoder, self.visionOneLN])
+            trainable_modules.append(self.visionOneEncoder)
+            
+            self.FiLMOne = nn.Linear(384, 2 * self.d_model)
+            FiLM_modules.append(self.FiLMOne)
             
         if "rgb_two" in self.modalities: 
-            self.visionTwoEncoder = nn.Linear(384, self.d_model)
-            self.visionTwoLN = nn.LayerNorm(self.d_model)
-            trainable_modules.extend([self.visionTwoEncoder, self.visionTwoLN])
+            self.visionTwoEncoder = nn.Sequential(
+                nn.Linear(384, self.d_model),
+                nn.ReLU(), 
+                nn.Linear(self.d_model, self.d_model), 
+                nn.LayerNorm(self.d_model)
+            )
+            trainable_modules.append(self.visionTwoEncoder)
+            
+            self.FiLMTwo = nn.Linear(384, 2 * self.d_model)
+            FiLM_modules.append(self.FiLMTwo)
             
         if "g_qpos" in self.modalities: 
             self.sinusoidal_embedding = SinusoidalEmbedding(self.d_model)
@@ -103,29 +114,35 @@ class SkillEncoder(pl.LightningModule):
                 nn.Linear(self.d_model, self.d_model), 
                 nn.ReLU(), 
                 nn.Linear(self.d_model, self.d_model), 
+                nn.LayerNorm(self.d_model)
             ) 
             self.gripperLN = nn.LayerNorm(self.d_model)
-            trainable_modules.extend([self.gripperEncoder, self.gripperLN])
+            trainable_modules.append(self.gripperEncoder)
+            
+            self.FiLMGripper = nn.Linear(384, 2 * self.d_model)
+            FiLM_modules.append(self.FiLMGripper)
         
-        _features = self.d_model * len([m for m in self.modalities if m != "g_qpos"]) + (1 if "rgb_two" in self.modalities else 0)       
+        _features = self.d_model * len([m for m in self.modalities if m != "gripper"])    
         self.downEmb = nn.Sequential(
             nn.Linear(_features, _features), 
             nn.ReLU(),
             nn.Linear(_features, self.d_model), 
             nn.LayerNorm(self.d_model)
-        )
+            )
         trainable_modules.append(self.downEmb)
         
         self.sequential = TransformerEncoder(**self.sequential_kwargs)
-        self.C = nn.Linear(**self.prototype_kwargs.model) # [k, d_model]: config: bias=False 
+        self.C = nn.Linear(**self.prototype_kwargs.model) # [k, d_model]
         
         if self.time_loss == "contrastive": 
             self.timeLoss = TimeContrastiveLoss(self.temp_time_contrastive)
         elif self.time_loss == "smoothing": 
             self.timeLoss = TimeSmoothingLoss()
+        else: 
+            self.timeLoss = None
         
         k = self.prototype_kwargs.model.out_features
-        self.register_buffer("prototype_usage_ema", torch.full((k,), 1.0 / k)) # [k]  
+        self.register_buffer("prototype_usage_ema", torch.full((k, ), 1.0 / k)) # [k]  
         self.register_buffer("mag_mean", torch.zeros(1))
         self.register_buffer("mag_var", torch.ones(1))
         self.register_buffer("mag_init", torch.zeros(1, dtype=torch.bool))
@@ -141,19 +158,36 @@ class SkillEncoder(pl.LightningModule):
         self._task_val = []
         self._robot_val = []
         
+        self.init_model_weights(trainable_modules, FiLM_modules)
+        
+    def init_model_weights(self, trainable_modules, FiLM_modules) -> None:
         for m in trainable_modules:
-             m.apply(self._init_weights)
-        nn.init.xavier_uniform_(self.C.weight)
+            m.apply(partial(self._init_weights, mode="trainable"))
 
-    def _init_weights(self, module): 
-        if isinstance(module, nn.Linear): 
-            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
-            if module.bias is not None: 
-                nn.init.zeros_(module.bias)      
-                
-        if isinstance(module, nn.LayerNorm): 
-            nn.init.ones_(module.weight)
-            nn.init.zeros_(module.bias)         
+        for m in FiLM_modules:
+            m.apply(partial(self._init_weights, mode="FiLM"))
+
+        if getattr(self, "C", None) is not None and hasattr(self.C, "weight"):
+            nn.init.xavier_uniform_(self.C.weight)
+            
+    def _init_weights(self, module: nn.Module, mode: str) -> None:
+        if isinstance(module, nn.Linear):
+            if mode == "trainable":
+                nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif mode == "FiLM":
+                nn.init.zeros_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+                    with torch.no_grad(): 
+                        module.bias[:self.d_model].fill_(1.0)
+
+        elif isinstance(module, nn.LayerNorm):
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)   
                 
     def configure_optimizers(self) -> Dict[str, Any]:
         trainable_parameters = filter(lambda p: p.requires_grad, self.parameters())
@@ -255,7 +289,7 @@ class SkillEncoder(pl.LightningModule):
         for s in range(0, n_steps-1, step_size):
             if s+window_size+1 <= n_steps: 
                 xs = {k: v[:, :, s:s+window_size+1, ...] for k, v in samples.items()} # [batch_size, 1, step_size, d_model]
-                zs = self(src_key_padding_mask=padding_mask[:, s:s+window_size], **xs)["global"] # [batch_size, step_size, d_model]
+                zs = self(padding_mask=padding_mask[:, s:s+window_size], **xs)["global"] # [batch_size, step_size, d_model]
                 z.append(zs) 
               
         z = torch.stack(z, dim=1) # [batch_size, n_steps // step_size, d_model]        
@@ -295,45 +329,42 @@ class SkillEncoder(pl.LightningModule):
         losses = []
         c = {}
         
-        batch_size, chunk = batch[next(iter(batch))].shape[:2]
-        n = batch_size * chunk
+        batch_size, chunk = batch[next(iter(batch))].shape[:2] # n=batch_size*chunk
+        step = chunk if self.time_loss == "smoothing" else 1
+        sinkhorn_step  = batch_size if self.time_loss == "smoothing" else batch_size * chunk
         
         anc = {k: v for k, v in batch.items() if k in self.modalities}
         pos = {k.removesuffix("_pos"): v for k, v in batch.items() if k.endswith("_pos") and k.removesuffix("_pos") in self.modalities}
         
-        if self.training: 
-            z_anc_local, z_anc_global = self(**anc).values() # [[n, d_model], [n, 4, d_model]]: anchor
-            z_pos_local, z_pos_global = self(**pos).values() # [[n, d_model], [n, 4, d_model]]: positive
+        z_anc = self(**anc) 
+        z_pos = self(**pos)
+        
+        if self.training and "local" in z_anc.keys(): 
+            c_anc_local = self.C(z_anc["local"] ) # [n=batch_size*chunk, Optional[num_local_crops], prototypes=k]
+            c_pos_local = self.C(z_pos["local"] ) # [n=batch_size*chunk, Optional[num_local_crops], prototypes=k]
             
-            c_anc_local = self.C(z_anc_local) # [n, local_crops=4, prototypes=k]
-            c_pos_local = self.C(z_pos_local) # [n, local_crops=4, prototypes=k]
-            
-            c.update({f"anc_local_{i}": c_anc_local[::chunk, i] for i in range(c_anc_local.shape[1])}) # [n, k] (each)
-            c.update({f"pos_local_{i}": c_pos_local[::chunk, i] for i in range(c_pos_local.shape[1])}) # [n, k] (each)
-
-        else: 
-            z_anc_global = self(**anc)["global"]
-            z_pos_global = self(**pos)["global"]
+            c.update({f"anc_local_{i}": c_anc_local[::step, i] for i in range(c_anc_local.shape[1])}) # [n, k] (each)
+            c.update({f"pos_local_{i}": c_pos_local[::step, i] for i in range(c_pos_local.shape[1])}) # [n, k] (each)
                         
-        c_anc_global = self.C(z_anc_global) # [n, k]
-        c_pos_global = self.C(z_pos_global) # [n, k]
+        c_anc_global = self.C(z_anc["global"]) # [n=batch_size*chunk, k]
+        c_pos_global = self.C(z_pos["global"]) # [n=batch_size*chunk, k]
 
-        c.update({"anc_global": c_anc_global[::chunk], "pos_global": c_pos_global[::chunk]})
+        c.update({"anc_global": c_anc_global[::step], "pos_global": c_pos_global[::step]}) # only use anchor samples for prototypes for temporal smoothing
 
         with torch.no_grad():
-            scores = {"anc_global": c_anc_global[::chunk].detach(), "pos_global": c_pos_global[::chunk].detach()} # [n, k] (each)
+            scores = {"anc_global": c_anc_global[::step].detach(), "pos_global": c_pos_global[::step].detach()} # [n, k] (each)
 
             if self.current_epoch >= self.queue_start_epochs and self.queue is not None:
                 if self.queue.is_full and stage == "train": # only use queue once it is completely filled
                     queue_features = self.queue.get() # get all features
-                    scores["anc_global"] = torch.cat([scores["anc_global"], self.C(queue_features[0])], dim=0) # [n + capacity, k]
-                    scores["pos_global"] = torch.cat([scores["pos_global"], self.C(queue_features[1])], dim=0) # [n + capacity, k]
+                    scores["anc_global"] = torch.cat([scores["anc_global"], self.C(queue_features[0])], dim=0) # [n+capacity, k]
+                    scores["pos_global"] = torch.cat([scores["pos_global"], self.C(queue_features[1])], dim=0) # [n+capacity, k]
 
                 if self.queue is not None and stage == "train":
-                    self.queue.enqueue(torch.stack([z_anc_global[::chunk].detach(), z_pos_global[::chunk].detach()], dim=0))
+                    self.queue.enqueue(torch.stack([z_anc["global"][::step].detach(), z_pos["global"][::step].detach()], dim=0))
 
             # Perform sinkhorn on all targets; take only the current ones to perform any downstream tasks
-            q = {k: self.sinkhorn(v)[:n] for k, v in scores.items()} # [n, k] (each): targets
+            q = {k: self.sinkhorn(v)[:sinkhorn_step] for k, v in scores.items()} # [batch_size || batch_size * chunk, k] (each): targets
 
         p = {k: F.softmax(v / self.prototype_kwargs.tau, dim=-1) for k, v in c.items()} # [n, k]: predictions
         log_p = {k: F.log_softmax(v / self.prototype_kwargs.tau, dim=-1) for k, v in c.items()} # [n, k]: predictions
@@ -368,10 +399,10 @@ class SkillEncoder(pl.LightningModule):
                     # Sum of prototypes whose estimated moving average is smaller than a thenth of the uniform case             
                     num_dead_prototypes = (self.prototype_usage_ema < 0.1/k).float().sum() # []
                     
-                    sim = z_anc_global @ z_anc_global.T # [n, n]
-                    off_diag_similarity = (sim.sum()-sim.diagonal().sum())/(_n*(_n-1))
-                    z_std = z_anc_global.std(dim=0).mean()                                    
-                    per_prediction_sample_entropy = (-(p["anc_global"]*log_p["anc_global"])).sum(dim=-1).mean() / math.log(k) # normalized per sample entropy                      
+                    sim = z_anc["global"][::step] @ z_anc["global"][::step].T # [n, n]
+                    off_diag_similarity = (sim.sum() - sim.diagonal().sum()) / (batch_size * (batch_size - 1))
+                    z_std = z_anc["global"].std(dim=0).mean()                                    
+                    per_prediction_sample_entropy = (-(p["anc_global"] * log_p["anc_global"])).sum(dim=-1).mean() / math.log(k) # normalized per sample entropy                      
                             
                     self.log_dict({
                         f"{stage}/top_prototype_fraction": top_prototype_fraction, 
@@ -400,7 +431,7 @@ class SkillEncoder(pl.LightningModule):
                     })
         
         if self.time_loss: 
-            t_one = z_anc_global.reshape(batch_size, chunk, -1) # [batch, chunk, d_model]
+            t_one = z_anc["global"].reshape(batch_size, chunk, -1) # [batch, chunk, d_model]
             time_loss = self.timeLoss(t_one) # []
             losses.extend([time_loss])
             
@@ -415,19 +446,19 @@ class SkillEncoder(pl.LightningModule):
             )
 
         swav_losses = {}
-        for target in q.keys(): # only global "views" are targets, anc_global
-            predictions = [k for k in c.keys() if k != target and k.split("_")[0] not in target] 
+        for target in q.keys(): # only global "views" are targets (anc_global, pos_global)
+            predictions = [k for k in c.keys() if k != target and k.split("_")[0] not in target]
             swav_losses[target] = torch.stack([(-(q[target] * log_p[prediction])).sum(dim=-1).mean() for prediction in predictions]).mean()
 
         losses.extend(swav_losses.values())
-    
+        
         if stage == "val":             
             if sum(x.shape[0] for x in self._c_val) < self.num_plot: 
                 self._c_val.append(c["anc_global"].detach().cpu()) # [n, k]
                 self._target_val.append(q["anc_global"].detach().cpu()) # [n, k]
-                self._idxs_val.append(batch["idxs"][:, 0, 0].cpu()) # [n]: first index of sequence window
-                self._task_val.append(batch["task"][:, 0].cpu()) # [n]
-                self._robot_val.append(batch["robot"][:, 0].cpu()) # [n]: consistent robot over batch 
+                self._idxs_val.append(batch["idxs"][:, ::step, 0].flatten().cpu()) # [n]: first index of sequence window
+                self._task_val.append(batch["task"][:, ::step].flatten().cpu()) # [n]
+                self._robot_val.append(batch["robot"][:, ::step].flatten().cpu()) # [n]: consistent robot over batch 
 
         loss = torch.stack(losses).mean()
             
@@ -451,78 +482,46 @@ class SkillEncoder(pl.LightningModule):
         rgb_two: Optional[TensorType["batch", "chunk", "window/num_steps", "channels", "height", "width"]]=None, 
         g_qpos: Optional[TensorType["batch", "chunk", "window/num_steps" "1"]]=None, 
         idxs: Optional[TensorType["batch", "chunk", "window/num_steps"]]=None,
-        src_key_padding_mask: Optional[TensorType["batch", "chunk", "window/num_steps"]]=None
-        ) -> Dict[str, Union[TensorType["batch*chunk", "d_model"], TensorType["batch*chunk", "4", "d_model"]]]:
+        padding_mask: Optional[TensorType["batch", "chunk", "window/num_steps"]]=None
+        ) -> Dict[str, Union[TensorType["batch*chunk", "d_model"], TensorType["batch*chunk", "num_local_chunks", "d_model"]]]:
         embs = []
         z = {}
         
         if "rgb_one" in self.modalities: 
-            # if self.training and self.logger is not None and isinstance(self.logger, pl.loggers.WandbLogger) and self.global_step % 50 == 0: 
-            #     self.logger.experiment.log({
-            #         "rgb_one": wandb.Image(rgb_one[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0)
-            #     })
+            emb_one = self.visionEncoder(rgb_one) # [batch*chunk, window+1, 384]: DinoV2 embeddings of robot_0_eye_in_hand images
             
-            rgb_one = rgb_one[:, :, :-1, ...] # [batch, chunk, window, channel, height, width]: only 'window' samples
-            emb_one = self.visionEncoder(rgb_one) # [batch*chunk*window, 384]
-            emb_one = self.visionOneEncoder(emb_one) # [batch*chunk*window, d_model]
-            emb_one = self.visionOneLN(emb_one) 
-            emb_one = emb_one * self.d_model ** 0.5 
-            embs.append(emb_one) 
+            motion_delta_one = emb_one[:, 1:] - emb_one[:, :-1] # [batch*chunk, window, d_model]: temporal differences of robot_0_eye_in_hand embeddings
+            gamma_one, beta_one = self.FiLMOne(motion_delta_one).chunk(2, dim=-1) # [batch*chunk, window, d_model] (each)
+            
+            emb_one = self.visionOneEncoder(emb_one) # [batch*chunk, window+1, d_model]
+            emb_one = gamma_one * emb_one[:, :-1] + beta_one # [batch*chunk, window, d_model]                     
+            embs.append(emb_one)
             
         if "rgb_two" in self.modalities: 
-            # if self.training and self.logger is not None and isinstance(self.logger, pl.loggers.WandbLogger) and self.global_step % 50 == 0: 
-            #     self.logger.experiment.log({
-            #         "rgb_two": wandb.Image(rgb_two[0, 0, 0, ...].permute(1, 2, 0).cpu().numpy() * 255.0)
-            #     })
+            emb_two = self.visionEncoder(rgb_two) # [batch*chunk, window+1, 384]: DinoV2 embeddings of agentview images 
             
-            emb_two = self.visionEncoder(rgb_two) # [batch*chunk, window+1, 384] 
-            emb_two = self.visionTwoEncoder(emb_two) # [batch*chunk, window+1, self.d_model] 
-            emb_two_delta = emb_two[:, 1:] - emb_two[:, :-1] # [batch*chunk, window, d_model] 
-            log_mag = torch.log(emb_two_delta.norm(dim=-1) + self.eps) # [batch*chunk, window]
-        
-            if self.training:
-                with torch.no_grad():
-                    batch_mean, batch_var = log_mag.mean(), log_mag.var() # [], []
-
-                    if not self.mag_init.item():
-                        self.mag_mean.copy_(batch_mean) # []
-                        self.mag_var.copy_(batch_var) # []
-                        self.mag_init.fill_(True)
-                    else:
-                        self.mag_mean.mul_(self.mag_momentum).add_((1 - self.mag_momentum) * batch_mean) # []
-                        self.mag_var.mul_(self.mag_momentum).add_((1 - self.mag_momentum) * batch_var) # []
-                        
-            log_mag = ((log_mag - self.mag_mean) / (self.mag_var + self.eps).sqrt()).unsqueeze(-1) # [batch*chunk, window, 1]                        
-            emb_two = torch.cat([self.visionTwoLN(emb_two_delta) * self.d_model ** 0.5, self.mag_eps*log_mag], dim=-1) # [batch*chunk, window, self.d_model+1]
-            embs.append(emb_two) 
+            motion_delta_two = emb_two[:, 1:] - emb_two[:, :-1] # [batch*chunk, window, d_model]: temporal differences of agentview embeddings
+            gamma_two, beta_two = self.FiLMTwo(motion_delta_two).chunk(2, dim=-1) # [batch*chunk, window, d_model] (each)
             
-        if "g_qpos" in self.modalities:
-            batch_size, chunk, window = g_qpos.shape[:3]
-            subwindow_length = window // 2
-
-            emb_g_qpos = self.sinusoidal_embedding(g_qpos.reshape(-1, 1)) # [batch*chunk*window, d_model]
-            emb_g_qpos = self.gripperEncoder(emb_g_qpos) # [batch*chunk*window, d_model]
-            emb_g_qpos = self.gripperLN(emb_g_qpos) * self.d_model ** 0.5 # [batch*chunk*window, d_model]
-            emb_g_qpos = emb_g_qpos.reshape(batch_size * chunk, window, -1)  # [batch*chunk, window, d_model]
-
-            emb_g_qpos = emb_g_qpos.repeat_interleave(self.num_local_chunk, dim=0) # [batch*chunk*num_local_chunk, window, d_model]
-
-            padding = torch.tensor([0] * subwindow_length + [1] * (window - subwindow_length), dtype=torch.bool, device=emb_g_qpos.device) # [window]: 1 -> padding
-            padding = padding.unsqueeze(0).expand(emb_g_qpos.shape[0], -1) # [batch*chunk*num_local_chunk, window]
-
-            pad_idxs = torch.stack([torch.randperm(window, device=emb_g_qpos.device) for _ in range(emb_g_qpos.shape[0])]) # [batch*chunk*num_local_chunk, window]
-            padding_mask = torch.gather(padding, dim=1, index=pad_idxs) # [batch*chunk*num_local_chunk, window]
-
-            emb_local = self.sequential(emb_g_qpos, src_key_padding_mask=padding_mask) # [batch*chunk*num_local_chunk, d_model]
-
-            z_local = F.normalize(emb_local, dim=-1) # [batch*chunk*num_local_chunk, d_model]
-            z_local = z_local.reshape(batch_size * chunk, self.num_local_chunk, self.d_model) # [batch*chunk, num_local_chunk, d_model]
-            z["local"] = z_local
+            emb_two = self.visionTwoEncoder(emb_two) # [batch*chunk, window, d_model]
+            emb_two = gamma_two * emb_two[:, :-1] + beta_two # [batch*chunk, window, d_model]                     
+            embs.append(emb_two) # [batch*chunk, window, d_model]
             
-        emb = torch.cat(embs, dim=-1) # [batch*chunk, window, ...]
+        emb = torch.cat(embs, dim=-1) # [batch*chunk, window, Union[self.d_model, 2 * self.d_model]]
         emb = self.downEmb(emb) # [batch*chunk, window, d_model]
+            
+        if "g_qpos" in self.modalities: 
+            batch_size, chunk = g_qpos.shape[:2]
+            emb_g_qpos = self.sinusoidal_embedding(g_qpos.reshape(-1, 1)) # [batch*chunk*window+1, d_model]
+            emb_g_qpos = self.gripperEncoder(emb_g_qpos) # [batch*chunk*window+1, d_model]
+            emb_g_qpos = emb_g_qpos.reshape(batch_size * chunk, -1, self.d_model)  # [batch*chunk, window+1, d_model]
+
+            motion_delta_gripper = emb_g_qpos[:, 1:] - emb_g_qpos[:, :-1] # [batch*chunk, window+1, d_model]: temporal differences of gripper embeddings
+            gamma_two, beta_two = self.FiLMGripper(motion_delta_gripper).chunk(2, dim=-1) # [batch*chunk, window, d_model] (each)
+            
+            emb = gamma_two * emb + beta_two
         
-        emb = self.sequential(emb, idxs=idxs, src_key_padding_mask=src_key_padding_mask) # [batch*chunk, d_model]
+        emb = self.sequential(emb, idxs=idxs, padding_mask=padding_mask) # [batch*chunk, d_model]
         z_global = F.normalize(emb, dim=-1) # [batch*chunk, d_model]
         z["global"] = z_global
             
