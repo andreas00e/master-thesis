@@ -31,7 +31,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         modalities: Optional[List[str]]=None, 
         window_size: int=8, 
         chunk_size: int=1, 
-        crop_factor: float=1.0,       
+        crop_eye_in_hand_factor: float=1.0,       
         noise_level: float=1.0, 
         consistent_batch: bool=True, 
         positive_window_size: Optional[int]=None,
@@ -63,7 +63,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
         self.modalities = modalities if modalities is not None else ["rgb_one", "rgb_two", "g_qpos"]
         self.window_size = window_size
         self.chunk_size = chunk_size
-        self.crop_factor = crop_factor
+        self.crop_eye_in_hand_factor = crop_eye_in_hand_factor
         self.noise_level = noise_level
         
         self.consistent_batch = consistent_batch
@@ -185,7 +185,7 @@ class MimicGenRobotDataModule(pl.LightningDataModule):
                 chunk_size=None if stage=="test" else self.chunk_size, 
                 positive_window_size=None if stage=="test" else self.positive_window_size, 
                 negative_window_size=None if stage=="test" else self.negative_window_size, 
-                crop_factor=self.crop_factor,
+                crop_eye_in_hand_factor=self.crop_eye_in_hand_factor,
                 noise_level=None if stage=="test" else self.noise_level, 
                 stage=stage,
                 seed=self.seed,

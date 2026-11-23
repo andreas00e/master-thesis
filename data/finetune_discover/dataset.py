@@ -28,7 +28,7 @@ class MimicGenRobotDataset(Dataset):
         chunk_size: Optional[int]=None,
         positive_window_size: Optional[int]=None, 
         negative_window_size: Optional[int]=None, 
-        crop_factor: float=1.0, 
+        crop_eye_in_hand_factor: float=1.0, 
         noise_level: Optional[float]=None,
         stage: str="fit",
         seed: int=42,
@@ -48,7 +48,7 @@ class MimicGenRobotDataset(Dataset):
         self.chunk_size = chunk_size
         self.positive_window_size = positive_window_size
         self.negative_window_size = negative_window_size
-        self.crop_factor = crop_factor
+        self.crop_eye_in_hand_factor = crop_eye_in_hand_factor
         self.noise_level = noise_level
         self.stage = stage
         self.seed = seed
@@ -110,7 +110,6 @@ class MimicGenRobotDataset(Dataset):
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]: 
         generator = None if self.stage == "fit" else torch.Generator().manual_seed(self.seed + idx)
-        sign = torch.randint(0, 2, (1, ), generator=generator).item() * 2 - 1
 
         file_path, demo, _ = self.demo_map[idx]
         hf = self._get_hdf5_handle(file_path)
@@ -128,12 +127,10 @@ class MimicGenRobotDataset(Dataset):
             start_pos = torch.randint(max(0, start_ - self.positive_window_size), min(start_ + self.positive_window_size, max_start) + 1, (1, ), generator=generator).item()
             
             if start_pos == start_: 
-                if start_ == 0: 
-                    start_pos += 1 
-                elif start_ == max_start: 
+                if start_ == max_start: 
                     start_pos -= 1 
                 else: 
-                    start_pos += sign * torch.randint(1, self.positive_window_size, (1, ), generator=generator).item()  
+                    start_pos += 1
             
             pos_idxs = torch.arange(start_pos, start_pos + self.window_size) # positive window 
             
@@ -146,7 +143,6 @@ class MimicGenRobotDataset(Dataset):
         
         # Sampling for time smoothing loss 
         elif self.time_loss == "smoothing" and self.window_size is not None and self.chunk_size is not None: 
-            if self.temporal_smoothing:
                 pad = self.window_size // 4
                 max_start = max(1, n_steps - self.window_size - 2 * pad + 1)
                 start = torch.randint(0, max_start, (1,), generator=generator).item() + pad
@@ -160,22 +156,19 @@ class MimicGenRobotDataset(Dataset):
             offsets = torch.randint(0, max_start, size=(self.chunk_size, ), generator=generator) # indexing, not slicing
             idxs = offsets[:, None] + torch.arange(self.window_size) # [chunk, window]
         
-         # Loading the whole trajectory (inference)
+        # Loading the whole trajectory (inference)
         else: 
             idxs = torch.arange(n_steps)
         
-        
-        
         flat = idxs.flatten()
-        uniq, inv = np.unique(flat, return_inverse=True)
-        
+        uniq, inv = torch.unique(flat, sorted=True, return_inverse=True)
         item = {}
         
         # 1. Perspective 1: robot_0_eye_in_hand_image
         if "rgb_one" in self.modalities: 
             rgb_one = demo_obs["robot0_eye_in_hand_image"][uniq] # [n_steps, height=84, width=84, channels=3]
-            if self.crop_factor is not None: 
-                crop_h = int(rgb_one.shape[1]*self.crop_factor)
+            if self.crop_eye_in_hand_factor is not None: 
+                crop_h = int(rgb_one.shape[1]*self.crop_eye_in_hand_factor)
                 rgb_one = rgb_one[:, :crop_h, ...]
             rgb_one = torch.from_numpy(rgb_one).permute(0, 3, 1, 2) # [uniq, channels=3, height=84, width=84] 
             rgb_one = rgb_one[inv].view(*idxs.shape, *rgb_one.shape[1:]) # [chunk, window, channels=3, height=84, width=84]
@@ -210,7 +203,7 @@ class MimicGenRobotDataset(Dataset):
                 rgb_two_pos = self.positive_transforms_two(rgb_two) # positive sample with independent transformations per chunk
                 item["rgb_two_pos"] = rgb_two_pos # [chunk, window, channels=3, height=84, width=84]
 
-            if "g_qpos" in self.modalities: 
+            if "g_qpos" in self.modalities:
                 edge_damping = g_qpos * (1.0 - g_qpos) 
                 noise = self.noise_level * torch.randn(g_qpos.shape, generator=generator, dtype=g_qpos.dtype) * edge_damping         
                 g_qpos_pos = torch.clamp(g_qpos + noise, 0.0, 1.0)
@@ -229,5 +222,5 @@ class MimicGenRobotDataset(Dataset):
         item["task"] = torch.full(size=(idxs.shape[0], ), fill_value=TASK_DICT[self.task], dtype=torch.long) # [chunk]
         item["robot"] = torch.full(size=(idxs.shape[0], ), fill_value=ROBOT_DICT[self.robot], dtype=torch.long) # [chunk]
         item["idxs"] = idxs # [chunk, window]
-
+        
         return item
