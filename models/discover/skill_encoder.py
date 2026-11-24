@@ -86,26 +86,26 @@ class SkillEncoder(pl.LightningModule):
         trainable_modules, FiLM_modules = [], []        
         if "rgb_one" in self.modalities: 
             self.visionOneEncoder = nn.Sequential(
-                nn.Linear(384, self.d_model),
+                nn.Linear(384*2, self.d_model),
                 nn.ReLU(), 
                 nn.Linear(self.d_model, self.d_model), 
                 nn.LayerNorm(self.d_model)
             )
             trainable_modules.append(self.visionOneEncoder)
             
-            self.FiLMOne = nn.Linear(384, 2 * self.d_model)
+            self.FiLMOne = nn.Linear(384*2, 2 * self.d_model)
             FiLM_modules.append(self.FiLMOne)
             
         if "rgb_two" in self.modalities: 
             self.visionTwoEncoder = nn.Sequential(
-                nn.Linear(384, self.d_model),
+                nn.Linear(384*2, self.d_model),
                 nn.ReLU(), 
                 nn.Linear(self.d_model, self.d_model), 
                 nn.LayerNorm(self.d_model)
             )
             trainable_modules.append(self.visionTwoEncoder)
             
-            self.FiLMTwo = nn.Linear(384, 2 * self.d_model)
+            self.FiLMTwo = nn.Linear(384*2, 2 * self.d_model)
             FiLM_modules.append(self.FiLMTwo)
             
         if "g_qpos" in self.modalities: 
@@ -444,7 +444,7 @@ class SkillEncoder(pl.LightningModule):
             
             if self.logger is not None: 
                 self.log_dict({
-                    f"{stage}/time_{self.time_loss.__name__}_loss": time_loss.detach()
+                    f"{stage}/time_{self.time_loss.__class__.__name__}_loss": time_loss.detach()
                     },
                     logger=True, 
                     prog_bar=True,
@@ -468,7 +468,8 @@ class SkillEncoder(pl.LightningModule):
                 self._task_val.append(batch["task"][:, ::step].flatten().cpu()) # [n]
                 self._robot_val.append(batch["robot"][:, ::step].flatten().cpu()) # [n]: consistent robot over batch 
 
-        loss = torch.stack(losses).mean()
+        loss = torch.stack(losses) 
+        print(f"Shape of loss: {loss.shape}")
         
         if self.logger is not None: 
             self.log_dict(
