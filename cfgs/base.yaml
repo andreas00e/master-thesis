@@ -25,6 +25,7 @@ datamodule:
   data_portion: 1.0
   window_size: 1 # > 0
   chunk_size: 1 # > 0
+  crop_eye_in_hand_factor: 1
   consistent_batch: false
 
   batch_size: 1
