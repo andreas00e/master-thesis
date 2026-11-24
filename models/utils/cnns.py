@@ -202,14 +202,25 @@ class DinoV2(nn.Module):
             source="local"
             )
         
+        self.spatialSoftmax = SpatialSoftmax(size=6)
+        
     def forward(
         self, x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
         ) -> TensorType["batch*chunk", "window", "d_model"]:
-                
-        batch, chunk, window = x.shape[:3]
-        x = x.reshape(batch*chunk*window, *x.shape[3:]) # ["batch*chunk*window", "channels", "height", "width"]]
-        x = self.model(x) # ["batch*chunk*window", "d_model"]
-        x = x.reshape(batch*chunk, window, -1)  # ["batch*chunk, window", "d_model"]
+        
+        # batch, chunk, window = x.shape[:3]                
+        batch_size, chunk, window, _, height, width = x.shape
+        x = x.reshape(batch_size*chunk*window, *x.shape[3:]) # ["batch*chunk*window", "channels", "height", "width"]]
+        # x = self.model(x) # ["batch*chunk*window", "d_model"]
+        
+        x = self.model.forward_features(x)
+        x = x["x_norm_patchtokens"] # [batch_size*chunk*window, height // 14 * width // 14, 384]
+        x = x.reshape(batch_size, height // 14, width // 14, -1) # [batch_size*chunk*window, height // 14, width // 14, 384]
+        x = x.permute(0, 3, 1, 2) # [batch_size*chunk*window, channels, height, width]
+        
+        x = self.spatialSoftmax(x) # [batch_size*chunk*window, channels*2=768]
+    
+        x = x.reshape(batch_size*chunk, window, -1)  # ["batch*chunk, window", "d_model"]
         
         return x 
     
