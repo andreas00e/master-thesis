@@ -493,7 +493,7 @@ class SkillEncoder(pl.LightningModule):
             motion_delta_one = emb_one[:, 1:] - emb_one[:, :-1] # [batch*chunk, window-1, 384]: temporal differences of robot_0_eye_in_hand embeddings
             gamma_one, beta_one = self.FiLMOne(motion_delta_one).chunk(2, dim=-1) # [batch*chunk, window-1, d_model] (each)
             
-            emb_one = self.visionHead.forward_head1(rgb_one) # [batch*chunk*window, d_model]
+            emb_one = self.visionHead.forward_head_one(rgb_one) # [batch*chunk*window, d_model]
             emb_one = gamma_one * emb_one[:, :-1] + beta_one # [batch*chunk, window-1, d_model]    
             emb_one = emb_one * self.d_model ** 0.5             
             embs.append(emb_one)
