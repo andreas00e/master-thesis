@@ -22,7 +22,7 @@ from models.discover.utils.queue import FIFOQueue
 from models.discover.utils.sinkhorn import Sinkhorn
 from models.discover.utils.visualize import Visualize
 from models.utils.aux_models import TransformerEncoder
-from models.utils.cnns import DinoV2
+from models.utils.dino_utils import DualInputIndependentHeadsModel
 from models.utils.loss import TimeContrastiveLoss, TimeSmoothingLoss
 from models.utils.utils import SinusoidalEmbedding
 
@@ -41,8 +41,10 @@ class SkillEncoder(pl.LightningModule):
         queue_start_epochs: int, 
         freeze_c_epochs: int, 
         time_loss: str, 
+        time_loss_alpha: float, 
         temp_time_contrastive: float, 
         visionEncoder_kwargs: DictConfig, 
+        head_kwargs: DictConfig, 
         sequential_kwargs: DictConfig, 
         prototype_kwargs: DictConfig,  
         optimizer_kwargs: DictConfig, 
@@ -66,9 +68,11 @@ class SkillEncoder(pl.LightningModule):
         self.modalities = modalities
         self.queue_start_epochs = queue_start_epochs
         self.freeze_c_epochs = freeze_c_epochs
-        self.time_loss = time_loss
+        self.time_loss_alpha = time_loss_alpha
         self.temp_time_contrastive = temp_time_contrastive
         self.visionEncoder_kwargs = visionEncoder_kwargs
+        self.head_kwargs = head_kwargs
+        
         self.sequential_kwargs = sequential_kwargs
         self.prototype_kwargs = prototype_kwargs
         self.optimizer_kwargs = optimizer_kwargs
@@ -78,34 +82,20 @@ class SkillEncoder(pl.LightningModule):
         self.tsne_kwargs = tsne_kwargs
         self._log_every_n_steps = _log_every_n_steps
                 
-        self.visionEncoder = DinoV2(**self.visionEncoder_kwargs)
-        self.visionEncoder.eval() 
-        for param in self.visionEncoder.parameters(): 
-            param.requires_grad_(False)
-                    
         trainable_modules, FiLM_modules = [], []        
+        self.visionHead = DualInputIndependentHeadsModel(
+            self.visionEncoder_kwargs, 
+            self.head_kwargs if "rgb_one" in self.modalities else None, 
+            self.head_kwargs if "rgb_two" in self.modalities else None
+        )
+        trainable_modules.append(self.visionHead)
+
         if "rgb_one" in self.modalities: 
-            self.visionOneEncoder = nn.Sequential(
-                nn.Linear(384*2, self.d_model),
-                nn.ReLU(), 
-                nn.Linear(self.d_model, self.d_model), 
-                nn.LayerNorm(self.d_model)
-            )
-            trainable_modules.append(self.visionOneEncoder)
-            
-            self.FiLMOne = nn.Linear(384*2, 2 * self.d_model)
+            self.FiLMOne = nn.Linear(384, 2 * self.d_model)
             FiLM_modules.append(self.FiLMOne)
             
         if "rgb_two" in self.modalities: 
-            self.visionTwoEncoder = nn.Sequential(
-                nn.Linear(384*2, self.d_model),
-                nn.ReLU(), 
-                nn.Linear(self.d_model, self.d_model), 
-                nn.LayerNorm(self.d_model)
-            )
-            trainable_modules.append(self.visionTwoEncoder)
-            
-            self.FiLMTwo = nn.Linear(384*2, 2 * self.d_model)
+            self.FiLMTwo = nn.Linear(384, 2 * self.d_model)
             FiLM_modules.append(self.FiLMTwo)
             
         if "g_qpos" in self.modalities: 
@@ -135,9 +125,9 @@ class SkillEncoder(pl.LightningModule):
         self.C = nn.Linear(**self.prototype_kwargs.model) # [k, d_model]
         assert prototype_kwargs.model.bias is False, "The prototype linear layer must not have a bias!"
         
-        if self.time_loss == "contrastive": 
+        if time_loss == "contrastive": 
             self.time_loss = TimeContrastiveLoss(self.temp_time_contrastive)
-        elif self.time_loss == "smoothing": 
+        elif time_loss == "smoothing": 
             self.time_loss = TimeSmoothingLoss()
         else: 
             self.time_loss = None
@@ -218,7 +208,7 @@ class SkillEncoder(pl.LightningModule):
         
     def train(self, mode: bool = True):
         super().train(mode)
-        self.visionEncoder.eval()
+        # self.visionEncoder.eval()
         return self
     
     def on_train_start(self):
@@ -230,7 +220,8 @@ class SkillEncoder(pl.LightningModule):
     def _set_freeze(self, freeze: bool) -> None: 
         for p in self.C.parameters(): 
             p.requires_grad_(not freeze)
-            
+    
+    @torch.no_grad()        
     def on_train_batch_start(self, batch: Dict[str, Any], batch_idx: int) -> None:
         with torch.no_grad():
             self.C.weight.copy_(F.normalize(self.C.weight, dim=1))
@@ -268,7 +259,8 @@ class SkillEncoder(pl.LightningModule):
                 self.logger.experiment.log({"tsne_plot": wandb.Image(fname)})
                     
             os.remove(fname)
-            
+    
+    @torch.no_grad()        
     def on_validation_batch_start(self, batch: Dict[str, Any], batch_idx: int) -> None:
             self.C.weight.copy_(F.normalize(self.C.weight, dim=1))
   
@@ -440,7 +432,8 @@ class SkillEncoder(pl.LightningModule):
         if self.time_loss is not None: 
             t_one = z_anc["global"].reshape(batch_size, chunk, -1) # [batch, chunk, d_model]
             time_loss = self.time_loss(t_one) # []
-            losses.extend([time_loss])
+            time_loss = time_loss * self.time_loss_alpha
+            losses.append(time_loss) # []
             
             if self.logger is not None: 
                 self.log_dict({
@@ -458,7 +451,7 @@ class SkillEncoder(pl.LightningModule):
             predictions = [k for k in c.keys() if k != target and k.split("_")[0] not in target]
             swav_losses[target] = torch.stack([(-(q[target] * log_p[prediction])).sum(dim=-1).mean() for prediction in predictions]).mean()
 
-        losses.extend(swav_losses.values())
+        losses.append(torch.stack(list(swav_losses.values())).mean()) # []
         
         if stage == "val":             
             if sum(x.shape[0] for x in self._c_val) < self.num_plot: 
@@ -468,8 +461,7 @@ class SkillEncoder(pl.LightningModule):
                 self._task_val.append(batch["task"][:, ::step].flatten().cpu()) # [n]
                 self._robot_val.append(batch["robot"][:, ::step].flatten().cpu()) # [n]: consistent robot over batch 
 
-        loss = torch.stack(losses) 
-        print(f"Shape of loss: {loss.shape}")
+        loss = torch.stack(losses).sum()
         
         if self.logger is not None: 
             self.log_dict(
@@ -494,26 +486,29 @@ class SkillEncoder(pl.LightningModule):
         idxs: Optional[TensorType["batch", "chunk", "window/num_steps"]]=None,
         padding_mask: Optional[TensorType["batch", "chunk", "window/num_steps"]]=None
         ) -> Dict[str, Union[TensorType["batch*chunk", "d_model"], TensorType["batch*chunk", "num_local_chunks", "d_model"]]]:
+        
         embs = []
         z = {}
         
         if "rgb_one" in self.modalities: 
-            emb_one = self.visionEncoder(rgb_one) # [batch*chunk, window+1, 384]: DinoV2 embeddings of robot_0_eye_in_hand images
+            emb_one = self.visionHead.forward_dino(rgb_one) # [batch*chunk, window+1, 384]: DinoV2 embeddings of robot_0_eye_in_hand images
             
             motion_delta_one = emb_one[:, 1:] - emb_one[:, :-1] # [batch*chunk, window, d_model]: temporal differences of robot_0_eye_in_hand embeddings
             gamma_one, beta_one = self.FiLMOne(motion_delta_one).chunk(2, dim=-1) # [batch*chunk, window, d_model] (each)
             
-            emb_one = self.visionOneEncoder(emb_one) # [batch*chunk, window+1, d_model]
+            emb_one = self.visionHead.forward_head1(rgb_one) # [batch*chunk*window+1, d_model]
+            emb_one = emb_one.reshape(emb_one.shape)
+
             emb_one = gamma_one * emb_one[:, :-1] + beta_one # [batch*chunk, window, d_model]                     
             embs.append(emb_one)
             
         if "rgb_two" in self.modalities: 
-            emb_two = self.visionEncoder(rgb_two) # [batch*chunk, window+1, 384]: DinoV2 embeddings of agentview images 
+            emb_two = self.visionHead.forward_dino(rgb_two) # [batch*chunk, window+1, 384]: DinoV2 embeddings of agentview images 
             
             motion_delta_two = emb_two[:, 1:] - emb_two[:, :-1] # [batch*chunk, window, d_model]: temporal differences of agentview embeddings
             gamma_two, beta_two = self.FiLMTwo(motion_delta_two).chunk(2, dim=-1) # [batch*chunk, window, d_model] (each)
             
-            emb_two = self.visionTwoEncoder(emb_two) # [batch*chunk, window, d_model]
+            emb_two = self.visionHead.forward_head2(rgb_two) # [batch*chunk, window, d_model]
             emb_two = gamma_two * emb_two[:, :-1] + beta_two # [batch*chunk, window, d_model]                     
             embs.append(emb_two) # [batch*chunk, window, d_model]
             
