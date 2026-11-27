@@ -1,5 +1,6 @@
 from typing import Optional, Tuple, Union
 from omegaconf import DictConfig
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -120,22 +121,22 @@ class DualInputIndependentHeadsModel(nn.Module):
     def __init__(
         self, 
         dino_kwargs: DictConfig, 
-        head1_kwargs: DictConfig, 
-        head2_kwargs: DictConfig
+        head_one_kwargs: DictConfig, 
+        head_two_kwargs: DictConfig
         ) -> None:
         super().__init__()
         
         self.dino_kwargs = dino_kwargs
-        self.head1_kwargs = head1_kwargs
-        self.head2_kwargs = head2_kwargs
+        self.head_one_kwargs = head_one_kwargs
+        self.head_two_kwargs = head_two_kwargs
         
         self.backbone = DinoV2(**self.dino_kwargs)
         self.backbone.eval() 
         for p in self.backbone.parameters(): 
             p.requires_grad_(False)
         
-        self.head1 = ContrastiveHeadDINOv2(**self.head1_kwargs)
-        self.head2 = ContrastiveHeadDINOv2(**self.head2_kwargs)
+        self.head_one = ContrastiveHeadDINOv2(**self.head_one_kwargs)
+        self.head_two = ContrastiveHeadDINOv2(**self.head_two_kwargs)
         
     def train(self, mode: bool=True):
         super().train(mode)
@@ -162,35 +163,35 @@ class DualInputIndependentHeadsModel(nn.Module):
             
         return z 
 
-    def forward_head1(
+    def forward_head_one(
         self, 
-        x1: TensorType["batch", "chunk", "window", "channels", "height", "width"]
+        x_one: TensorType["batch", "chunk", "window", "channels", "height", "width"]
         ) -> TensorType["batch*chunk", "window", "d_model"]:
         
-        n, window, (patch_grid, cls_token) = self._encode(x1)
-        z1 = self.head1(patch_grid, cls_token) # [batch*chunk*window, d_model]
-        z1 = z1.reshape(n, window, -1)  # [batch*chunk, window, d_model]
+        n, window, (patch_grid, cls_token) = self._encode(x_one)
+        z_one = self.head_one(patch_grid, cls_token) # [batch*chunk*window, d_model]
+        z_one = z_one.reshape(n, window, -1)  # [batch*chunk, window, d_model]
         
-        return z1
+        return z_one
 
-    def forward_head2(
+    def forward_head_two(
         self, 
-        x2: TensorType["batch", "chunk", "window", "channels", "height", "width"]
+        x_two: TensorType["batch", "chunk", "window", "channels", "height", "width"]
         ) -> TensorType["batch*chunk", "window", "d_model"]:
         
-        n, window, (patch_grid, cls_token) = self._encode(x2)
-        z2 = self.head2(patch_grid, cls_token) # [batch*chunk*window, d_model]
-        z2 = z2.reshape(n, window, -1)  # [batch*chunk, window, d_model]
+        n, window, (patch_grid, cls_token) = self._encode(x_two)
+        z_two = self.head_two(patch_grid, cls_token) # [batch*chunk*window, d_model]
+        z_two = z_two.reshape(n, window, -1)  # [batch*chunk, window, d_model]
         
-        return z2
+        return z_two
 
     def forward(
         self, 
-        x1: Optional[TensorType["batch", "chunk", "window", "channels", "height", "width"]]=None, 
-        x2: Optional[TensorType["batch", "chunk", "window", "channels", "height", "width"]]=None 
+        x_one: Optional[TensorType["batch", "chunk", "window", "channels", "height", "width"]]=None, 
+        x_two: Optional[TensorType["batch", "chunk", "window", "channels", "height", "width"]]=None 
         ) -> Union[TensorType["batch*chunk", "window", "out_dim"], Tuple[TensorType["batch*chunk", "window", "out_dim"], ...], None]:
         
-        z1 = self.forward_head1(x1) if x1 is not None else None
-        z2 = self.forward_head2(x2) if x2 is not None else None
+        z_one = self.forward_head_one(x_one) if x_one is not None else None
+        z_two = self.forward_head_two(x_two) if x_two is not None else None
         
-        return z1, z2
+        return z_one, z_two
