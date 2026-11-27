@@ -30,7 +30,7 @@ datamodule:
   tasks: 
     - square 
 
-  window_size: 8 # 8+1 in dataloading 
+  window_size: 9 # 8+1 in dataloading 
   consistent_batch: true
   batch_size: 32
   positive_window_size: 4
@@ -55,18 +55,27 @@ model:
   modalities: 
     - rgb_one
     - rgb_two 
-    # - g_qpos
+    - g_qpos
 
   queue_start_epochs: 15000
   freeze_c_epochs: 0
 
   time_loss: ${time_loss} # smoothing, contrastive, false
+  time_loss_alpha: 0.5
   temp_time_contrastive: 0.1
 
   visionEncoder_kwargs: 
     repo_or_dir: ${cwd}/imports/dinov2
     model_name: vits14
-
+  
+  head_kwargs: 
+    in_channels: 384
+    out_dim: 128
+    cnn_dim: 128
+    hidden_dim: 256
+    dropout: 0.1
+    l2_norm: True
+  
   sequential_kwargs: 
     encoder_layer_kwargs: 
       d_model:  ${d_model}
