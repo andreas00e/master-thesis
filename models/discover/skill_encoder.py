@@ -106,13 +106,11 @@ class SkillEncoder(pl.LightningModule):
                 nn.Linear(self.d_model, self.d_model), 
                 nn.LayerNorm(self.d_model)
             ) 
-            self.gripperLN = nn.LayerNorm(self.d_model)
-            trainable_modules.append(self.gripperEncoder)
             
-            self.FiLMGripper = nn.Linear(self.d_model, 2 * self.d_model)
+            self.FiLMGripper = nn.Linear(1, 2 * self.d_model)
             FiLM_modules.append(self.FiLMGripper)
         
-        _features = self.d_model * len([m for m in self.modalities if m != "g_qpos"])    
+        _features = self.d_model * len([m for m in self.modalities])    
         self.downEmb = nn.Sequential(
             nn.Linear(_features, _features), 
             nn.ReLU(),
@@ -491,41 +489,44 @@ class SkillEncoder(pl.LightningModule):
         z = {}
         
         if "rgb_one" in self.modalities: 
-            emb_one = self.visionHead.forward_dino(rgb_one) # [batch*chunk, window+1, 384]: DinoV2 embeddings of robot_0_eye_in_hand images
+            emb_one = self.visionHead.forward_dino(rgb_one) # [batch*chunk, window, 384]: DinoV2 embeddings of robot_0_eye_in_hand images
             
-            motion_delta_one = emb_one[:, 1:] - emb_one[:, :-1] # [batch*chunk, window, d_model]: temporal differences of robot_0_eye_in_hand embeddings
-            gamma_one, beta_one = self.FiLMOne(motion_delta_one).chunk(2, dim=-1) # [batch*chunk, window, d_model] (each)
+            motion_delta_one = emb_one[:, 1:] - emb_one[:, :-1] # [batch*chunk, window-1, d_model]: temporal differences of robot_0_eye_in_hand embeddings
+            gamma_one, beta_one = self.FiLMOne(motion_delta_one).chunk(2, dim=-1) # [batch*chunk, window-1, d_model] (each)
             
-            emb_one = self.visionHead.forward_head1(rgb_one) # [batch*chunk*window+1, d_model]
+            emb_one = self.visionHead.forward_head1(rgb_one) # [batch*chunk*window, d_model]
             emb_one = emb_one.reshape(emb_one.shape)
 
-            emb_one = gamma_one * emb_one[:, :-1] + beta_one # [batch*chunk, window, d_model]                     
+            emb_one = gamma_one * emb_one[:, :-1] + beta_one # [batch*chunk, window-1, d_model]                     
             embs.append(emb_one)
             
         if "rgb_two" in self.modalities: 
-            emb_two = self.visionHead.forward_dino(rgb_two) # [batch*chunk, window+1, 384]: DinoV2 embeddings of agentview images 
+            emb_two = self.visionHead.forward_dino(rgb_two) # [batch*chunk, window, 384]: DinoV2 embeddings of agentview images 
             
-            motion_delta_two = emb_two[:, 1:] - emb_two[:, :-1] # [batch*chunk, window, d_model]: temporal differences of agentview embeddings
-            gamma_two, beta_two = self.FiLMTwo(motion_delta_two).chunk(2, dim=-1) # [batch*chunk, window, d_model] (each)
+            motion_delta_two = emb_two[:, 1:] - emb_two[:, :-1] # [batch*chunk, window-1, d_model]: temporal differences of agentview embeddings
+            gamma_two, beta_two = self.FiLMTwo(motion_delta_two).chunk(2, dim=-1) # [batch*chunk, window-1, d_model] (each)
             
             emb_two = self.visionHead.forward_head2(rgb_two) # [batch*chunk, window, d_model]
-            emb_two = gamma_two * emb_two[:, :-1] + beta_two # [batch*chunk, window, d_model]                     
+            emb_two = gamma_two * emb_two[:, :-1] + beta_two # [batch*chunk, window-1, d_model]                     
             embs.append(emb_two) # [batch*chunk, window, d_model]
-            
-        emb = torch.cat(embs, dim=-1) # [batch*chunk, window, Union[self.d_model, 2 * self.d_model]]
-        emb = self.downEmb(emb) # [batch*chunk, window, d_model]
             
         if "g_qpos" in self.modalities: 
             batch_size, chunk = g_qpos.shape[:2]
-            emb_g_qpos = self.sinusoidal_embedding(g_qpos.reshape(-1, 1)) # [batch*chunk*window+1, d_model]
-            emb_g_qpos = self.gripperEncoder(emb_g_qpos) # [batch*chunk*window+1, d_model]
-            emb_g_qpos = emb_g_qpos.reshape(batch_size * chunk, -1, self.d_model)  # [batch*chunk, window+1, d_model]
-
-            motion_delta_gripper = emb_g_qpos[:, 1:] - emb_g_qpos[:, :-1] # [batch*chunk, window+1, d_model]: temporal differences of gripper embeddings
-            gamma_two, beta_two = self.FiLMGripper(motion_delta_gripper).chunk(2, dim=-1) # [batch*chunk, window, d_model] (each)
+            g_qpos = g_qpos.reshape(batch_size * chunk, -1, 1) # [batch*chunk, window, 1]
             
-            emb = gamma_two * emb + beta_two
-        
+            motion_delta_gripper = g_qpos[:, 1:] - g_qpos[:, :-1] # [batch*chunk, window-1, 1]: temporal differences of gripper states
+            gamma_gripper, beta_gripper = self.FiLMGripper(motion_delta_gripper).chunk(2, dim=-1) # [batch*chunk, window-1, d_model] (each)
+
+            emb_gripper = self.sinusoidal_embedding(g_qpos.reshape(-1, 1)) # [batch*chunk*window, d_model]
+            emb_gripper = self.gripperEncoder(emb_gripper) # [batch*chunk*window, d_model]
+            emb_gripper = emb_gripper.reshape(batch_size * chunk, -1, self.d_model) # [batch*chunk, window, d_model]
+
+            emb_gripper = gamma_gripper * emb_gripper[:, :-1] + beta_gripper # [batch*chunk, window-1, d_model]
+            embs.append(emb_gripper)
+
+        emb = torch.cat(embs, dim=-1) # [batch*chunk, window-1, Union[self.d_model, 2 * self.d_model, 3 * self.d_model]]
+        emb = self.downEmb(emb) # [batch*chunk, window-1, d_model]
+            
         emb = self.sequential(emb, idxs=idxs, padding_mask=padding_mask) # [batch*chunk, d_model]
         z_global = F.normalize(emb, dim=-1) # [batch*chunk, d_model]
         z["global"] = z_global
