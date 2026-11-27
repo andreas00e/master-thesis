@@ -206,7 +206,6 @@ class SkillEncoder(pl.LightningModule):
         
     def train(self, mode: bool = True):
         super().train(mode)
-        # self.visionEncoder.eval()
         return self
     
     def on_train_start(self):
@@ -289,7 +288,7 @@ class SkillEncoder(pl.LightningModule):
                 z.append(zs) 
               
         z = torch.stack(z, dim=1) # [batch_size, n_steps // step_size, d_model]        
-        c = self.C(z)  # [batch_size, n_steps // step_size, k]
+        c = self.C(z) # [batch_size, n_steps // step_size, k]
         c = c.reshape(batch_size, -1, self.prototype_kwargs.model.out_features) # [batch_size, n_steps // step_size, k]
         _, c_top_idxs = torch.topk(c, k=2, dim=-1) # [batch_size, n_steps // step_size, 2]
         c_top_idxs = c_top_idxs.cpu().numpy()
@@ -491,19 +490,17 @@ class SkillEncoder(pl.LightningModule):
         if "rgb_one" in self.modalities: 
             emb_one = self.visionHead.forward_dino(rgb_one) # [batch*chunk, window, 384]: DinoV2 embeddings of robot_0_eye_in_hand images
             
-            motion_delta_one = emb_one[:, 1:] - emb_one[:, :-1] # [batch*chunk, window-1, d_model]: temporal differences of robot_0_eye_in_hand embeddings
+            motion_delta_one = emb_one[:, 1:] - emb_one[:, :-1] # [batch*chunk, window-1, 384]: temporal differences of robot_0_eye_in_hand embeddings
             gamma_one, beta_one = self.FiLMOne(motion_delta_one).chunk(2, dim=-1) # [batch*chunk, window-1, d_model] (each)
             
             emb_one = self.visionHead.forward_head1(rgb_one) # [batch*chunk*window, d_model]
-            emb_one = emb_one.reshape(emb_one.shape)
-
             emb_one = gamma_one * emb_one[:, :-1] + beta_one # [batch*chunk, window-1, d_model]                     
             embs.append(emb_one)
             
         if "rgb_two" in self.modalities: 
             emb_two = self.visionHead.forward_dino(rgb_two) # [batch*chunk, window, 384]: DinoV2 embeddings of agentview images 
             
-            motion_delta_two = emb_two[:, 1:] - emb_two[:, :-1] # [batch*chunk, window-1, d_model]: temporal differences of agentview embeddings
+            motion_delta_two = emb_two[:, 1:] - emb_two[:, :-1] # [batch*chunk, window-1, 384]: temporal differences of agentview embeddings
             gamma_two, beta_two = self.FiLMTwo(motion_delta_two).chunk(2, dim=-1) # [batch*chunk, window-1, d_model] (each)
             
             emb_two = self.visionHead.forward_head2(rgb_two) # [batch*chunk, window, d_model]
