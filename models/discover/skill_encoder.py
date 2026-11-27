@@ -494,7 +494,8 @@ class SkillEncoder(pl.LightningModule):
             gamma_one, beta_one = self.FiLMOne(motion_delta_one).chunk(2, dim=-1) # [batch*chunk, window-1, d_model] (each)
             
             emb_one = self.visionHead.forward_head1(rgb_one) # [batch*chunk*window, d_model]
-            emb_one = gamma_one * emb_one[:, :-1] + beta_one # [batch*chunk, window-1, d_model]                     
+            emb_one = gamma_one * emb_one[:, :-1] + beta_one # [batch*chunk, window-1, d_model]    
+            emb_one = emb_one * self.d_model ** 0.5             
             embs.append(emb_one)
             
         if "rgb_two" in self.modalities: 
@@ -504,7 +505,8 @@ class SkillEncoder(pl.LightningModule):
             gamma_two, beta_two = self.FiLMTwo(motion_delta_two).chunk(2, dim=-1) # [batch*chunk, window-1, d_model] (each)
             
             emb_two = self.visionHead.forward_head2(rgb_two) # [batch*chunk, window, d_model]
-            emb_two = gamma_two * emb_two[:, :-1] + beta_two # [batch*chunk, window-1, d_model]                     
+            emb_two = gamma_two * emb_two[:, :-1] + beta_two # [batch*chunk, window-1, d_model]  
+            emb_two = emb_two * self.d_model ** 0.5                     
             embs.append(emb_two) # [batch*chunk, window, d_model]
             
         if "g_qpos" in self.modalities: 
@@ -519,6 +521,7 @@ class SkillEncoder(pl.LightningModule):
             emb_gripper = emb_gripper.reshape(batch_size * chunk, -1, self.d_model) # [batch*chunk, window, d_model]
 
             emb_gripper = gamma_gripper * emb_gripper[:, :-1] + beta_gripper # [batch*chunk, window-1, d_model]
+            emb_gripper = emb_gripper * self.d_model ** 0.5  
             embs.append(emb_gripper)
 
         emb = torch.cat(embs, dim=-1) # [batch*chunk, window-1, Union[self.d_model, 2 * self.d_model, 3 * self.d_model]]

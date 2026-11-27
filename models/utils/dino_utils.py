@@ -15,7 +15,6 @@ class ContrastiveHeadDINOv2(nn.Module):
         hidden_dim: int=256,
         out_dim:int=128,
         dropout: float=0.1,
-        l2_norm: bool=True
         ) -> None:
         super().__init__()
                 
@@ -24,25 +23,25 @@ class ContrastiveHeadDINOv2(nn.Module):
         self.hidden_dim = hidden_dim
         self.out_dim = out_dim
         self.dropout = dropout
-        self.l2_norm = l2_norm
         
         self.mid_channels = max(64, self.cnn_dim // 2)
 
         self.spatial_net = nn.Sequential(
-            # nn.BatchNorm2d(self.in_channels),
             nn.Conv2d(self.in_channels, self.mid_channels, kernel_size=1, bias=False),
+            nn.GroupNorm(num_groups=8, num_channels=self.mid_channels),
             nn.GELU(),
 
             nn.Conv2d(self.mid_channels, self.mid_channels, kernel_size=3, padding=1, groups=self.mid_channels, bias=False),
-            # nn.BatchNorm2d(self.mid_channels),
+            nn.GroupNorm(num_groups=8, num_channels=self.mid_channels),
             nn.GELU(),
 
             nn.Conv2d(self.mid_channels, self.cnn_dim, kernel_size=3, stride=2, padding=1, bias=False),
-            # nn.BatchNorm2d(self.cnn_dim),
+            nn.GroupNorm(num_groups=16, num_channels=self.cnn_dim),
             nn.GELU(),
 
             nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Flatten()
+            nn.Flatten(), 
+            nn.LayerNorm(self.cnn_dim)
         )
 
         self.cls_norm = nn.LayerNorm(self.in_channels)
@@ -51,9 +50,9 @@ class ContrastiveHeadDINOv2(nn.Module):
         self.projector = nn.Sequential(
             nn.Dropout(self.dropout),
             nn.Linear(fused_dim, self.hidden_dim, bias=False),
-            # nn.BatchNorm1d(self.hidden_dim),
             nn.GELU(),
-            nn.Linear(self.hidden_dim, self.out_dim, bias=False)
+            nn.Linear(self.hidden_dim, self.out_dim, bias=False), 
+            nn.LayerNorm(self.out_dim)
         )
 
     def forward(
@@ -67,9 +66,6 @@ class ContrastiveHeadDINOv2(nn.Module):
 
         fused = torch.cat([spatial_feat, cls_feat], dim=1) # [batch*chunk*window, cnn_dim+in_channels] 
         x = self.projector(fused) # [batch*chunk*window, out_dim]                       
-
-        if self.l2_norm:
-            x = F.normalize(x, dim=-1)
             
         return x
 

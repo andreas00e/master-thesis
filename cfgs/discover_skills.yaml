@@ -74,7 +74,6 @@ model:
     cnn_dim: 128
     hidden_dim: 256
     dropout: 0.1
-    l2_norm: True
   
   sequential_kwargs: 
     encoder_layer_kwargs: 

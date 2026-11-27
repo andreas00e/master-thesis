@@ -17,3 +17,5 @@ requirements.txt
 *.ckpt*
 *.err*
 *.log*
+
+test.py
