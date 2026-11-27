@@ -434,7 +434,7 @@ class SkillEncoder(pl.LightningModule):
             
             if self.logger is not None: 
                 self.log_dict({
-                    f"{stage}/time_{self.time_loss.__class__.__name__}_loss": time_loss.detach()
+                    f"{stage}/{self.time_loss.__class__.__name__}": time_loss.detach()
                     },
                     logger=True, 
                     prog_bar=True,
