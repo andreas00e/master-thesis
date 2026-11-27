@@ -185,44 +185,6 @@ class BuildAResnet18(nn.Module):
         out["x"] = self.fc(x)
         
         return out
-
-
-class DinoV2(nn.Module): 
-    def __init__(
-        self, 
-        repo_or_dir: str, 
-        model_name: str="vits14", 
-        ) -> None:
-        super().__init__()
-        
-        self.model_name = model_name
-        self.model = torch.hub.load(
-            repo_or_dir=repo_or_dir, 
-            model=f"dinov2_{self.model_name}",
-            source="local"
-            )
-        
-        self.spatialSoftmax = SpatialSoftmax(size=6)
-        
-    def forward(
-        self, x: TensorType["batch", "chunk", "window", "channels", "height", "width"]
-        ) -> TensorType["batch*chunk", "window", "d_model"]:
-        
-        # batch, chunk, window = x.shape[:3]                
-        batch_size, chunk, window, _, height, width = x.shape
-        x = x.reshape(batch_size*chunk*window, *x.shape[3:]) # ["batch*chunk*window", "channels", "height", "width"]]
-        # x = self.model(x) # ["batch*chunk*window", "d_model"]
-        
-        x = self.model.forward_features(x)
-        x = x["x_norm_patchtokens"] # [batch_size*chunk*window, height // 14 * width // 14, 384]
-        x = x.reshape(batch_size, height // 14, width // 14, -1) # [batch_size*chunk*window, height // 14, width // 14, 384]
-        x = x.permute(0, 3, 1, 2) # [batch_size*chunk*window, channels, height, width]
-        
-        x = self.spatialSoftmax(x) # [batch_size*chunk*window, channels*2=768]
-    
-        x = x.reshape(batch_size*chunk, window, -1)  # ["batch*chunk, window", "d_model"]
-        
-        return x 
     
 class CNN(nn.Module):
     def __init__(self, d_model: int) -> None:
